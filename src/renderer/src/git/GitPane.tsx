@@ -1,10 +1,11 @@
 import { PatchDiff } from "@pierre/diffs/react"
 import { type JSX, useEffect, useMemo, useState } from "react"
-import type { GitChangeStatus, GitFileChange, GitStatus } from "../../../shared/git.js"
+import type { GitChangeStatus, GitFileChange, GitStatus, WorkspaceGitContext } from "../../../shared/git.js"
 import type { Workspace } from "../../../shared/workspace.js"
 import { Button } from "../ui/Button.js"
 import { Row } from "../ui/Row.js"
 import { rpc } from "../rpc-client.js"
+import { RepoContextBar } from "./RepoContextBar.js"
 
 export interface GitPaneProps {
   readonly workspace?: Workspace
@@ -76,6 +77,8 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
   const [status, setStatus] = useState<GitStatus | undefined>(undefined)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
+  const [gitContext, setGitContext] = useState<WorkspaceGitContext | undefined>(undefined)
+  const [syncing, setSyncing] = useState(false)
 
   const grouped = useMemo(() => {
     const map = new Map<GitChangeStatus, ReadonlyArray<GitFileChange>>()
@@ -115,9 +118,31 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
       .finally(() => setLoading(false))
   }
 
+  // The repo/PR context is a separate, local read (no network): detect the repo
+  // and map the current branch to its PR off the persisted read model.
+  const loadContext = (): void => {
+    if (!workspace) return
+    rpc("GetWorkspaceGitContext", { workspaceId: workspace.id })
+      .then(setGitContext)
+      .catch(() => setGitContext(undefined))
+  }
+
+  // The one network refresh: pull PRs from GitHub via gh, then re-read context
+  // so the current-branch PR reflects the sync.
+  const syncPullRequests = (): void => {
+    if (!workspace || syncing) return
+    setSyncing(true)
+    rpc("SyncWorkspacePullRequests", { workspaceId: workspace.id })
+      .then(loadContext)
+      .catch((e) => setError(errorMessage(e)))
+      .finally(() => setSyncing(false))
+  }
+
   useEffect(() => {
     setStatus(undefined)
+    setGitContext(undefined)
     reload()
+    loadContext()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace?.id])
 
@@ -145,6 +170,7 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
           Refresh
         </Button>
       </div>
+      <RepoContextBar context={gitContext} syncing={syncing} onSync={syncPullRequests} />
       {error && <div className={ERROR_BANNER}>{error}</div>}
       {!loading && status?.isRepo === false ? (
         <EmptyState label="This workspace is not a git repository" />
