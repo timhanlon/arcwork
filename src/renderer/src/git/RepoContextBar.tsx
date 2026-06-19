@@ -1,5 +1,5 @@
 import type { JSX } from "react"
-import { CheckCircleIcon, DotFillIcon, XCircleIcon, type Icon } from "@primer/octicons-react"
+import { CheckIcon, DotFillIcon, XIcon, type Icon } from "@primer/octicons-react"
 import type { PullRequest, WorkspaceGitContext } from "../../../shared/git.js"
 import { Button } from "../ui/Button.js"
 import { PrStateIcon, prStateColor, toPrState } from "./PrStateIcon.js"
@@ -15,27 +15,22 @@ const BAR = "flex flex-none items-center gap-2 border-b border-border px-4 py-2 
 // Check rollup → octicon + colour. Mirrors summarizeChecks' three verdicts
 // (and GitHub's own check-rollup glyphs: check-circle / x-circle / yellow dot).
 const CHECKS: Record<string, { readonly Icon: Icon; readonly color: string }> = {
-  passing: { Icon: CheckCircleIcon, color: "text-ok" },
-  failing: { Icon: XCircleIcon, color: "text-danger" },
+  passing: { Icon: CheckIcon, color: "text-ok" },
+  failing: { Icon: XIcon, color: "text-danger" },
   pending: { Icon: DotFillIcon, color: "text-request" },
 }
 
-/** The git context strip above the changed-file list: the repo slug, current
- * branch, and the PR that branch maps to (number, title, state, checks, review),
- * with a button to refresh PRs from GitHub. Renders nothing when the workspace
- * isn't a git repository. Purely presentational — the GitPane owns the fetch. */
+/** The git context strip above the changed-file list: the current branch and
+ * the PR that branch maps to (number, title, state, checks, review), with a
+ * button to refresh PRs from GitHub. Renders nothing when the workspace isn't a
+ * git repository. Purely presentational — the GitPane owns the fetch. */
 export function RepoContextBar({ context, syncing, onSync }: RepoContextBarProps): JSX.Element | null {
   if (!context?.repository) return null
-  const { repository, branch, currentPullRequest: pr } = context
-  const slug =
-    repository.githubOwner && repository.githubRepo
-      ? `${repository.githubOwner}/${repository.githubRepo}`
-      : null
+  const { branch, currentPullRequest: pr } = context
 
   return (
     <div className={BAR}>
       <div className="flex min-w-0 flex-1 items-center gap-2">
-        {slug && <span className="flex-none truncate font-mono text-[11px] text-fg-faint">{slug}</span>}
         {branch && (
           <span className="flex-none truncate font-mono text-[11px] text-fg-dim">{branch}</span>
         )}
@@ -78,7 +73,7 @@ function PullRequestSummary({ pr }: { readonly pr: PullRequest }): JSX.Element {
   // Link out to the PR when we have a URL; Electron routes target=_blank through
   // the window open handler to the system browser.
   return pr.url ? (
-    <a href={pr.url} target="_blank" rel="noreferrer" className="flex min-w-0 items-center no-underline hover:underline">
+    <a href={pr.url} target="_blank" rel="noreferrer" className="flex min-w-0 items-center no-underline">
       {body}
     </a>
   ) : (
