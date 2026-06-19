@@ -1,4 +1,5 @@
-import type { JSX } from "react"
+import type { ComponentType, JSX } from "react"
+import { CheckCircle, CircleDashed, XCircle, type IconProps } from "@phosphor-icons/react"
 import type { PullRequest, WorkspaceGitContext } from "../../../shared/git.js"
 import { Button } from "../ui/Button.js"
 
@@ -18,17 +19,11 @@ const STATE_COLOR: Record<string, string> = {
   closed: "text-fg-dim",
 }
 
-// Check rollup → dot colour. Mirrors summarizeChecks' three verdicts.
-const CHECKS_COLOR: Record<string, string> = {
-  passing: "text-ok",
-  failing: "text-danger",
-  pending: "text-request",
-}
-
-const CHECKS_GLYPH: Record<string, string> = {
-  passing: "✓",
-  failing: "✗",
-  pending: "•",
+// Check rollup → icon + colour. Mirrors summarizeChecks' three verdicts.
+const CHECKS: Record<string, { readonly Icon: ComponentType<IconProps>; readonly color: string }> = {
+  passing: { Icon: CheckCircle, color: "text-ok" },
+  failing: { Icon: XCircle, color: "text-danger" },
+  pending: { Icon: CircleDashed, color: "text-request" },
 }
 
 /** The git context strip above the changed-file list: the repo slug, current
@@ -66,14 +61,12 @@ function PullRequestSummary({ pr }: { readonly pr: PullRequest }): JSX.Element {
       <span className={`flex-none font-mono text-[11px] font-semibold ${stateColor}`}>#{pr.number}</span>
       <span className="min-w-0 truncate text-foreground">{pr.title}</span>
       {pr.isDraft && <span className="flex-none text-[10px] uppercase text-fg-faint">draft</span>}
-      {pr.checksState && (
-        <span
-          className={`flex-none font-mono text-[11px] ${CHECKS_COLOR[pr.checksState] ?? "text-fg-dim"}`}
-          title={`checks ${pr.checksState}`}
-        >
-          {CHECKS_GLYPH[pr.checksState] ?? "•"}
-        </span>
-      )}
+      {pr.checksState &&
+        CHECKS[pr.checksState] &&
+        (() => {
+          const { Icon, color } = CHECKS[pr.checksState]!
+          return <Icon size={14} weight="fill" className={`flex-none ${color}`} aria-label={`checks ${pr.checksState}`} />
+        })()}
       {pr.reviewState && (
         <span className="flex-none font-mono text-[10px] uppercase tracking-[0.04em] text-fg-dim">
           {pr.reviewState.replace(/_/g, " ")}
