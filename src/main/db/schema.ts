@@ -29,13 +29,88 @@ const sqlMigrationAfterWorkspaceColumn = (
     Effect.andThen(sqlMigration(...statements)),
   )
 
-/** One row per workspace (a filesystem root for chats and target cwd). */
+/** One row per workspace (a filesystem root for chats and target cwd).
+ * The git columns are a cached snapshot of the workspace's cwd for fast UI —
+ * `repositoryId`/`worktreeId` bind it into the git domain (sidebar grouping,
+ * branch→PR map), `gitBranch`/`gitHeadSha` are refreshed by the post-checkout
+ * hook. All null until git detection runs; the canonical worktree model lives
+ * in `worktrees`, not here. */
 export interface WorkspaceRow {
   readonly id: string
   readonly path: string
   readonly name: string
   readonly createdAt: string
   readonly lastOpenedAt: string
+  readonly repositoryId: string | null
+  readonly worktreeId: string | null
+  readonly gitBranch: string | null
+  readonly gitHeadSha: string | null
+}
+
+/** A local clone of a repository — one common git dir on disk. Owns the git
+ * identity (remotes, main worktree) and, when resolved, the GitHub identity.
+ * GitHub columns are null for a clone with no recognized remote; it is still a
+ * valid repository row. Keyed locally by `commonGitDir`. */
+export interface RepositoryRow {
+  readonly id: string
+  readonly commonGitDir: string
+  /** the main worktree path (`git rev-parse --show-toplevel` of the clone) */
+  readonly rootPath: string
+  readonly defaultBranch: string | null
+  /** JSON array of `{ name, url }` for the clone's git remotes */
+  readonly remotesJson: string
+  readonly githubOwner: string | null
+  readonly githubRepo: string | null
+  readonly githubNodeId: string | null
+  readonly createdAt: string
+  readonly lastSeenAt: string
+}
+
+/** A concrete git worktree under a repository's common git dir — first-class so
+ * the lifecycle (list/create/open/remove/prune) has somewhere to live, distinct
+ * from an arc workspace (a worktree can exist before arc opens it, or after the
+ * workspace is gone). Keyed by `path`. */
+export interface WorktreeRow {
+  readonly id: string
+  readonly repositoryId: string
+  readonly path: string
+  readonly branch: string | null
+  readonly headSha: string | null
+  readonly isDetached: number
+  readonly isBare: number
+  readonly isLocked: number
+  readonly lockedReason: string | null
+  readonly isPrunable: number
+  readonly prunableReason: string | null
+  readonly createdAt: string
+  readonly lastSeenAt: string
+}
+
+/** The GitHub PR read model — a synced mirror of remote state, never authored
+ * locally. Carries its own id so a work item can cite it via a graph edge.
+ * Keyed `(repositoryId, number)`; `(repositoryId, headRef)` is the branch→PR
+ * map. `checksState` is a JSON summary; `lastSyncedAt` stamps the last sync. */
+export interface PullRequestRow {
+  readonly id: string
+  readonly repositoryId: string
+  readonly number: number
+  readonly githubNodeId: string | null
+  readonly title: string
+  readonly body: string
+  readonly state: string
+  readonly isDraft: number
+  readonly author: string | null
+  readonly headRef: string
+  readonly headSha: string | null
+  readonly baseRef: string
+  readonly reviewState: string | null
+  readonly checksState: string | null
+  readonly mergeable: string | null
+  readonly mergeStateStatus: string | null
+  readonly url: string | null
+  readonly lastSyncedAt: string
+  readonly createdAt: string
+  readonly updatedAt: string
 }
 
 /** One row per chat (a conversation thread). */
@@ -553,5 +628,75 @@ export const arcMigrations: Migrations = {
       updated_at = excluded.updated_at;
   END`,
     `INSERT INTO search_document_fts(search_document_fts) VALUES ('rebuild')`,
+  ),
+  // Git/GitHub domain read model (work_01kve8w6: PRs + worktrees first-class).
+  // Three flat read-model tables in the domain store — repo/worktree state is a
+  // cache of local git, PRs a cache of GitHub; neither is authored content, so
+  // none of it belongs in the work-graph substrate. A work→PR link is a
+  // `graph_edge` to the pr id (to_kind='external'), needing no work-schema
+  // change. `repositories` collapses GitHub identity and local clone into one
+  // row (github_* null until a remote is resolved); the speculative repo↔clone
+  // 1:N split is deferred until a real multi-clone-of-one-repo need appears.
+  // `workspaces` gains nullable git columns (a cached cwd snapshot for fast UI),
+  // added with default NULL so the REFERENCES clause is legal under an
+  // ALTER (and so existing rows stay valid). search_document projection deferred.
+  "0006_git_repositories": sqlMigration(
+    `CREATE TABLE IF NOT EXISTS repositories (
+    id TEXT PRIMARY KEY,
+    common_git_dir TEXT NOT NULL UNIQUE,
+    root_path TEXT NOT NULL,
+    default_branch TEXT,
+    remotes_json TEXT NOT NULL DEFAULT '[]',
+    github_owner TEXT,
+    github_repo TEXT,
+    github_node_id TEXT,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+  )`,
+    `CREATE TABLE IF NOT EXISTS worktrees (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    path TEXT NOT NULL UNIQUE,
+    branch TEXT,
+    head_sha TEXT,
+    is_detached INTEGER NOT NULL DEFAULT 0,
+    is_bare INTEGER NOT NULL DEFAULT 0,
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    locked_reason TEXT,
+    is_prunable INTEGER NOT NULL DEFAULT 0,
+    prunable_reason TEXT,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+  )`,
+    `CREATE TABLE IF NOT EXISTS pull_requests (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    number INTEGER NOT NULL,
+    github_node_id TEXT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL,
+    is_draft INTEGER NOT NULL DEFAULT 0,
+    author TEXT,
+    head_ref TEXT NOT NULL,
+    head_sha TEXT,
+    base_ref TEXT NOT NULL,
+    review_state TEXT,
+    checks_state TEXT,
+    mergeable TEXT,
+    merge_state_status TEXT,
+    url TEXT,
+    last_synced_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(repository_id, number)
+  )`,
+    `CREATE INDEX IF NOT EXISTS worktrees_repo ON worktrees(repository_id, path)`,
+    `CREATE INDEX IF NOT EXISTS pull_requests_repo_head ON pull_requests(repository_id, head_ref)`,
+    `ALTER TABLE workspaces ADD COLUMN repository_id TEXT REFERENCES repositories(id)`,
+    `ALTER TABLE workspaces ADD COLUMN worktree_id TEXT REFERENCES worktrees(id)`,
+    `ALTER TABLE workspaces ADD COLUMN git_branch TEXT`,
+    `ALTER TABLE workspaces ADD COLUMN git_head_sha TEXT`,
+    `CREATE INDEX IF NOT EXISTS workspaces_repository ON workspaces(repository_id)`,
   ),
 }

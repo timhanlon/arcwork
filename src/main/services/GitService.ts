@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Stream } from "effect"
 import { execFile } from "node:child_process"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
@@ -6,14 +6,43 @@ import type { GitChangeStatus, GitFileChange, GitFileDiff, GitStatus } from "../
 import type { Workspace } from "../../shared/workspace.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { WorkspaceService } from "./WorkspaceService.js"
+import { ArcStore } from "../db/store.js"
+import type { RepositoryRow } from "../db/schema.js"
+import { newArcId } from "../../shared/ids.js"
+import { nowIso } from "../clock.js"
 
 export class GitService extends Context.Service<
   GitService,
   {
     readonly status: (workspaceId: string) => Effect.Effect<GitStatus, ArcRequestError>
     readonly diff: (workspaceId: string, filePath: string) => Effect.Effect<GitFileDiff, ArcRequestError>
+    /** Detect the workspace's git identity from its cwd and persist it: upsert
+     * the repository (clone identity + resolved GitHub owner/repo), upsert every
+     * worktree under its common git dir, and bind the workspace (repository,
+     * worktree, cached branch/head). Idempotent — safe to re-run. Resolves to the
+     * persisted repository, or null when the cwd is not inside a git work tree. */
+    readonly detectRepository: (
+      workspaceId: string,
+    ) => Effect.Effect<RepositoryRow | null, ArcRequestError>
   }
 >()("GitService") {}
+
+interface GitRemote {
+  readonly name: string
+  readonly url: string
+}
+
+interface WorktreeEntry {
+  readonly path: string
+  readonly headSha: string | null
+  readonly branch: string | null
+  readonly isDetached: boolean
+  readonly isBare: boolean
+  readonly isLocked: boolean
+  readonly lockedReason: string | null
+  readonly isPrunable: boolean
+  readonly prunableReason: string | null
+}
 
 interface GitResult {
   readonly stdout: string
@@ -142,10 +171,227 @@ const statusOrder: ReadonlyArray<GitChangeStatus> = [
 const resolveWorkspace = (workspaces: ReadonlyArray<Workspace>, workspaceId: string): Workspace | undefined =>
   workspaces.find((w) => w.id === workspaceId)
 
+/** Pull `{ owner, repo }` out of a GitHub remote URL in any of the forms git
+ * stores — `git@github.com:owner/repo.git`, `https://github.com/owner/repo`,
+ * `ssh://git@github.com/owner/repo.git` — with the optional `.git` suffix and
+ * trailing slash stripped. Null for non-GitHub hosts (GHES is deferred). */
+const parseGithubRemote = (url: string): { owner: string; repo: string } | null => {
+  const match = url.match(/github\.com[:/]+([^/]+)\/(.+?)(?:\.git)?\/?$/i)
+  if (!match || !match[1] || !match[2]) return null
+  return { owner: match[1], repo: match[2] }
+}
+
+/** Parse `git remote -v` into one entry per remote (fetch lines), de-duplicated
+ * by name and preserving git's output order (so `origin` stays first). */
+const parseRemotes = (stdout: string): ReadonlyArray<GitRemote> => {
+  const byName = new Map<string, string>()
+  for (const line of stdout.split("\n")) {
+    const match = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/)
+    if (match && match[1] && match[2] && !byName.has(match[1])) byName.set(match[1], match[2])
+  }
+  return [...byName].map(([name, url]) => ({ name, url }))
+}
+
+/** Resolve the GitHub owner/repo for a clone: the first remote whose URL is a
+ * GitHub URL, preferring `origin`. Null when no remote points at GitHub. */
+const githubIdentity = (
+  remotes: ReadonlyArray<GitRemote>,
+): { owner: string; repo: string } | null => {
+  const ordered = [...remotes].sort((a, b) => (a.name === "origin" ? -1 : b.name === "origin" ? 1 : 0))
+  for (const remote of ordered) {
+    const parsed = parseGithubRemote(remote.url)
+    if (parsed) return parsed
+  }
+  return null
+}
+
+/** Parse `git worktree list --porcelain` into one entry per worktree. Records
+ * are blank-line separated; a `branch refs/heads/x` line is shortened to `x`,
+ * and the boolean attributes (`detached`/`bare`/`locked`/`prunable`) become
+ * flags, carrying any trailing reason text. The first record is the main
+ * worktree. */
+const parseWorktreeList = (stdout: string): ReadonlyArray<WorktreeEntry> => {
+  const entries: Array<WorktreeEntry> = []
+  let current: {
+    path?: string
+    headSha?: string
+    branch?: string
+    isDetached: boolean
+    isBare: boolean
+    isLocked: boolean
+    lockedReason: string | null
+    isPrunable: boolean
+    prunableReason: string | null
+  } | null = null
+
+  const flush = () => {
+    if (current?.path) {
+      entries.push({
+        path: current.path,
+        headSha: current.headSha ?? null,
+        branch: current.branch ?? null,
+        isDetached: current.isDetached,
+        isBare: current.isBare,
+        isLocked: current.isLocked,
+        lockedReason: current.lockedReason,
+        isPrunable: current.isPrunable,
+        prunableReason: current.prunableReason,
+      })
+    }
+    current = null
+  }
+
+  const start = () => ({
+    isDetached: false,
+    isBare: false,
+    isLocked: false,
+    lockedReason: null as string | null,
+    isPrunable: false,
+    prunableReason: null as string | null,
+  })
+
+  for (const line of stdout.split("\n")) {
+    if (line.trim().length === 0) {
+      flush()
+      continue
+    }
+    if (line.startsWith("worktree ")) {
+      flush()
+      current = { ...start(), path: line.slice("worktree ".length) }
+      continue
+    }
+    if (!current) continue
+    if (line.startsWith("HEAD ")) current.headSha = line.slice("HEAD ".length)
+    else if (line.startsWith("branch ")) current.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "")
+    else if (line === "detached") current.isDetached = true
+    else if (line === "bare") current.isBare = true
+    else if (line === "locked" || line.startsWith("locked ")) {
+      current.isLocked = true
+      current.lockedReason = line === "locked" ? null : line.slice("locked ".length)
+    } else if (line === "prunable" || line.startsWith("prunable ")) {
+      current.isPrunable = true
+      current.prunableReason = line === "prunable" ? null : line.slice("prunable ".length)
+    }
+  }
+  flush()
+  return entries
+}
+
+const bool = (value: boolean): number => (value ? 1 : 0)
+
 export const GitServiceLive = Layer.effect(
   GitService,
   Effect.gen(function* () {
     const workspaces = yield* WorkspaceService
+    const store = yield* ArcStore
+
+    const detectRepository = (
+      workspaceId: string,
+    ): Effect.Effect<RepositoryRow | null, ArcRequestError> =>
+      Effect.gen(function* () {
+        const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
+        if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
+        const cwd = workspace.path
+
+        const inside = yield* Effect.promise(() => runGit(cwd, ["rev-parse", "--is-inside-work-tree"]))
+        if (inside.stdout.trim() !== "true") return null
+
+        const [commonDirRaw, remotesRaw, worktreesRaw, originHead] = yield* Effect.promise(async () =>
+          Promise.all([
+            runGit(cwd, ["rev-parse", "--git-common-dir"]),
+            runGit(cwd, ["remote", "-v"]),
+            runGit(cwd, ["worktree", "list", "--porcelain"]),
+            runGit(cwd, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]),
+          ]),
+        )
+
+        // --git-common-dir is relative to cwd; resolve to an absolute, canonical
+        // key so two workspaces in the same clone map to one repository row.
+        const commonGitDir = path.resolve(cwd, commonDirRaw.stdout.trim())
+        const remotes = parseRemotes(remotesRaw.stdout)
+        const github = githubIdentity(remotes)
+        const worktrees = parseWorktreeList(worktreesRaw.stdout)
+        // origin/HEAD → the short default branch (strip the leading "origin/").
+        const defaultBranch = originHead.exitCode === 0
+          ? trimmedOrUndefined(originHead.stdout.replace(/^origin\//, "")) ?? null
+          : null
+        // The main worktree is the first porcelain record; fall back to the
+        // common git dir's parent when the list is unexpectedly empty.
+        const rootPath = worktrees[0]?.path ?? path.dirname(commonGitDir)
+
+        const now = yield* nowIso
+        const repository = yield* store.upsertRepository({
+          id: newArcId("repo"),
+          commonGitDir,
+          rootPath,
+          defaultBranch,
+          remotesJson: JSON.stringify(remotes),
+          githubOwner: github?.owner ?? null,
+          githubRepo: github?.repo ?? null,
+          githubNodeId: null,
+          createdAt: now,
+          lastSeenAt: now,
+        }).pipe(Effect.mapError((e) => arcRequestError(`repository persist failed: ${e}`)))
+
+        for (const entry of worktrees) {
+          yield* store.upsertWorktree({
+            id: newArcId("worktree"),
+            repositoryId: repository.id,
+            path: entry.path,
+            branch: entry.branch,
+            headSha: entry.headSha,
+            isDetached: bool(entry.isDetached),
+            isBare: bool(entry.isBare),
+            isLocked: bool(entry.isLocked),
+            lockedReason: entry.lockedReason,
+            isPrunable: bool(entry.isPrunable),
+            prunableReason: entry.prunableReason,
+            createdAt: now,
+            lastSeenAt: now,
+          }).pipe(Effect.mapError((e) => arcRequestError(`worktree persist failed: ${e}`)))
+        }
+
+        // Bind the workspace to the worktree it actually sits in (matched on the
+        // worktree's toplevel), caching its branch/head for fast UI.
+        const toplevel = (yield* Effect.promise(() => runGit(cwd, ["rev-parse", "--show-toplevel"]))).stdout.trim()
+        const ownWorktree = worktrees.find((w) => path.resolve(w.path) === path.resolve(toplevel))
+        const persistedWorktrees = yield* store
+          .loadWorktreesForRepository(repository.id)
+          .pipe(Effect.mapError((e) => arcRequestError(`worktree load failed: ${e}`)))
+        const worktreeId = ownWorktree
+          ? persistedWorktrees.find((w) => path.resolve(w.path) === path.resolve(ownWorktree.path))?.id ?? null
+          : null
+
+        yield* store.setWorkspaceGit(workspaceId, {
+          repositoryId: repository.id,
+          worktreeId,
+          gitBranch: ownWorktree?.branch ?? null,
+          gitHeadSha: ownWorktree?.headSha ?? null,
+        }).pipe(Effect.mapError((e) => arcRequestError(`workspace bind failed: ${e}`)))
+
+        return repository
+      }).pipe(Effect.withSpan("arc.git.detect_repository", { attributes: { "arc.workspace_id": workspaceId } }))
+
+    // Detect each workspace once per session — the changes stream emits the
+    // current list on subscribe (boot) and again on every open, so a `seen`
+    // guard keeps detection to one pass per workspace. Branch/PR refresh on
+    // later events (post-checkout hook, explicit refresh) is a separate path.
+    const seen = new Set<string>()
+    yield* workspaces.changes.pipe(
+      Stream.runForEach((list) =>
+        Effect.forEach(
+          list.filter((w) => !seen.has(w.id)),
+          (w) => {
+            seen.add(w.id)
+            return detectRepository(w.id).pipe(
+              Effect.catch((e) => Effect.logWarning(`git detect failed for ${w.path}: ${e}`)),
+            )
+          },
+          { concurrency: 4, discard: true },
+        ),
+      ),
+      Effect.forkScoped,
+    )
 
     const status = (workspaceId: string): Effect.Effect<GitStatus, ArcRequestError> =>
       Effect.gen(function* () {
@@ -204,6 +450,7 @@ export const GitServiceLive = Layer.effect(
 
     return GitService.of({
       status,
+      detectRepository,
       diff: (workspaceId, filePath) =>
         Effect.gen(function* () {
           const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)

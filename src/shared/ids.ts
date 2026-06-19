@@ -9,6 +9,10 @@ export type ArcIdPrefix =
   | "run"
   | "target"
   | "workspace"
+  // git/github domain read model: a local clone, its worktrees, and a synced PR
+  | "repo"
+  | "worktree"
+  | "pr"
   // document-graph substrate: work ref identity, its revision nodes, and edges
   | "work"
   | "work_rev"

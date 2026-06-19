@@ -51,7 +51,7 @@ const RawHookSignalsLive = RawHookSignalServiceLive.pipe(Layer.provide(StoreLive
 const ActivityEventsLive = ActivityEventServiceLive.pipe(Layer.provide(StoreLive))
 const WorkspacesLive = WorkspaceServiceLive.pipe(Layer.provide(StoreLive))
 const WorkspaceFilesLive = WorkspaceFilesServiceLive.pipe(Layer.provide(WorkspacesLive))
-const GitLive = GitServiceLive.pipe(Layer.provide(WorkspacesLive))
+const GitLive = GitServiceLive.pipe(Layer.provide(WorkspacesLive), Layer.provide(StoreLive))
 const ChatsLive = ChatServiceLive.pipe(Layer.provide(StoreLive))
 const SessionsLive = TargetSessionManagerLive.pipe(
   Layer.provide(ProviderRegistryLive),
