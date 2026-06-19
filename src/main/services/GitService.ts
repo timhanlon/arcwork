@@ -7,7 +7,7 @@ import type { Workspace } from "../../shared/workspace.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { WorkspaceService } from "./WorkspaceService.js"
 import { ArcStore } from "../db/store.js"
-import type { RepositoryRow } from "../db/schema.js"
+import type { PullRequestRow, RepositoryRow } from "../db/schema.js"
 import { newArcId } from "../../shared/ids.js"
 import { nowIso } from "../clock.js"
 
@@ -24,8 +24,58 @@ export class GitService extends Context.Service<
     readonly detectRepository: (
       workspaceId: string,
     ) => Effect.Effect<RepositoryRow | null, ArcRequestError>
+    /** Sync the workspace repository's GitHub pull requests via `gh` and persist
+     * them into the PR read model. Detects the repo first (so the GitHub
+     * owner/repo is known), shells out to `gh pr list`, and upserts each PR.
+     * Resolves to the persisted rows — empty when the repo has no GitHub remote
+     * or `gh` is unavailable/unauthenticated (logged, never fatal). */
+    readonly syncPullRequests: (
+      workspaceId: string,
+    ) => Effect.Effect<ReadonlyArray<PullRequestRow>, ArcRequestError>
   }
 >()("GitService") {}
+
+/** The `gh pr list --json` fields we request, shaped loosely — gh emits
+ * uppercase enums and may omit/blank some fields, normalized in {@link mapGhPullRequest}. */
+export interface GhPullRequest {
+  readonly number: number
+  readonly id?: string | null
+  readonly title?: string | null
+  readonly body?: string | null
+  readonly state?: string | null
+  readonly isDraft?: boolean | null
+  readonly author?: { readonly login?: string | null } | null
+  readonly headRefName?: string | null
+  readonly headRefOid?: string | null
+  readonly baseRefName?: string | null
+  readonly reviewDecision?: string | null
+  readonly mergeable?: string | null
+  readonly mergeStateStatus?: string | null
+  readonly url?: string | null
+  readonly statusCheckRollup?: ReadonlyArray<Record<string, unknown>> | null
+  readonly createdAt?: string | null
+  readonly updatedAt?: string | null
+}
+
+const GH_PR_FIELDS = [
+  "number",
+  "id",
+  "title",
+  "body",
+  "state",
+  "isDraft",
+  "author",
+  "headRefName",
+  "headRefOid",
+  "baseRefName",
+  "reviewDecision",
+  "mergeable",
+  "mergeStateStatus",
+  "url",
+  "statusCheckRollup",
+  "createdAt",
+  "updatedAt",
+].join(",")
 
 interface GitRemote {
   readonly name: string
@@ -279,6 +329,100 @@ const parseWorktreeList = (stdout: string): ReadonlyArray<WorktreeEntry> => {
 
 const bool = (value: boolean): number => (value ? 1 : 0)
 
+const lowerOrNull = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim().toLowerCase()
+  return trimmed && trimmed.length > 0 ? trimmed : null
+}
+
+/** Collapse GitHub's `statusCheckRollup` into one verdict: `failing` if any
+ * check failed, else `pending` if any is still running, else `passing` if there
+ * is at least one check, else null (no checks). Handles both CheckRun
+ * (status/conclusion) and legacy StatusContext (state) rollup entries. */
+export const summarizeChecks = (
+  rollup: ReadonlyArray<Record<string, unknown>> | null | undefined,
+): string | null => {
+  if (!rollup || rollup.length === 0) return null
+  const FAIL_CONCLUSIONS = new Set([
+    "FAILURE",
+    "ERROR",
+    "CANCELLED",
+    "TIMED_OUT",
+    "ACTION_REQUIRED",
+    "STARTUP_FAILURE",
+  ])
+  let anyFail = false
+  let anyPending = false
+  for (const entry of rollup) {
+    const conclusion = typeof entry["conclusion"] === "string" ? entry["conclusion"] : null
+    const statusValue = typeof entry["status"] === "string" ? entry["status"] : null
+    const state = typeof entry["state"] === "string" ? entry["state"] : null
+    if (conclusion !== null || statusValue !== null) {
+      if (conclusion && FAIL_CONCLUSIONS.has(conclusion)) anyFail = true
+      else if (statusValue !== "COMPLETED") anyPending = true
+    } else if (state !== null) {
+      if (state === "FAILURE" || state === "ERROR") anyFail = true
+      else if (state !== "SUCCESS") anyPending = true
+    }
+  }
+  return anyFail ? "failing" : anyPending ? "pending" : "passing"
+}
+
+/** Normalize a `gh pr list` record into a PullRequestRow. GitHub's createdAt/
+ * updatedAt are preserved as the row's lifecycle timestamps (upsert keeps
+ * created_at, refreshes updated_at), with `lastSyncedAt` stamping this sync.
+ * Enums are lowercased; blank review/mergeable/state values become null. */
+export const mapGhPullRequest = (
+  repositoryId: string,
+  id: string,
+  raw: GhPullRequest,
+  now: string,
+): PullRequestRow => ({
+  id,
+  repositoryId,
+  number: raw.number,
+  githubNodeId: raw.id ?? null,
+  title: raw.title ?? "",
+  body: raw.body ?? "",
+  state: lowerOrNull(raw.state) ?? "open",
+  isDraft: bool(raw.isDraft === true),
+  author: raw.author?.login ?? null,
+  headRef: raw.headRefName ?? "",
+  headSha: raw.headRefOid ?? null,
+  baseRef: raw.baseRefName ?? "",
+  reviewState: lowerOrNull(raw.reviewDecision),
+  checksState: summarizeChecks(raw.statusCheckRollup),
+  mergeable: lowerOrNull(raw.mergeable === "UNKNOWN" ? null : raw.mergeable),
+  mergeStateStatus: lowerOrNull(raw.mergeStateStatus === "UNKNOWN" ? null : raw.mergeStateStatus),
+  url: raw.url ?? null,
+  lastSyncedAt: now,
+  createdAt: raw.createdAt ?? now,
+  updatedAt: raw.updatedAt ?? now,
+})
+
+interface GhResult {
+  readonly stdout: string
+  readonly exitCode: number
+  readonly errored: boolean
+}
+
+const runGh = (cwd: string, args: ReadonlyArray<string>): Promise<GhResult> =>
+  new Promise((resolve) => {
+    execFile("gh", args, { cwd, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
+      resolve({
+        stdout,
+        exitCode:
+          typeof (error as { code?: unknown } | null)?.code === "number"
+            ? (error as { code: number }).code
+            : error
+              ? 1
+              : 0,
+        // A non-numeric code (ENOENT) means gh isn't installed — distinguish it
+        // from a normal non-zero exit (e.g. not authenticated) for the log line.
+        errored: Boolean(error) && typeof (error as { code?: unknown }).code !== "number",
+      })
+    })
+  })
+
 export const GitServiceLive = Layer.effect(
   GitService,
   Effect.gen(function* () {
@@ -372,6 +516,58 @@ export const GitServiceLive = Layer.effect(
         return repository
       }).pipe(Effect.withSpan("arc.git.detect_repository", { attributes: { "arc.workspace_id": workspaceId } }))
 
+    const syncPullRequests = (
+      workspaceId: string,
+    ): Effect.Effect<ReadonlyArray<PullRequestRow>, ArcRequestError> =>
+      Effect.gen(function* () {
+        const repository = yield* detectRepository(workspaceId)
+        if (!repository) return []
+        if (!repository.githubOwner || !repository.githubRepo) {
+          yield* Effect.logDebug(`PR sync skipped: no GitHub remote for ${repository.rootPath}`)
+          return []
+        }
+        const slug = `${repository.githubOwner}/${repository.githubRepo}`
+
+        const result = yield* Effect.promise(() =>
+          runGh(repository.rootPath, [
+            "pr",
+            "list",
+            "--repo",
+            slug,
+            "--state",
+            "all",
+            "--limit",
+            "100",
+            "--json",
+            GH_PR_FIELDS,
+          ]),
+        )
+        if (result.errored) {
+          yield* Effect.logWarning(`PR sync skipped: gh not available for ${slug}`)
+          return []
+        }
+        if (result.exitCode !== 0) {
+          yield* Effect.logWarning(`PR sync failed for ${slug} (gh exit ${result.exitCode})`)
+          return []
+        }
+
+        const parsed = yield* Effect.try({
+          try: () => JSON.parse(result.stdout) as ReadonlyArray<GhPullRequest>,
+          catch: (e) => arcRequestError(`PR sync parse failed for ${slug}: ${e}`),
+        })
+
+        const now = yield* nowIso
+        const rows: Array<PullRequestRow> = []
+        for (const raw of parsed) {
+          const persisted = yield* store
+            .upsertPullRequest(mapGhPullRequest(repository.id, newArcId("pr"), raw, now))
+            .pipe(Effect.mapError((e) => arcRequestError(`PR persist failed for ${slug}#${raw.number}: ${e}`)))
+          rows.push(persisted)
+        }
+        yield* Effect.logDebug(`PR sync: ${rows.length} PRs for ${slug}`)
+        return rows
+      }).pipe(Effect.withSpan("arc.git.sync_pull_requests", { attributes: { "arc.workspace_id": workspaceId } }))
+
     // Detect each workspace once per session — the changes stream emits the
     // current list on subscribe (boot) and again on every open, so a `seen`
     // guard keeps detection to one pass per workspace. Branch/PR refresh on
@@ -451,6 +647,7 @@ export const GitServiceLive = Layer.effect(
     return GitService.of({
       status,
       detectRepository,
+      syncPullRequests,
       diff: (workspaceId, filePath) =>
         Effect.gen(function* () {
           const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
