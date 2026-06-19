@@ -2,12 +2,21 @@ import { Context, Effect, Layer, Stream } from "effect"
 import { execFile } from "node:child_process"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
-import type { GitChangeStatus, GitFileChange, GitFileDiff, GitStatus } from "../../shared/git.js"
+import type {
+  GitChangeStatus,
+  GitFileChange,
+  GitFileDiff,
+  GitStatus,
+  PullRequest,
+  Repository,
+  WorkspaceGitContext,
+  Worktree,
+} from "../../shared/git.js"
+import type { PullRequestRow, RepositoryRow, WorktreeRow } from "../db/schema.js"
 import type { Workspace } from "../../shared/workspace.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { WorkspaceService } from "./WorkspaceService.js"
 import { ArcStore } from "../db/store.js"
-import type { PullRequestRow, RepositoryRow } from "../db/schema.js"
 import { newArcId } from "../../shared/ids.js"
 import { nowIso } from "../clock.js"
 
@@ -32,6 +41,12 @@ export class GitService extends Context.Service<
     readonly syncPullRequests: (
       workspaceId: string,
     ) => Effect.Effect<ReadonlyArray<PullRequestRow>, ArcRequestError>
+    /** Assemble the workspace's git context for the renderer: detect the repo
+     * (local git only — no network), then read the persisted worktrees, current
+     * branch, and the PR that branch maps to. */
+    readonly gitContext: (
+      workspaceId: string,
+    ) => Effect.Effect<WorkspaceGitContext, ArcRequestError>
   }
 >()("GitService") {}
 
@@ -399,6 +414,42 @@ export const mapGhPullRequest = (
   updatedAt: raw.updatedAt ?? now,
 })
 
+/** Project the persisted rows onto the renderer wire shapes (see shared/git.ts).
+ * The DB stores booleans as 0/1; the wire carries real booleans. */
+export const toWireRepository = (row: RepositoryRow): Repository => ({
+  id: row.id,
+  rootPath: row.rootPath,
+  defaultBranch: row.defaultBranch,
+  githubOwner: row.githubOwner,
+  githubRepo: row.githubRepo,
+})
+
+export const toWireWorktree = (row: WorktreeRow): Worktree => ({
+  id: row.id,
+  path: row.path,
+  branch: row.branch,
+  headSha: row.headSha,
+  isDetached: row.isDetached === 1,
+  isLocked: row.isLocked === 1,
+  isPrunable: row.isPrunable === 1,
+})
+
+export const toWirePullRequest = (row: PullRequestRow): PullRequest => ({
+  id: row.id,
+  number: row.number,
+  title: row.title,
+  state: row.state,
+  isDraft: row.isDraft === 1,
+  author: row.author,
+  headRef: row.headRef,
+  baseRef: row.baseRef,
+  reviewState: row.reviewState,
+  checksState: row.checksState,
+  mergeable: row.mergeable,
+  url: row.url,
+  updatedAt: row.updatedAt,
+})
+
 interface GhResult {
   readonly stdout: string
   readonly exitCode: number
@@ -568,6 +619,44 @@ export const GitServiceLive = Layer.effect(
         return rows
       }).pipe(Effect.withSpan("arc.git.sync_pull_requests", { attributes: { "arc.workspace_id": workspaceId } }))
 
+    const mapError = (label: string) => (e: unknown) => arcRequestError(`${label}: ${e}`)
+
+    const gitContext = (
+      workspaceId: string,
+    ): Effect.Effect<WorkspaceGitContext, ArcRequestError> =>
+      Effect.gen(function* () {
+        const repository = yield* detectRepository(workspaceId)
+        if (!repository) {
+          return {
+            workspaceId,
+            branch: null,
+            repository: null,
+            worktrees: [],
+            currentPullRequest: null,
+          }
+        }
+        // detectRepository just refreshed the workspace's cached branch, so read
+        // it back to map branch→PR off the persisted read model.
+        const workspaceRow = (yield* store.loadWorkspaces.pipe(Effect.mapError(mapError("workspace load failed"))))
+          .find((w) => w.id === workspaceId)
+        const branch = workspaceRow?.gitBranch ?? null
+        const worktrees = yield* store
+          .loadWorktreesForRepository(repository.id)
+          .pipe(Effect.mapError(mapError("worktree load failed")))
+        const currentPr = branch
+          ? yield* store
+              .pullRequestForBranch(repository.id, branch)
+              .pipe(Effect.mapError(mapError("PR lookup failed")))
+          : null
+        return {
+          workspaceId,
+          branch,
+          repository: toWireRepository(repository),
+          worktrees: worktrees.map(toWireWorktree),
+          currentPullRequest: currentPr ? toWirePullRequest(currentPr) : null,
+        }
+      }).pipe(Effect.withSpan("arc.git.context", { attributes: { "arc.workspace_id": workspaceId } }))
+
     // Detect each workspace once per session — the changes stream emits the
     // current list on subscribe (boot) and again on every open, so a `seen`
     // guard keeps detection to one pass per workspace. Branch/PR refresh on
@@ -648,6 +737,7 @@ export const GitServiceLive = Layer.effect(
       status,
       detectRepository,
       syncPullRequests,
+      gitContext,
       diff: (workspaceId, filePath) =>
         Effect.gen(function* () {
           const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)

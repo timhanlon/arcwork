@@ -5,7 +5,7 @@ import { Preset } from "./preset.js"
 import { Chat } from "./chat.js"
 import { ActivityEvent } from "./activity-event.js"
 import { ChatMessage } from "./chat-message.js"
-import { GitFileDiff, GitStatus } from "./git.js"
+import { GitFileDiff, GitStatus, PullRequest, WorkspaceGitContext } from "./git.js"
 import { PendingRequest } from "./chat-request.js"
 import { Instance, TargetSession } from "./instance.js"
 import { LiveTargetState } from "./live-target-state.js"
@@ -143,6 +143,25 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("GetWorkspaceGitFileDiff", {
     payload: { workspaceId: Schema.String, path: Schema.String },
     success: GitFileDiff,
+    error: RpcError,
+  }),
+  /**
+   * The workspace's git context — clone identity, worktrees, current branch, and
+   * the PR that branch maps to. Read-only and local: it runs repo detection (git
+   * plumbing) to populate the read model but does NOT hit the network, so it's
+   * safe to call on Git-pane open. `SyncWorkspacePullRequests` is the explicit
+   * network refresh.
+   */
+  Rpc.make("GetWorkspaceGitContext", {
+    payload: { workspaceId: Schema.String },
+    success: WorkspaceGitContext,
+    error: RpcError,
+  }),
+  /** Refresh the repository's pull requests from GitHub via `gh` and return the
+   * persisted rows. The one network call in the git surface — caller-triggered. */
+  Rpc.make("SyncWorkspacePullRequests", {
+    payload: { workspaceId: Schema.String },
+    success: Schema.Array(PullRequest),
     error: RpcError,
   }),
   Rpc.make("ListPresets", { success: Schema.Array(Preset), error: RpcError }),

@@ -4,7 +4,7 @@ import { ArcRpcs, type RpcError } from "../shared/rpc.js"
 import { ElectronRpcServerProtocol } from "./rpc-transport.js"
 import { WorkspaceService } from "./services/WorkspaceService.js"
 import { WorkspaceFilesService } from "./services/WorkspaceFilesService.js"
-import { GitService } from "./services/GitService.js"
+import { GitService, toWirePullRequest } from "./services/GitService.js"
 import { ProviderRegistry } from "./services/ProviderRegistry.js"
 import { PresetRegistry } from "./services/PresetRegistry.js"
 import { ChatService } from "./services/ChatService.js"
@@ -74,6 +74,16 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
       rpcEffect(
         "GetWorkspaceGitFileDiff",
         Effect.flatMap(GitService, (_) => _.diff(req.workspaceId, req.path)),
+      ),
+    GetWorkspaceGitContext: (req) =>
+      rpcEffect("GetWorkspaceGitContext", Effect.flatMap(GitService, (_) => _.gitContext(req.workspaceId))),
+    SyncWorkspacePullRequests: (req) =>
+      rpcEffect(
+        "SyncWorkspacePullRequests",
+        Effect.map(
+          Effect.flatMap(GitService, (_) => _.syncPullRequests(req.workspaceId)),
+          (rows) => rows.map(toWirePullRequest),
+        ),
       ),
     ListPresets: () => rpcEffect("ListPresets", Effect.flatMap(PresetRegistry, (_) => _.list)),
     ListInstances: () => rpcEffect("ListInstances", Effect.flatMap(TargetSessionManager, (_) => _.list)),

@@ -94,4 +94,52 @@ describe("git repository detection", () => {
     expect(result.boundWorkspace?.worktreeId).toBe(result.worktrees[0]!.id)
     expect(result.boundWorkspace?.gitBranch).toBe("main")
   })
+
+  it("gitContext maps the current branch to a persisted PR", async () => {
+    const context = await run(
+      Effect.gen(function* () {
+        const store = yield* ArcStore
+        yield* store.upsertWorkspace({
+          id: workspace.id,
+          path: workspace.path,
+          name: workspace.name,
+          createdAt: "2026-06-19T00:00:00.000Z",
+          lastOpenedAt: "2026-06-19T00:00:00.000Z",
+        })
+        const service = yield* GitService
+        const repo = yield* service.detectRepository(workspace.id)
+        // Seed a PR whose head ref is the workspace's branch (main).
+        yield* store.upsertPullRequest({
+          id: "pr_seed",
+          repositoryId: repo!.id,
+          number: 99,
+          githubNodeId: null,
+          title: "the open PR",
+          body: "",
+          state: "open",
+          isDraft: 0,
+          author: "octocat",
+          headRef: "main",
+          headSha: null,
+          baseRef: "main",
+          reviewState: null,
+          checksState: "passing",
+          mergeable: null,
+          mergeStateStatus: null,
+          url: null,
+          lastSyncedAt: "2026-06-19T00:00:00.000Z",
+          createdAt: "2026-06-19T00:00:00.000Z",
+          updatedAt: "2026-06-19T00:00:00.000Z",
+        })
+        return yield* service.gitContext(workspace.id)
+      }),
+    )
+
+    expect(context.branch).toBe("main")
+    expect(context.repository?.githubRepo).toBe("widgets")
+    expect(context.worktrees).toHaveLength(1)
+    expect(context.currentPullRequest?.number).toBe(99)
+    expect(context.currentPullRequest?.checksState).toBe("passing")
+    expect(context.currentPullRequest?.isDraft).toBe(false)
+  })
 })

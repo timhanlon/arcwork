@@ -146,6 +146,7 @@ export class ArcStore extends Context.Service<
     readonly repositoryByCommonGitDir: (
       commonGitDir: string,
     ) => Effect.Effect<RepositoryRow | null, SqlError>
+    readonly repositoryById: (id: string) => Effect.Effect<RepositoryRow | null, SqlError>
     readonly loadWorktreesForRepository: (
       repositoryId: string,
     ) => Effect.Effect<ReadonlyArray<WorktreeRow>, SqlError>
@@ -877,6 +878,11 @@ export const ArcStoreLive = Layer.effect(
         Effect.map((rows) => rows[0] ?? null),
       )
 
+    const repositoryById = (id: string) =>
+      sql<RepositoryRow>`SELECT * FROM repositories WHERE id = ${id} LIMIT 1`.pipe(
+        Effect.map((rows) => rows[0] ?? null),
+      )
+
     const loadWorktreesForRepository = (repositoryId: string) =>
       sql<WorktreeRow>`SELECT * FROM worktrees
         WHERE repository_id = ${repositoryId}
@@ -1050,6 +1056,7 @@ export const ArcStoreLive = Layer.effect(
       loadRepositories,
       upsertRepository,
       repositoryByCommonGitDir,
+      repositoryById,
       loadWorktreesForRepository,
       upsertWorktree,
       deleteWorktreeByPath,
