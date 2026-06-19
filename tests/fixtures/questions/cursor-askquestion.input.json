@@ -1,0 +1,13 @@
+{
+  "title": "Temperature check",
+  "questions": [
+    {
+      "id": "temperature",
+      "prompt": "Is it hot or cold?",
+      "options": [
+        { "id": "hot", "label": "Hot" },
+        { "id": "cold", "label": "Cold" }
+      ]
+    }
+  ]
+}

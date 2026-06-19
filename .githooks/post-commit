@@ -1,0 +1,23 @@
+#!/bin/sh
+# arc-electron · post-commit: link this commit to the chat/work that produced it.
+#
+# When a commit is made from an arc-launched (env-stamped) shell, that shell
+# carries ARC_HOOK_SOCK + the ARC_* tags; this hook inherits them and ships the
+# commit's metadata to arc over the same socket the provider hooks use. arc
+# correlates commit → chat → work and stamps a typed `commit` citation — no
+# agent in the loop, no hand-written "Committed as <sha>" notes.
+#
+# In a plain terminal (no ARC_HOOK_SOCK) this is a no-op: such commits are not
+# tied to any chat, which is correct. Best-effort throughout — it must never
+# block or fail the commit. Bypass everything with `git commit --no-verify`.
+[ -n "$ARC_HOOK_SOCK" ] || exit 0
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+helper="$root/.arc/runtime/arc-hook-signal.mjs"
+[ -f "$helper" ] || exit 0 # arc never instrumented this workspace
+
+payload=$(node "$root/.githooks/arc-commit-payload.mjs" 2>/dev/null)
+[ -n "$payload" ] || exit 0 # payload builder failed → nothing to ship
+
+printf '%s' "$payload" | node "$helper" git post-commit >/dev/null 2>&1 || true
+exit 0

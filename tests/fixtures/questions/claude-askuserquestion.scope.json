@@ -1,0 +1,27 @@
+{
+  "questions": [
+    {
+      "question": "Which improvements should I make to the Question component?",
+      "header": "Scope",
+      "options": [
+        {
+          "label": "Highlight chosen option",
+          "description": "When answered, mark the option matching the answer (by value/label) as selected, so the resolution reads at a glance. Falls back to the raw answer line when nothing matches."
+        },
+        {
+          "label": "Tighten pending hint",
+          "description": "Show the target-focus hint only when the provider offers no fixed options, so option-based questions stay compact."
+        },
+        {
+          "label": "De-emphasize resolved",
+          "description": "Dim/mute dismissed, failed, and superseded cards so the live pending question stands out in the transcript."
+        }
+      ],
+      "multiSelect": true
+    }
+  ],
+  "answers": {
+    "Which improvements should I make to the Question component?": "Highlight chosen option"
+  },
+  "annotations": {}
+}

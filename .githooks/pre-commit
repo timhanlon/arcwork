@@ -1,0 +1,14 @@
+#!/bin/sh
+# Pre-commit: lint + typecheck + tests. Bypass with `git commit --no-verify`.
+set -e
+
+echo "pre-commit: lint…"
+pnpm run lint
+
+echo "pre-commit: typecheck…"
+pnpm run typecheck
+
+echo "pre-commit: tests…"
+pnpm run test
+
+echo "pre-commit: ok"

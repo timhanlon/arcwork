@@ -1,0 +1,54 @@
+import { Schema } from "effect"
+
+/**
+ * Layer 3 — Instance (the running/recorded thing). Arc-owned ids are TypeIDs:
+ * `run_…` for batch runs and `target_…` for interactive target sessions.
+ * Two sibling subtypes unify as "contributions" (aux_run | target_turn):
+ *   - Run: a non-interactive batch execution (.aux/runs/<id>/)
+ *   - TargetSession: an interactive PTY session surfaced through a chat. cwd is
+ *     the worktree root — the binding that gives multiple instances clean,
+ *     slug-isolated artifact namespaces.
+ */
+
+export const TargetState = Schema.Literals([
+  "idle",
+  "running",
+  "waiting_for_input",
+  "waiting_for_approval",
+  "exited",
+  "unknown",
+])
+export type TargetState = typeof TargetState.Type
+
+export const Run = Schema.Struct({
+  _tag: Schema.Literal("Run"),
+  id: Schema.String, // TypeID prefix: run
+  provider: Schema.String,
+  preset: Schema.optional(Schema.String),
+  cwd: Schema.String,
+  startedAt: Schema.String,
+})
+export type Run = typeof Run.Type
+
+export const TargetSession = Schema.Struct({
+  _tag: Schema.Literal("TargetSession"),
+  id: Schema.String, // TypeID prefix: target
+  provider: Schema.String,
+  preset: Schema.optional(Schema.String),
+  chatId: Schema.String, // the chat this session belongs to
+  cwd: Schema.String, // worktree root — the instance binding
+  /** discovered after launch via the SessionStart hook; Arc-owned session
+   * metadata persisted to `.arc/state/` — valuable for resume, debugging, and
+   * future provider-artifact import (not a required cross-DB join key) */
+  nativeSessionId: Schema.optional(Schema.String),
+  nativeTranscriptPath: Schema.optional(Schema.String),
+  /** true only when this Electron process owns a live PTY handle for the session */
+  attached: Schema.optional(Schema.Boolean),
+  resumable: Schema.optional(Schema.Boolean),
+  state: TargetState,
+  startedAt: Schema.String,
+})
+export type TargetSession = typeof TargetSession.Type
+
+export const Instance = Schema.Union([Run, TargetSession])
+export type Instance = typeof Instance.Type

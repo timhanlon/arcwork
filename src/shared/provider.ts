@@ -1,0 +1,64 @@
+import { Schema } from "effect"
+
+/**
+ * The set of agent harnesses (targets) arc ingests and projects, as a closed
+ * literal union. Canonical home so the renderer-facing shared schemas and the
+ * main-process ingest layer key off one definition — `ingest/db/schema.ts`
+ * re-exports these. (Distinct from {@link ProviderSpec} below, which is a
+ * provider's capability sheet; this is just its identity.)
+ */
+export const Provider = Schema.Literals(["claude", "codex", "cursor"])
+export type Provider = typeof Provider.Type
+export const ALL_PROVIDERS: ReadonlyArray<Provider> = ["claude", "codex", "cursor"]
+
+/**
+ * Layer 1 — Provider (the "kind"): static capability sheet for a CLI agent.
+ *
+ * A provider can declare TWO modes; not every provider supports both:
+ *   - `batch`: how aux runs it non-interactively (Run instances)
+ *   - `interactive`: how to launch a PTY session (TargetSession instances),
+ *      ported from orca's TUI_AGENT_CONFIG injection knobs.
+ */
+
+export const PromptInjectionMode = Schema.Literals([
+  "argv",
+  "flag-prompt",
+  "stdin-after-start",
+  "flag-interactive",
+  "flag-prompt-interactive",
+])
+export type PromptInjectionMode = typeof PromptInjectionMode.Type
+
+/** Whether a provider can run more than one instance at once. */
+export const Concurrency = Schema.Literals(["per-worktree", "singleton", "unlimited"])
+export type Concurrency = typeof Concurrency.Type
+
+/** Non-interactive run capability (aux adapter). */
+export const BatchCapability = Schema.Struct({
+  commandName: Schema.String,
+  promptFlag: Schema.optional(Schema.String),
+  modelFlag: Schema.optional(Schema.String),
+})
+export type BatchCapability = typeof BatchCapability.Type
+
+/** Interactive PTY launch capability (orca TUI_AGENT_CONFIG, ported). */
+export const InteractiveCapability = Schema.Struct({
+  launchCmd: Schema.String,
+  expectedProcess: Schema.String,
+  promptInjectionMode: PromptInjectionMode,
+  /** native prefill flag, e.g. claude `--prefill` (eliminates the paste race) */
+  draftPromptFlag: Schema.optional(Schema.String),
+  /** env prefill when no flag exists (set via the launched session's env) */
+  draftPromptEnvVar: Schema.optional(Schema.String),
+})
+export type InteractiveCapability = typeof InteractiveCapability.Type
+
+export const ProviderSpec = Schema.Struct({
+  kind: Schema.String, // "claude" | "codex" | "cursor" | ...
+  displayName: Schema.String,
+  detectCmd: Schema.String,
+  concurrency: Concurrency,
+  batch: Schema.optional(BatchCapability),
+  interactive: Schema.optional(InteractiveCapability),
+})
+export type ProviderSpec = typeof ProviderSpec.Type

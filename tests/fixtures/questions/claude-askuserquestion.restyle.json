@@ -1,0 +1,27 @@
+{
+  "questions": [
+    {
+      "question": "The Tailwind foundation is in and the app is intact. How should the component restyle pass proceed?",
+      "header": "Restyle pass",
+      "options": [
+        {
+          "label": "Incremental, component-by-component",
+          "description": "Land the foundation now; convert components to utilities in small reviewable PRs (and opportunistically as we touch them — e.g. Message/Markdown during the Streamdown work). Lowest risk, keeps each diff readable."
+        },
+        {
+          "label": "Full restyle now, one pass",
+          "description": "I convert the whole renderer (styles.css + all .module.css → utilities) in one large change now. Idiomatic end state fastest, but a big diff and higher regression risk to eyeball."
+        },
+        {
+          "label": "Foundation only — stop here",
+          "description": "Treat the foundation (preflight + tokens + utilities available) as the deliverable for this work item; defer all restyling. New UI uses Tailwind; old CSS stays until touched."
+        }
+      ],
+      "multiSelect": false
+    }
+  ],
+  "answers": {
+    "The Tailwind foundation is in and the app is intact. How should the component restyle pass proceed?": "Incremental, component-by-component"
+  },
+  "annotations": {}
+}

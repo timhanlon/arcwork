@@ -1,0 +1,700 @@
+import { Context, Effect, Layer, Queue, Stream, SubscriptionRef } from "effect"
+import type { SqlError } from "effect/unstable/sql/SqlError"
+import { nowIso } from "../clock.js"
+import { EventEmitter } from "node:events"
+import * as fs from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
+import * as pty from "node-pty"
+import type { IPty } from "node-pty"
+import type { TargetSession } from "../../shared/instance.js"
+import { arcEnvTags } from "../../shared/env-tags.js"
+import { installProviderHooks } from "../hooks/install.js"
+import { installMcpConfig } from "../mcp/install.js"
+import { isMcpProvider } from "../mcp/client-config.js"
+import { ARC_HOOK_SOCK_ENV } from "../hooks/signals.js"
+import { HookSignalServer } from "./HookSignalServer.js"
+import { ProviderRegistry } from "./ProviderRegistry.js"
+import { WorkspaceService } from "./WorkspaceService.js"
+import { ChatService } from "./ChatService.js"
+import { ArcStore } from "../db/store.js"
+import { withSqlOperation } from "../db/sql-operation.js"
+import { resolveArcDb } from "../db/paths.js"
+import type { TargetSessionRow } from "../db/schema.js"
+import { type ArcRequestError, arcRequestError } from "../errors.js"
+import { newArcId } from "../../shared/ids.js"
+import { PTY_SUBMIT_SEQUENCE, writePromptWithDelayedSubmit } from "../pty-submit.js"
+import { tracePtyChunk } from "./pty-trace.js"
+
+/**
+ * Owns interactive PTY instances. Default policy: ONE logical session per
+ * (chat, provider), keyed by `${chatId}:${provider}`.
+ *
+ * Control plane (launch/submit/list) is Effect; the byte stream is a raw data
+ * plane — PTY output is published on `events` ("data" | "exit"), which the main
+ * process forwards to the renderer over IPC. The PTY handle map lives in the
+ * Layer closure (not in the Schema'd TargetSession state).
+ */
+
+export interface LaunchRequest {
+  readonly provider: string
+  readonly chatId: string
+  readonly preset?: string
+  readonly prompt?: string
+  /**
+   * Submit the prompt rather than leave it as a draft. The renderer launches a
+   * target with a *draft* (the user reviews, then hits Enter) — for providers
+   * that prefill via argv (claude) the prompt is seeded but unsent. An
+   * autonomous caller (a handoff) sets this so the seeded prompt is also
+   * submitted once the session is ready. Providers that already submit on launch
+   * (stdin-after-start: cursor, codex) are unaffected.
+   */
+  readonly autoSubmit?: boolean
+  /** Grid size measured by the renderer before launch (see rpc.ts / arc-pty-winsize). */
+  readonly cols?: number
+  readonly rows?: number
+}
+
+/**
+ * After a prefill (argv/env) seeds the composer, how long to wait past the
+ * session's first PTY output before sending Enter. Prefill reliably seeds the
+ * text (it's present at process start), but the composer needs a beat to render
+ * it; gating the submit on first-output-plus-settle is a far better readiness
+ * proxy than a fixed post-spawn delay. Only used for `autoSubmit` launches.
+ */
+const PREFILL_SUBMIT_SETTLE_MS = 400
+export interface SubmitRequest {
+  readonly instanceId: string
+  readonly text: string
+}
+export interface ResumeRequest {
+  readonly sessionId: string
+  readonly cols?: number
+  readonly rows?: number
+}
+export interface StopRequest {
+  readonly sessionId: string
+}
+
+/**
+ * Grace between the polite SIGTERM and the forced SIGKILL. Long enough for an
+ * agent CLI to flush/checkpoint on its own SIGTERM handler, short enough that a
+ * "stop" the user clicked feels like it took effect.
+ */
+const STOP_GRACE_MS = 5000
+
+export class TargetSessionManager extends Context.Service<
+  TargetSessionManager,
+  {
+    readonly list: Effect.Effect<ReadonlyArray<TargetSession>>
+    /** Reactive view of `list`: emits the current sessions, then every change. */
+    readonly changes: Stream.Stream<ReadonlyArray<TargetSession>>
+    readonly launch: (
+      req: LaunchRequest,
+    ) => Effect.Effect<TargetSession, ArcRequestError | SqlError>
+    readonly resume: (req: ResumeRequest) => Effect.Effect<TargetSession, ArcRequestError | SqlError>
+    /**
+     * Stop a running target. Sends SIGTERM, then SIGKILL after {@link STOP_GRACE_MS}
+     * if the child hasn't exited. State/DB/broadcast cleanup is left to the
+     * child's own `onExit` handler — `stop` only signals. Idempotent: returns
+     * `{ stopped: false }` when no live PTY is held for the session.
+     */
+    readonly stop: (req: StopRequest) => Effect.Effect<{ readonly stopped: boolean }>
+    /** Fill a session's `nativeSessionId` once a hook reveals it (Arc-owned
+     * session metadata, persisted for resume/debugging/import — not a cross-DB
+     * join key). Matches by session `id`; idempotent for the same value. */
+    readonly bindNative: (
+      targetSessionId: string,
+      nativeSessionId: string,
+      nativeTranscriptPath?: string | null,
+    ) => Effect.Effect<void>
+    readonly submit: (req: SubmitRequest) => Effect.Effect<{ readonly accepted: boolean }>
+    readonly write: (sessionId: string, data: string) => Effect.Effect<void>
+    /** Push a new winsize to a live child (TIOCSWINSZ + SIGWINCH) on window/pane resize. */
+    readonly resize: (sessionId: string, cols: number, rows: number) => Effect.Effect<void>
+    /** raw data plane: emits "data" {sessionId,data} and "exit" {sessionId,exitCode} */
+    readonly events: EventEmitter
+  }
+>()("TargetSessionManager") {}
+
+export const TargetSessionManagerLive = Layer.effect(
+  TargetSessionManager,
+  Effect.gen(function* () {
+    const registry = yield* ProviderRegistry
+    const workspaces = yield* WorkspaceService
+    const chats = yield* ChatService
+    const hookServer = yield* HookSignalServer
+    const db = yield* ArcStore
+
+    // Restore persisted sessions on boot. Their PTYs died with the last process,
+    // so any previously-live state is now unconfirmed → "unknown" (an already
+    // "exited" row stays exited). The persisted row still carries cwd +
+    // nativeSessionId, which a manual relaunch (and the future auto-resume arc)
+    // can use. A load failure starts empty (logged).
+    const persisted = yield* db.loadTargetSessions.pipe(
+      Effect.tapError((e) => Effect.logWarning(`session load failed; starting empty: ${e}`)),
+      Effect.orElseSucceed(() => [] as ReadonlyArray<TargetSessionRow>),
+    )
+    const initialMap = new Map<string, TargetSession>()
+    const restoredHookTargets: Array<{ readonly cwd: string; readonly provider: string }> = []
+    for (const r of persisted) {
+      initialMap.set(`${r.chatId}:${r.provider}`, {
+        _tag: "TargetSession",
+        id: r.id,
+        provider: r.provider,
+        preset: r.preset ?? undefined,
+        chatId: r.chatId,
+        cwd: r.cwd,
+        nativeSessionId: r.nativeSessionId ?? undefined,
+        nativeTranscriptPath: r.nativeTranscriptPath ?? undefined,
+        attached: false,
+        state: r.state === "exited" ? "exited" : "unknown",
+        startedAt: r.startedAt,
+      })
+      if (r.state !== "exited") {
+        restoredHookTargets.push({ cwd: r.cwd, provider: r.provider })
+      }
+    }
+
+    // A still-running CLI from a previous arc-electron process inherited the
+    // same deterministic socket path, but the server died with the old app.
+    // Re-arm sockets during startup so delayed hooks (notably Codex
+    // SessionStart, which can wait until the first submitted prompt) can still
+    // bind restored target sessions.
+    const armedRestoredHooks = new Set<string>()
+    for (const target of restoredHookTargets) {
+      const key = `${target.cwd}\u0000${target.provider}`
+      if (armedRestoredHooks.has(key)) continue
+      armedRestoredHooks.add(key)
+      yield* hookServer.ensureListening(target.cwd)
+      const result = yield* installProviderHooks(target.cwd, target.provider)
+      if (!result.installed) {
+        yield* Effect.logWarning(
+          `restored hook install failed for ${target.provider} in ${target.cwd}; hook signals unavailable: ${result.reason}`,
+        )
+      }
+    }
+
+    // SubscriptionRef (not Ref) so the session list is observable: `changes`
+    // pushes the current value, then every update. This is the Effect-idiomatic
+    // reactive store; the renderer mirrors it through an atom. ArcStore is its
+    // durable mirror — writes below are awaited (fast synchronous SQLite, and
+    // ordered: upsert lands before any bind/state update) but a write *failure*
+    // never *fails* the live op.
+    const store = yield* SubscriptionRef.make(initialMap)
+    const ptys = new Map<string, IPty>()
+    const events = new EventEmitter()
+    const arcDb = resolveArcDb()
+
+    // PTY exit handling runs as structured Effect work, not inline in node-pty's
+    // `onExit` callback. The callback only offers the exit notification here; a
+    // single scoped fiber (below) drains the queue and applies the whole exit
+    // policy — broadcast the renderer exit event, drop the PTY handle, mark the
+    // session exited, persist best-effort. This matches the controller's
+    // EventEmitter-to-Stream seam and gives exit handling one supervised lifetime
+    // and one error policy, instead of a bare `runSync`/`runFork` pair firing
+    // from outside the runtime on every child death.
+    interface PtyExit {
+      readonly sessionId: string
+      readonly exitCode: number
+    }
+    const exits = yield* Queue.make<PtyExit>()
+
+    // First-output observability. The splash banner is the child's very first
+    // PTY write; on launch it can race ahead of the `LaunchTarget` RPC that binds
+    // the session id in the renderer, so the renderer drops it (Terminal.tsx
+    // gates on a known id). To see that race in Lensflare we record, per launch,
+    // how long after spawn the first byte arrived and how big that first burst
+    // was. Compared against the `arc.target.launch` span (the id round-trip),
+    // a first_output latency well below the launch span means the splash lost.
+    // Offered from the raw `onData` callback, logged by a scoped Effect fiber.
+    interface FirstOutput {
+      readonly sessionId: string
+      readonly provider: string
+      readonly firstByteMs: number
+      readonly firstChunkBytes: number
+    }
+    const firstOutputs = yield* Queue.make<FirstOutput>()
+    yield* Stream.fromQueue(firstOutputs).pipe(
+      Stream.runForEach((f) =>
+        Effect.logInfo(
+          `target first-output target=${f.sessionId} provider=${f.provider} ` +
+            `firstByteMs=${f.firstByteMs} firstChunkBytes=${f.firstChunkBytes}`,
+        ).pipe(
+          Effect.annotateLogs({
+            "arc.event": "target.first_output",
+            "arc.provider": f.provider,
+            "arc.target_session_id": f.sessionId,
+            "arc.first_byte_ms": f.firstByteMs,
+            "arc.first_chunk_bytes": f.firstChunkBytes,
+          }),
+        ),
+      ),
+      Effect.forkScoped,
+    )
+    const handleExit = ({ sessionId, exitCode }: PtyExit) =>
+      Effect.logInfo(`target exited target=${sessionId} code=${exitCode}`).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            events.emit("exit", { sessionId, exitCode })
+            ptys.delete(sessionId)
+          }),
+        ),
+      ).pipe(
+        Effect.andThen(
+          SubscriptionRef.update(store, (m) => {
+            const next = new Map(m)
+            for (const [k, s] of next) {
+              if (s.id === sessionId) next.set(k, { ...s, state: "exited" })
+            }
+            return next
+          }),
+        ),
+        Effect.andThen(
+          db
+            .setTargetSessionState(sessionId, "exited")
+            .pipe(
+              Effect.tapError((e) => Effect.logWarning(`exit persist failed (${sessionId}): ${e}`)),
+              Effect.ignore,
+            ),
+        ),
+      )
+    yield* Stream.fromQueue(exits).pipe(Stream.runForEach(handleExit), Effect.forkScoped)
+
+    // Shutdown policy: on runtime dispose (app quit) KILL every live child PTY.
+    // agent CLIs are launched by and scoped to arc — we do not leave orphaned
+    // processes behind. We do not persist "exited" here: a hard kill races the
+    // child's own `onExit`, and a half-written state is worse than none. The
+    // persisted row stays "running" and is reconciled to "unknown" on next boot
+    // (see the restore logic above), which is the honest post-crash state.
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        for (const child of ptys.values()) {
+          try {
+            child.kill()
+          } catch {
+            /* child already gone — nothing to release */
+          }
+        }
+        ptys.clear()
+      }),
+    )
+
+    const persistSession = (s: TargetSession) =>
+      db
+        .upsertTargetSession({
+          id: s.id,
+          chatId: s.chatId,
+          provider: s.provider,
+          preset: s.preset ?? null,
+          cwd: s.cwd,
+          nativeSessionId: s.nativeSessionId ?? null,
+          nativeTranscriptPath: s.nativeTranscriptPath ?? null,
+          state: s.state,
+          startedAt: s.startedAt,
+        })
+        .pipe(
+          // Name this work on the SQLite acquire span: on the launch path this
+          // single-row upsert is the statement that waits behind the ingest
+          // reprojection holder, so the wait records `blocked_by` against it.
+          withSqlOperation("arc.target.persist", { targetSessionId: s.id }),
+          Effect.tapError((e) => Effect.logWarning(`session persist failed (${s.id}): ${e}`)),
+          Effect.ignore,
+        )
+
+    const claudeProjectSlug = (cwd: string): string => cwd.replaceAll("/", "-").replaceAll(".", "-")
+    const inferredTranscriptPath = (s: TargetSession): string | undefined => {
+      if (!s.nativeSessionId) return undefined
+      if (s.nativeTranscriptPath) return s.nativeTranscriptPath
+      if (s.provider === "claude") {
+        return path.join(os.homedir(), ".claude", "projects", claudeProjectSlug(s.cwd), `${s.nativeSessionId}.jsonl`)
+      }
+      return undefined
+    }
+    const canResume = (s: TargetSession): boolean => {
+      if (!s.nativeSessionId) return false
+      const transcriptPath = inferredTranscriptPath(s)
+      if (s.provider === "claude") return Boolean(transcriptPath && fs.existsSync(transcriptPath))
+      return true
+    }
+    const asList = (m: ReadonlyMap<string, TargetSession>): ReadonlyArray<TargetSession> =>
+      Array.from(m.values()).map((s) => ({
+        ...s,
+        attached: ptys.has(s.id),
+        resumable: canResume(s),
+      }))
+    const list = SubscriptionRef.get(store).pipe(Effect.map(asList))
+    const changes = Stream.map(SubscriptionRef.changes(store), asList)
+
+    const resumeArgs = (provider: string, nativeSessionId: string | undefined): Array<string> | null => {
+      if (!nativeSessionId) return null
+      switch (provider) {
+        case "claude":
+          return ["--resume", nativeSessionId]
+        case "codex":
+          return ["resume", nativeSessionId]
+        case "cursor":
+          return ["--resume", nativeSessionId]
+        default:
+          return null
+      }
+    }
+
+    const spawnAttached = (
+      session: TargetSession,
+      launchCmd: string,
+      args: ReadonlyArray<string>,
+      cols: number | undefined,
+      rows: number | undefined,
+      sockPath: string,
+      writeAfterStart?: string,
+      extraEnv: Readonly<Record<string, string>> = {},
+      // When the prompt was *seeded* (prefill) rather than submitted, submit it
+      // once the session is ready — on first PTY output plus a settle window.
+      submitSeededAfterReady = false,
+    ) =>
+      Effect.sync(() => {
+        const spawnedAt = Date.now()
+        const child = pty.spawn(launchCmd, [...args], {
+          name: "xterm-color",
+          cols: cols && cols > 0 ? Math.floor(cols) : 80,
+          rows: rows && rows > 0 ? Math.floor(rows) : 24,
+          cwd: session.cwd,
+          env: {
+            ...process.env,
+            ...arcEnvTags({
+              chatId: session.chatId,
+              targetSessionId: session.id,
+              provider: session.provider,
+              dbPath: arcDb.dbPath,
+            }),
+            ...extraEnv,
+            [ARC_HOOK_SOCK_ENV]: sockPath,
+          } as Record<string, string>,
+        })
+        let firstDataSeen = false
+        let firstChunkSeen = false
+        child.onData((data) => {
+          tracePtyChunk(session.id, data)
+          if (!firstChunkSeen) {
+            firstChunkSeen = true
+            Queue.offerUnsafe(firstOutputs, {
+              sessionId: session.id,
+              provider: session.provider,
+              firstByteMs: Date.now() - spawnedAt,
+              firstChunkBytes: Buffer.byteLength(data, "utf8"),
+            })
+          }
+          events.emit("data", { sessionId: session.id, data })
+          // Submit the seeded prompt once: the first output means the CLI is up;
+          // a short settle lets its composer render the prefill before Enter.
+          if (submitSeededAfterReady && !firstDataSeen) {
+            firstDataSeen = true
+            setTimeout(() => {
+              try {
+                child.write(PTY_SUBMIT_SEQUENCE)
+              } catch {
+                /* child gone before submit — nothing to do */
+              }
+            }, PREFILL_SUBMIT_SETTLE_MS)
+          }
+        })
+        // Hand the exit off to the scoped consumer; no Effect runs from this
+        // raw node-pty callback. `offerUnsafe` is a no-op once the queue is shut
+        // down (scope close), so a child killed during app-quit disposal simply
+        // isn't reprocessed — consistent with not persisting "exited" on a hard kill.
+        child.onExit(({ exitCode }) => {
+          Queue.offerUnsafe(exits, { sessionId: session.id, exitCode })
+        })
+        if (writeAfterStart) writePromptWithDelayedSubmit((data) => child.write(data), writeAfterStart)
+        ptys.set(session.id, child)
+      })
+
+    const launch = (req: LaunchRequest) =>
+      Effect.gen(function* () {
+        const key = `${req.chatId}:${req.provider}`
+        const existing = (yield* SubscriptionRef.get(store)).get(key)
+        // one-per-(chat, provider) — but only if the PTY is actually alive. A
+        // persisted-but-dead row (reloaded after restart, or exited) must be
+        // relaunchable, not returned as a corpse that blocks a fresh spawn.
+        if (existing && ptys.has(existing.id)) return existing
+
+        const spec = yield* registry.get(req.provider)
+        if (!spec?.interactive) {
+          return yield* Effect.fail(
+            arcRequestError(`Provider "${req.provider}" has no interactive capability`),
+          )
+        }
+        const cap = spec.interactive
+
+        const chatList = yield* chats.list
+        const chat = chatList.find((c) => c.id === req.chatId)
+        if (!chat) {
+          return yield* Effect.fail(arcRequestError(`Unknown chat "${req.chatId}"`))
+        }
+        const wsList = yield* workspaces.list
+        const ws = wsList.find((w) => w.id === chat.workspaceId)
+        if (!ws) {
+          return yield* Effect.fail(
+            arcRequestError(`Unknown workspace "${chat.workspaceId}" for chat "${req.chatId}"`),
+          )
+        }
+        const cwd = ws.path
+        const id = existing?.id ?? newArcId("target")
+
+        // Arm native-session capture BEFORE spawn: bring the hook socket up (so
+        // the channel is live the instant the child's SessionStart fires), then
+        // install the hook config. Install is best-effort but logged — a failure
+        // only means hook signals stay unavailable, never a blocked launch.
+        const sockPath = yield* hookServer.ensureListening(cwd).pipe(
+          Effect.withSpan("arc.target.hook_ensure", {
+            attributes: { "arc.workspace": cwd, "arc.provider": req.provider },
+          }),
+        )
+        const result = yield* installProviderHooks(cwd, req.provider).pipe(
+          Effect.withSpan("arc.target.hook_install", {
+            attributes: { "arc.workspace": cwd, "arc.provider": req.provider },
+          }),
+        )
+        if (!result.installed) {
+          yield* Effect.logWarning(
+            `hook install failed for ${req.provider} in ${cwd}; hook signals unavailable: ${result.reason}`,
+          )
+        }
+        if (isMcpProvider(req.provider)) {
+          const mcpResult = installMcpConfig(cwd, req.provider)
+          if (!mcpResult.installed) {
+            yield* Effect.logWarning(
+              `MCP config install failed for ${req.provider}: ${mcpResult.reason ?? "unknown error"} — run arc-mcp ${req.provider} --write`,
+            )
+          } else if (mcpResult.scope === "user") {
+            yield* Effect.logInfo(
+              `installed arc MCP stdio proxy in user-scoped config for ${req.provider}`,
+            )
+          }
+        }
+
+        // Apply the provider's prompt-injection mode. A prefill (argv/env) only
+        // *seeds* the composer; stdin-after-start writes text+Enter, i.e. submits.
+        const args: Array<string> = []
+        let writeAfterStart: string | undefined
+        let seededViaPrefill = false
+        const extraEnv: Record<string, string> = {}
+        if (req.prompt) {
+          if (cap.draftPromptFlag) {
+            args.push(cap.draftPromptFlag, req.prompt)
+            seededViaPrefill = true
+          } else if (cap.draftPromptEnvVar) {
+            extraEnv[cap.draftPromptEnvVar] = req.prompt
+            seededViaPrefill = true
+          } else {
+            writeAfterStart = req.prompt // stdin-after-start (submits on its own)
+          }
+        }
+        // An autonomous caller wants the work actually started: submit the seeded
+        // prompt once ready. (stdin-after-start already submitted, so nothing to add.)
+        const submitSeededAfterReady = req.autoSubmit === true && seededViaPrefill
+
+        // Spawn at the renderer-measured grid size so the child's FIRST winsize
+        // read is correct. A later resize cannot fix it (Ink can't reflow
+        // scrollback). Fall back to
+        // 80x24 only for callers that never measured (e.g. headless).
+        const session: TargetSession = {
+          _tag: "TargetSession",
+          id,
+          provider: req.provider,
+          preset: req.preset,
+          chatId: req.chatId,
+          cwd,
+          // Carry forward the previous binding (from a restored/exited row) until
+          // this fresh child's SessionStart hook rebinds. Spawning mints a new
+          // native session, but until the hook arrives the last-known id is the
+          // best we have — never null it out, or a late/failed hook would erase
+          // exactly the binding this store exists to preserve.
+          nativeSessionId: existing?.nativeSessionId,
+          nativeTranscriptPath: existing?.nativeTranscriptPath,
+          attached: true,
+          state: "running",
+          startedAt: yield* nowIso,
+        }
+        yield* spawnAttached(
+          session,
+          cap.launchCmd,
+          args,
+          req.cols,
+          req.rows,
+          sockPath,
+          writeAfterStart,
+          extraEnv,
+          submitSeededAfterReady,
+        ).pipe(
+          Effect.withSpan("arc.target.spawn", {
+            attributes: { "arc.provider": req.provider, "arc.target_session_id": id },
+          }),
+        )
+        yield* SubscriptionRef.update(store, (m) => new Map(m).set(key, session))
+        yield* persistSession(session).pipe(
+          Effect.withSpan("arc.target.persist", {
+            attributes: { "arc.target_session_id": session.id },
+          }),
+        )
+        yield* Effect.logInfo(
+          `target launched provider=${session.provider} chat=${session.chatId} target=${session.id}`,
+        )
+        return session
+      }).pipe(
+        Effect.withSpan("arc.target.launch", {
+          attributes: { "arc.provider": req.provider, "arc.chat_id": req.chatId },
+        }),
+      )
+
+    const resume = (req: ResumeRequest) =>
+      Effect.gen(function* () {
+        const current = yield* SubscriptionRef.get(store)
+        let entry: readonly [string, TargetSession] | undefined
+        for (const pair of current) {
+          if (pair[1].id === req.sessionId) entry = pair
+        }
+        if (!entry) {
+          return yield* Effect.fail(arcRequestError(`Unknown target session "${req.sessionId}"`))
+        }
+        const [key, existing] = entry
+        if (ptys.has(existing.id)) return { ...existing, attached: true }
+
+        const spec = yield* registry.get(existing.provider)
+        if (!spec?.interactive) {
+          return yield* Effect.fail(
+            arcRequestError(`Provider "${existing.provider}" has no interactive capability`),
+          )
+        }
+        if (!canResume(existing)) {
+          return yield* Effect.fail(
+            arcRequestError(`Target session "${existing.id}" has no resumable native session`),
+          )
+        }
+        const args = resumeArgs(existing.provider, existing.nativeSessionId)
+        if (!args) {
+          return yield* Effect.fail(arcRequestError(`Target session "${existing.id}" has no native session id to resume`))
+        }
+
+        const sockPath = yield* hookServer.ensureListening(existing.cwd)
+        const result = yield* installProviderHooks(existing.cwd, existing.provider)
+        if (!result.installed) {
+          yield* Effect.logWarning(
+            `resume hook install failed for ${existing.provider} in ${existing.cwd}; hook signals unavailable: ${result.reason}`,
+          )
+        }
+
+        const session: TargetSession = { ...existing, attached: true, state: "running" }
+        yield* spawnAttached(session, spec.interactive.launchCmd, args, req.cols, req.rows, sockPath)
+        yield* SubscriptionRef.update(store, (m) => new Map(m).set(key, session))
+        yield* persistSession(session)
+        yield* Effect.logInfo(
+          `target resumed provider=${session.provider} chat=${session.chatId} target=${session.id}`,
+        )
+        return session
+      })
+
+    // Stop a live child on demand. The same kill the app-quit finalizer does,
+    // but for one session and graceful: SIGTERM first so the agent CLI can
+    // flush, then SIGKILL after the grace window if it ignored the signal. We
+    // touch neither `store` nor the DB here — the child's `onExit` handler
+    // (set in spawnAttached) already deletes the pty, flips state to "exited",
+    // persists, and broadcasts. A session with no live pty (already exited or
+    // detached) is a no-op, so stop is safe to call twice.
+    const stop = (req: StopRequest) =>
+      Effect.gen(function* () {
+        const child = ptys.get(req.sessionId)
+        if (!child) return { stopped: false }
+        yield* Effect.logInfo(`target stop requested target=${req.sessionId}`)
+        try {
+          child.kill("SIGTERM")
+        } catch {
+          /* raced the child's own exit between get and kill — already gone */
+        }
+        setTimeout(() => {
+          // Force-kill only if THIS handle is still live after the grace
+          // window. Identity-check, not just presence: a stop-then-resume of
+          // the same session id within the window puts a *different* pty under
+          // the same key, and that innocent new child must not be SIGKILLed.
+          if (ptys.get(req.sessionId) !== child) return
+          try {
+            child.kill("SIGKILL")
+          } catch {
+            /* gone */
+          }
+        }, STOP_GRACE_MS)
+        return { stopped: true }
+      }).pipe(
+        Effect.withSpan("arc.target.stop", {
+          attributes: { "arc.target_session_id": req.sessionId },
+        }),
+      )
+
+    const bindNative = (
+      targetSessionId: string,
+      nativeSessionId: string,
+      nativeTranscriptPath?: string | null,
+    ) =>
+      Effect.gen(function* () {
+        const current = yield* SubscriptionRef.get(store)
+        let entry: readonly [string, TargetSession] | undefined
+        for (const pair of current) {
+          if (pair[1].id === targetSessionId) entry = pair
+        }
+        if (!entry) {
+          // A signal for a target we don't (or no longer) track — validates the
+          // "known live target" check (Codex tightening #3) without mutating.
+          yield* Effect.logWarning(`hook binding for unknown target ${targetSessionId}; ignored`)
+          return
+        }
+        const [key, session] = entry
+        if (session.nativeSessionId === nativeSessionId && (!nativeTranscriptPath || session.nativeTranscriptPath === nativeTranscriptPath)) {
+          return // idempotent
+        }
+        if (session.nativeSessionId) {
+          // Rebind (e.g. resume/compaction minted a new native id). Allowed,
+          // but logged so provider identity changes stay visible during the spike.
+          yield* Effect.logInfo(
+            `native session changed target=${targetSessionId} provider=${session.provider} chat=${session.chatId} old=${session.nativeSessionId} new=${nativeSessionId}`,
+          )
+        }
+        yield* SubscriptionRef.update(store, (m) =>
+          new Map(m).set(key, {
+            ...session,
+            nativeSessionId,
+            nativeTranscriptPath: nativeTranscriptPath ?? session.nativeTranscriptPath,
+          }),
+        )
+        // Persist the binding so it survives restart (the whole point of this
+        // arc) — awaited, but a write failure never fails the live mutation above.
+        yield* db
+          .setNativeSessionId(targetSessionId, nativeSessionId, nativeTranscriptPath)
+          .pipe(
+            Effect.tapError((e) => Effect.logWarning(`binding persist failed (${targetSessionId}): ${e}`)),
+            Effect.ignore,
+          )
+      })
+
+    const submit = (req: SubmitRequest) =>
+      Effect.sync(() => {
+        const child = ptys.get(req.instanceId)
+        if (!child) return { accepted: false }
+        writePromptWithDelayedSubmit((data) => child.write(data), req.text)
+        return { accepted: true }
+      })
+
+    const write = (sessionId: string, data: string) =>
+      Effect.sync(() => {
+        ptys.get(sessionId)?.write(data)
+      })
+
+    const resize = (sessionId: string, cols: number, rows: number) =>
+      Effect.sync(() => {
+        if (cols <= 0 || rows <= 0) return
+        ptys.get(sessionId)?.resize(Math.floor(cols), Math.floor(rows))
+      })
+
+    return { list, changes, launch, resume, stop, bindNative, submit, write, resize, events }
+  }),
+)

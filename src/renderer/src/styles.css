@@ -1,0 +1,248 @@
+/* arc — dark, minimal, terminal-adjacent. Dark mode only. */
+
+:root {
+  --bg: #0b0c0e;
+  --bg-elev: #131519;
+  --bg-input: #0e1013;
+  --border: #20242c;
+  --border-strong: #2c313c;
+  --fg: #d7dae0;
+  --fg-dim: #8b909a;
+  --fg-faint: #565c66;
+  /* restrained, low-chroma blue — used sparingly for focus/active only */
+  --accent: #5b9dff;
+  /* muted green — a live/running session */
+  --ok: #5fb87a;
+  /* error/destructive */
+  --danger: #e5707a;
+  /* amber family — target-originated requests (permission + question) */
+  --request: #d99b38;
+  --request-strong: #e1b15c;
+  --request-border: color-mix(in srgb, var(--request) 42%, var(--border));
+  --request-bg: color-mix(in srgb, var(--bg-input) 82%, var(--request));
+  --request-card-bg: color-mix(in srgb, var(--bg-elev) 88%, var(--request));
+  /* green-tinted card — return-from-away recap ("picking up where you left off") */
+  --recap-card-bg: color-mix(in srgb, var(--bg-elev) 88%, var(--ok));
+
+  --radius: 2px;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #20242c;
+  border-radius: 0;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* layout */
+/* sidebar */
+.section-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-faint);
+  margin: 18px 0 6px;
+}
+/* Referenced from ArcSidebarTree's pending-pip via an `animate-[…]` utility. */
+@keyframes session-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.sidebar-actions {
+  flex: none;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.action-btn {
+  width: 100%;
+  margin-bottom: 6px;
+  text-align: left;
+}
+.action-context {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+/* rows */
+.target-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 0;
+}
+.target-row:hover {
+  background: var(--bg-elev);
+}
+.target-row.clickable {
+  cursor: pointer;
+}
+.target-row.active {
+  background: var(--bg-elev);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.target-name {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.target-kind,
+.dim {
+  color: var(--fg-faint);
+}
+.badges {
+  display: flex;
+  gap: 4px;
+}
+.badge {
+  font-family: var(--mono);
+  font-size: 9px;
+  padding: 0 0 0 6px;
+  border-left: 1px solid var(--border-strong);
+  color: var(--fg-dim);
+}
+
+/* controls */
+.btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 0;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.input {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 7px 9px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--fg);
+}
+.input::placeholder {
+  color: var(--fg-faint);
+}
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* target session right pane */
+.pane,
+.target-pane {
+  height: 100%;
+  min-width: 0;
+  padding: 10px;
+  display: flex;
+  min-height: 0;
+}
+.term {
+  flex: 1;
+  min-width: 0;
+}
+/* The terminal surface container. xterm hosts live in the terminal registry, not
+ * the React tree (see terminalRegistry.ts): the active pane's persistent host is
+ * reparented into `.term-slot`, the rest park offscreen. `.term-stack` stays the
+ * positioned container the detached-session overlay anchors to. */
+.term-stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.term-slot {
+  position: absolute;
+  inset: 0;
+}
+.term-pane {
+  position: absolute;
+  inset: 0;
+}
+.empty {
+  margin: auto;
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.empty-cta {
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 0;
+  cursor: pointer;
+}
+.empty-cta:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.detached-session {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  text-align: center;
+}
+.term-stack > .detached-session {
+  position: absolute;
+  inset: 0;
+  place-content: center;
+  background: var(--bg);
+  z-index: 2;
+}
+.error {
+  color: var(--danger);
+  font-family: var(--mono);
+  font-size: 12px;
+  margin: 8px 0;
+}

@@ -1,0 +1,61 @@
+/* Tailwind v4 — the styling foundation for the renderer (full adopt: preflight
+ * ON). Imported once in main.tsx, before styles.css.
+ *
+ * styles.css still owns the design *tokens* (`:root` vars). Here we map those
+ * tokens into Tailwind's `@theme` so utilities resolve to arc's palette — e.g.
+ * `bg-background`, `text-foreground`, `border-border`, `text-primary`. `inline`
+ * makes the utilities reference the runtime `:root` vars directly, so the tokens
+ * stay single-sourced in styles.css.
+ *
+ * Preflight (Tailwind's global reset) is intentionally on. It lands in the `base`
+ * cascade layer, which loses to styles.css's UNLAYERED rules — so existing
+ * component styling keeps winning while we restyle toward utilities. The visible
+ * resets are only where the app leaned on browser defaults (heading sizes, list
+ * markers, default margins, native control borders); those get cleaned up in the
+ * audit pass. */
+@import "tailwindcss";
+@source "../../../node_modules/streamdown/dist/*.js";
+@source "../../../node_modules/@streamdown/code/dist/*.js";
+
+[data-streamdown="code-block-body"] {
+  font-size: var(--text-xs);
+}
+
+@theme inline {
+  /* shadcn-style semantic vocabulary — the convention 3rd-party React libs
+   * (e.g. Streamdown) assume, mapped onto arc's tokens. */
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-muted: var(--bg-input);
+  --color-muted-foreground: var(--fg-dim);
+  --color-border: var(--border);
+  --color-sidebar: var(--bg-elev);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--bg);
+
+  /* arc's own named tokens, available as utilities too. */
+  --color-elev: var(--bg-elev);
+  --color-input: var(--bg-input);
+  --color-border-strong: var(--border-strong);
+  --color-fg-dim: var(--fg-dim);
+  --color-fg-faint: var(--fg-faint);
+  --color-accent: var(--accent);
+  --color-ok: var(--ok);
+  --color-danger: var(--danger);
+  --color-request: var(--request);
+
+  /* request-card tokens (used by the permission/question cards). The status-pill
+   * fills/edges are computed once here so the markup can stay plain utilities. */
+  --color-request-strong: var(--request-strong);
+  --color-request-border: var(--request-border);
+  --color-request-bg: var(--request-bg);
+  --color-request-fill: color-mix(in srgb, var(--request) 12%, transparent);
+  --color-recap-card-bg: var(--recap-card-bg);
+  --color-ok-edge: color-mix(in srgb, var(--ok) 42%, var(--border));
+  --color-ok-fill: color-mix(in srgb, var(--ok) 12%, transparent);
+  --color-danger-edge: color-mix(in srgb, var(--danger) 42%, var(--border));
+  --color-danger-fill: color-mix(in srgb, var(--danger) 12%, transparent);
+
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+}

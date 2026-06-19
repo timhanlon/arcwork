@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# arc-mcp — print or install arc's MCP client config for an agent CLI.
+#
+# Runs the built CLI bundle through Electron-as-Node so it shares the app's bundle
+# and resolves the same profile beside `.arc/state/arc.sqlite`. Build it once with
+# `pnpm build` (or `electron-vite build`); this wrapper just locates and execs it.
+# Runs from the caller's cwd, so arc resolves the right repo's discovery file.
+set -euo pipefail
+
+# Resolve through symlinks so a `~/.local/bin/arc-mcp -> .../bin/arc-mcp` link
+# still locates the repo (BSD readlink has no -f, so walk the chain by hand).
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$dir/$src"
+done
+here="$(cd -P "$(dirname "$src")/.." && pwd)"
+electron="$here/node_modules/.bin/electron"
+bundle="$here/out/main/cli-mcp.js"
+
+if [[ ! -x "$electron" ]]; then
+  echo "arc-mcp: electron not found at $electron (run pnpm install)" >&2
+  exit 1
+fi
+if [[ ! -f "$bundle" ]]; then
+  echo "arc-mcp: bundle not found at $bundle (run pnpm build)" >&2
+  exit 1
+fi
+
+exec env ELECTRON_RUN_AS_NODE=1 "$electron" "$bundle" "$@"
