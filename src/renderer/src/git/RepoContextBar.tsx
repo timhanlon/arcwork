@@ -1,8 +1,8 @@
-import type { ComponentType, JSX } from "react"
-import { CheckCircle, CircleDashed, XCircle, type IconProps } from "@phosphor-icons/react"
+import type { JSX } from "react"
+import { CheckCircleIcon, DotFillIcon, XCircleIcon, type Icon } from "@primer/octicons-react"
 import type { PullRequest, WorkspaceGitContext } from "../../../shared/git.js"
 import { Button } from "../ui/Button.js"
-import { PR_STATE_COLOR, PrStateIcon, toPrState } from "./PrStateIcon.js"
+import { PrStateIcon, prStateColor, toPrState } from "./PrStateIcon.js"
 
 export interface RepoContextBarProps {
   readonly context?: WorkspaceGitContext
@@ -12,11 +12,12 @@ export interface RepoContextBarProps {
 
 const BAR = "flex flex-none items-center gap-2 border-b border-border px-4 py-2 text-[12px]"
 
-// Check rollup → icon + colour. Mirrors summarizeChecks' three verdicts.
-const CHECKS: Record<string, { readonly Icon: ComponentType<IconProps>; readonly color: string }> = {
-  passing: { Icon: CheckCircle, color: "text-ok" },
-  failing: { Icon: XCircle, color: "text-danger" },
-  pending: { Icon: CircleDashed, color: "text-request" },
+// Check rollup → octicon + colour. Mirrors summarizeChecks' three verdicts
+// (and GitHub's own check-rollup glyphs: check-circle / x-circle / yellow dot).
+const CHECKS: Record<string, { readonly Icon: Icon; readonly color: string }> = {
+  passing: { Icon: CheckCircleIcon, color: "text-ok" },
+  failing: { Icon: XCircleIcon, color: "text-danger" },
+  pending: { Icon: DotFillIcon, color: "text-request" },
 }
 
 /** The git context strip above the changed-file list: the repo slug, current
@@ -49,19 +50,22 @@ export function RepoContextBar({ context, syncing, onSync }: RepoContextBarProps
 
 function PullRequestSummary({ pr }: { readonly pr: PullRequest }): JSX.Element {
   const prState = toPrState(pr.state)
-  const stateColor = prState ? PR_STATE_COLOR[prState] : "text-fg-dim"
+  const stateColor = prState ? prStateColor(prState, pr.isDraft) : "text-fg-dim"
   const body = (
     <span className="flex min-w-0 items-center gap-1.5">
       <span className={`flex-none inline-flex items-center gap-[3px] font-mono text-[11px] font-semibold ${stateColor}`}>
-        {prState && <PrStateIcon state={prState} />}#{pr.number}
+        {prState && <PrStateIcon state={prState} isDraft={pr.isDraft} />}#{pr.number}
       </span>
       <span className="min-w-0 truncate text-foreground">{pr.title}</span>
-      {pr.isDraft && <span className="flex-none text-[10px] uppercase text-fg-faint">draft</span>}
       {pr.checksState &&
         CHECKS[pr.checksState] &&
         (() => {
           const { Icon, color } = CHECKS[pr.checksState]!
-          return <Icon size={14} weight="fill" className={`flex-none ${color}`} aria-label={`checks ${pr.checksState}`} />
+          return (
+            <span className={`flex-none ${color}`} aria-label={`checks ${pr.checksState}`}>
+              <Icon size={13} />
+            </span>
+          )
         })()}
       {pr.reviewState && (
         <span className="flex-none font-mono text-[10px] uppercase tracking-[0.04em] text-fg-dim">
