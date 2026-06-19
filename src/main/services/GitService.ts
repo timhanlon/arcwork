@@ -258,17 +258,28 @@ const parseRemotes = (stdout: string): ReadonlyArray<GitRemote> => {
 }
 
 /** Resolve the GitHub owner/repo for a clone: the first remote whose URL is a
- * GitHub URL, preferring `origin`. Null when no remote points at GitHub. */
-const githubIdentity = (
+ * GitHub URL, preferring `origin`. Carries the resolving remote's name so the
+ * default branch can be read off that remote's HEAD rather than assuming
+ * `origin`. Null when no remote points at GitHub. */
+export const githubIdentity = (
   remotes: ReadonlyArray<GitRemote>,
-): { owner: string; repo: string } | null => {
+): { owner: string; repo: string; remote: string } | null => {
   const ordered = [...remotes].sort((a, b) => (a.name === "origin" ? -1 : b.name === "origin" ? 1 : 0))
   for (const remote of ordered) {
     const parsed = parseGithubRemote(remote.url)
-    if (parsed) return parsed
+    if (parsed) return { ...parsed, remote: remote.name }
   }
   return null
 }
+
+/** The remote whose HEAD names the default branch: the GitHub remote if we
+ * resolved one, else `origin` when present, else the first remote. Null when the
+ * clone has no remotes (a local-only repo has no default branch to read). */
+export const defaultBranchRemote = (
+  remotes: ReadonlyArray<GitRemote>,
+  github: { remote: string } | null,
+): string | null =>
+  github?.remote ?? remotes.find((r) => r.name === "origin")?.name ?? remotes[0]?.name ?? null
 
 /** Parse `git worktree list --porcelain` into one entry per worktree. Records
  * are blank-line separated; a `branch refs/heads/x` line is shortened to `x`,
@@ -491,12 +502,11 @@ export const GitServiceLive = Layer.effect(
         const inside = yield* Effect.promise(() => runGit(cwd, ["rev-parse", "--is-inside-work-tree"]))
         if (inside.stdout.trim() !== "true") return null
 
-        const [commonDirRaw, remotesRaw, worktreesRaw, originHead] = yield* Effect.promise(async () =>
+        const [commonDirRaw, remotesRaw, worktreesRaw] = yield* Effect.promise(async () =>
           Promise.all([
             runGit(cwd, ["rev-parse", "--git-common-dir"]),
             runGit(cwd, ["remote", "-v"]),
             runGit(cwd, ["worktree", "list", "--porcelain"]),
-            runGit(cwd, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]),
           ]),
         )
 
@@ -506,9 +516,23 @@ export const GitServiceLive = Layer.effect(
         const remotes = parseRemotes(remotesRaw.stdout)
         const github = githubIdentity(remotes)
         const worktrees = parseWorktreeList(worktreesRaw.stdout)
-        // origin/HEAD → the short default branch (strip the leading "origin/").
-        const defaultBranch = originHead.exitCode === 0
-          ? trimmedOrUndefined(originHead.stdout.replace(/^origin\//, "")) ?? null
+        // Default branch = the resolved remote's HEAD (not a hardcoded `origin`,
+        // which isn't always the remote's name). `<remote>/HEAD` is only set when
+        // the clone tracked it (git clone, or `git remote set-head`); null otherwise.
+        const headRemote = defaultBranchRemote(remotes, github)
+        const defaultBranch = headRemote
+          ? yield* Effect.promise(() =>
+              runGit(cwd, ["symbolic-ref", "--short", `refs/remotes/${headRemote}/HEAD`]),
+            ).pipe(
+              Effect.map((head) => {
+                // `git symbolic-ref --short` yields e.g. `arcwork/main`; strip the
+                // `<remote>/` prefix to leave the bare branch name.
+                const short = head.exitCode === 0 ? head.stdout.trim() : ""
+                const prefix = `${headRemote}/`
+                const branch = short.startsWith(prefix) ? short.slice(prefix.length) : short
+                return trimmedOrUndefined(branch) ?? null
+              }),
+            )
           : null
         // The main worktree is the first porcelain record; fall back to the
         // common git dir's parent when the list is unexpectedly empty.
