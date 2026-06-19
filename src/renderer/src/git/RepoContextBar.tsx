@@ -2,6 +2,7 @@ import type { ComponentType, JSX } from "react"
 import { CheckCircle, CircleDashed, XCircle, type IconProps } from "@phosphor-icons/react"
 import type { PullRequest, WorkspaceGitContext } from "../../../shared/git.js"
 import { Button } from "../ui/Button.js"
+import { PR_STATE_COLOR, PrStateIcon, toPrState } from "./PrStateIcon.js"
 
 export interface RepoContextBarProps {
   readonly context?: WorkspaceGitContext
@@ -10,14 +11,6 @@ export interface RepoContextBarProps {
 }
 
 const BAR = "flex flex-none items-center gap-2 border-b border-border px-4 py-2 text-[12px]"
-
-// PR state → label colour. Open is healthy, merged is the accent purple, closed
-// is quiet.
-const STATE_COLOR: Record<string, string> = {
-  open: "text-ok",
-  merged: "text-purple-400",
-  closed: "text-fg-dim",
-}
 
 // Check rollup → icon + colour. Mirrors summarizeChecks' three verdicts.
 const CHECKS: Record<string, { readonly Icon: ComponentType<IconProps>; readonly color: string }> = {
@@ -55,10 +48,13 @@ export function RepoContextBar({ context, syncing, onSync }: RepoContextBarProps
 }
 
 function PullRequestSummary({ pr }: { readonly pr: PullRequest }): JSX.Element {
-  const stateColor = STATE_COLOR[pr.state] ?? "text-fg-dim"
+  const prState = toPrState(pr.state)
+  const stateColor = prState ? PR_STATE_COLOR[prState] : "text-fg-dim"
   const body = (
     <span className="flex min-w-0 items-center gap-1.5">
-      <span className={`flex-none font-mono text-[11px] font-semibold ${stateColor}`}>#{pr.number}</span>
+      <span className={`flex-none inline-flex items-center gap-[3px] font-mono text-[11px] font-semibold ${stateColor}`}>
+        {prState && <PrStateIcon state={prState} />}#{pr.number}
+      </span>
       <span className="min-w-0 truncate text-foreground">{pr.title}</span>
       {pr.isDraft && <span className="flex-none text-[10px] uppercase text-fg-faint">draft</span>}
       {pr.checksState &&
