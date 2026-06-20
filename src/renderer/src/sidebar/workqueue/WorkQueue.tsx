@@ -1,8 +1,9 @@
 import type { JSX } from "react"
 import { useMemo } from "react"
+import { Button } from "@base-ui/react/button"
+import { X } from "@phosphor-icons/react"
 import type { WorkItem, WorkState } from "./types.js"
 import { formatRelative } from "./time.js"
-import { Button } from "../../ui/Button.js"
 import { ROW_ACTIVE } from "../row-styles.js"
 
 /** GitHub octicon paths (16px grid). Shape carries PR state, so we drop the
@@ -18,7 +19,7 @@ const PR_ICON_PATH: Record<"open" | "merged" | "closed", string> = {
 // Two-line inbox row laid out with named grid areas — dot spans both lines on the
 // left, archive spans both on the right, title/meta/time fill the middle.
 const ROW =
-  "group grid [grid-template-columns:8px_minmax(0,1fr)_auto_auto] [grid-template-areas:'dot_title_title_archive'_'dot_meta_time_archive'] items-center gap-x-2.5 gap-y-0.5 w-full min-h-10 px-2 py-1.5 border-0 rounded-none bg-transparent text-foreground [font:inherit] text-left cursor-pointer hover:bg-elev focus-visible:bg-elev focus-visible:outline-none"
+  "group grid [grid-template-columns:8px_minmax(0,1fr)_auto_auto] [grid-template-areas:'dot_title_title_archive'_'dot_meta_time_archive'] items-center gap-x-2.5 gap-y-0.5 w-full min-h-10 px-2 py-1.5 bg-transparent text-foreground text-left cursor-pointer outline-none hover:bg-elev focus-visible:bg-elev"
 
 // Leading status dot — color (and, for attention, an outer glow) carries the
 // lifecycle state at a glance. running/waiting/complete recolor the fill but keep
@@ -48,7 +49,7 @@ const PR =
   "inline-flex items-center gap-[3px] text-fg-dim data-[state=open]:text-ok data-[state=merged]:text-[#a371f7] data-[state=closed]:text-danger"
 
 const ARCHIVE =
-  "[grid-area:archive] self-center inline-flex items-center justify-center w-5 h-5 text-fg-faint font-mono text-[11px] opacity-0 cursor-pointer group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground"
+  "[grid-area:archive] self-center inline-flex items-center justify-center w-5 h-5 text-fg-faint opacity-0 cursor-pointer group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground"
 
 function PrIcon({ state }: { state: "open" | "merged" | "closed" }): JSX.Element {
   return (
@@ -145,7 +146,7 @@ export function WorkQueue(props: WorkQueueProps): JSX.Element {
                       props.onArchive?.(item.id)
                     }}
                   >
-                    ✕
+                    <X size={11} weight="bold" />
                   </span>
                 )}
               </Button>

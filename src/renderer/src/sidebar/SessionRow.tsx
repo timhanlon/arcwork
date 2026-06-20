@@ -1,6 +1,6 @@
 import type { JSX } from "react"
 import { Button } from "@base-ui/react/button"
-import { PlayIcon } from "@phosphor-icons/react"
+import { PlayIcon, StopIcon } from "@phosphor-icons/react"
 import type { TargetSession } from "../../../shared/instance.js"
 import { targetStatusDisplay } from "../chat/session-status-display.js"
 import { SessionDot } from "./SessionDot.js"
@@ -22,6 +22,12 @@ export interface SessionRowProps {
   /** re-attach this session; only offered when it's detached and resumable */
   readonly onResume?: () => void
 }
+
+// The trailing stop/resume control overlaid on a session row: a small square
+// glyph button revealed on row hover/focus. Shared so the two only differ by
+// their hover tone (stop → request red, resume → accent) and their icon.
+const SESSION_OVERLAY =
+  "absolute right-1.5 top-1/2 flex size-[18px] -translate-y-1/2 cursor-pointer items-center justify-center rounded-[var(--radius)] border-0 bg-transparent p-0 text-fg-faint opacity-0 hover:bg-elev focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
 
 /**
  * A leaf session row: status dot, provider (+ optional preset subtitle), and a
@@ -69,7 +75,7 @@ export function SessionRow({ session, status, pending, slot, active, onSelect, o
       </Button>
       {canStop && (
         <Button
-          className="absolute right-1.5 top-1/2 flex size-[18px] -translate-y-1/2 cursor-pointer items-center justify-center rounded-[4px] border-0 bg-transparent p-0 text-[9px] leading-none text-fg-faint opacity-0 hover:bg-elev hover:text-request focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
+          className={`${SESSION_OVERLAY} hover:text-request`}
           title={`Stop ${session.provider} session`}
           aria-label={`Stop ${session.provider} session`}
           onClick={(e) => {
@@ -78,12 +84,12 @@ export function SessionRow({ session, status, pending, slot, active, onSelect, o
             onStop?.()
           }}
         >
-          ■
+          <StopIcon size={11} weight="fill" />
         </Button>
       )}
       {canResume && (
         <Button
-          className="absolute right-1.5 top-1/2 flex size-[18px] -translate-y-1/2 cursor-pointer items-center justify-center rounded-[4px] border-0 bg-transparent p-0 text-fg-faint opacity-0 hover:bg-elev hover:text-accent focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
+          className={`${SESSION_OVERLAY} hover:text-accent`}
           title={`Resume ${session.provider} session`}
           aria-label={`Resume ${session.provider} session`}
           onClick={(e) => {

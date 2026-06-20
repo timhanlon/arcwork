@@ -2,7 +2,7 @@ import type { JSX } from "react"
 import { ToggleGroup } from "@base-ui/react/toggle-group"
 import { Toggle } from "@base-ui/react/toggle"
 import { FolderSimplePlus, GitMerge, SidebarSimple, Terminal } from "@phosphor-icons/react"
-import { IconButton } from "../ui/IconButton.js"
+import { IconButton, ICON_TOGGLE_ITEM } from "../ui/IconButton.js"
 import { ViewToggleCompact } from "../sidebar/ViewToggleCompact.js"
 import type { ViewKey } from "../sidebar/ViewToggle.js"
 import { bindingFor } from "./keybindings.js"
@@ -83,9 +83,6 @@ export function NavBar({
   )
 }
 
-const RIGHT_TOGGLE_ITEM =
-  "flex size-7 cursor-pointer items-center justify-center rounded-[var(--radius)] border border-transparent text-fg-dim outline-none enabled:hover:text-foreground enabled:hover:border-border-strong focus-visible:border-border-strong focus-visible:text-foreground data-[pressed]:text-accent [&>svg]:size-4"
-
 const RIGHT_ITEMS = [
   { value: "terminal", label: "terminal", Icon: Terminal },
   { value: "git", label: "git", Icon: GitMerge },
@@ -109,7 +106,7 @@ function RightPaneToggle({
       className="inline-flex items-center gap-0.5"
     >
       {RIGHT_ITEMS.map(({ value: v, label, Icon }) => (
-        <Toggle key={v} value={v} aria-label={label} title={label} className={RIGHT_TOGGLE_ITEM}>
+        <Toggle key={v} value={v} aria-label={label} title={label} className={ICON_TOGGLE_ITEM}>
           <Icon size={16} weight="regular" />
         </Toggle>
       ))}

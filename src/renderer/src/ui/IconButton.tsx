@@ -24,6 +24,15 @@ export const ICON_BUTTON_REST =
 const ACTIVE = "text-accent border-transparent"
 
 /**
+ * The recipe for a base-ui `Toggle` segment that reads like an {@link IconButton}:
+ * IconButton's skeleton + resting tone, with the accent driven off `data-[pressed]`
+ * instead of the `active` prop. Shared so the nav bar's pane toggles and the
+ * chats/work switchers can't drift apart — layer extra `data-[pressed]:*` classes
+ * on top for a boxed (filled) segmented control. See {@link ViewToggle}.
+ */
+export const ICON_TOGGLE_ITEM = `${ICON_BUTTON_BASE} ${ICON_BUTTON_REST} data-[pressed]:text-accent`
+
+/**
  * A square, icon-only button — the companion to {@link Button} for toolbar and
  * affordance glyphs. Pass `active` for toggle controls that have an on state.
  */

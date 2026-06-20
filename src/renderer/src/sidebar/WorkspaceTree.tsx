@@ -82,10 +82,10 @@ const EMPTY_LIVE_STATES: LiveStateById = new Map()
 const EMPTY_WORK_BY_CHAT: ReadonlyMap<string, ReadonlyArray<ChatScopedWork>> = new Map()
 
 const HEADER_ACTION =
-  "inline-flex size-5 cursor-pointer items-center justify-center rounded-[4px] border-0 bg-transparent p-0 text-fg-faint hover:bg-elev hover:text-foreground focus-visible:bg-elev focus-visible:text-foreground focus-visible:outline-none disabled:cursor-default disabled:opacity-[0.35]"
+  "inline-flex size-5 cursor-pointer items-center justify-center rounded-[var(--radius)] border-0 bg-transparent p-0 text-fg-faint hover:bg-elev hover:text-foreground focus-visible:bg-elev focus-visible:text-foreground focus-visible:outline-none disabled:cursor-default disabled:opacity-[0.35]"
 
 const NEW_CHAT =
-  "inline-flex size-5 cursor-pointer items-center justify-center rounded-[4px] border border-border-strong bg-transparent p-0 text-fg-dim hover:bg-elev hover:text-foreground focus-visible:bg-elev focus-visible:text-foreground focus-visible:outline-none"
+  "inline-flex size-5 cursor-pointer items-center justify-center rounded-[var(--radius)] border border-border-strong bg-transparent p-0 text-fg-dim hover:bg-elev hover:text-foreground focus-visible:bg-elev focus-visible:text-foreground focus-visible:outline-none"
 
 export function WorkspaceTree(props: WorkspaceTreeProps): JSX.Element {
   const liveStateById = props.liveStateById ?? EMPTY_LIVE_STATES

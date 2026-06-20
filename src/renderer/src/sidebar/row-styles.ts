@@ -1,5 +1,10 @@
 import type { LiveTargetActivity } from "../../../shared/live-target-state.js"
 
+// The generic row recipe lives on the Row primitive now; re-exported so the
+// sidebar trees keep their `ROW_BASE`/`ROW_ACTIVE` import path while the work/git
+// list panes share the same definition via <Row>.
+export { ROW_BASE, ROW_ACTIVE } from "../ui/Row.js"
+
 /**
  * The one word that describes a session's live status. Drives both the status
  * dot's colour (via the SESSION_DOT map) and the row tooltip. It is the live
@@ -9,11 +14,6 @@ import type { LiveTargetActivity } from "../../../shared/live-target-state.js"
  */
 export type SessionDisplayStatus = LiveTargetActivity | "active"
 
-// Shared row recipe. Workspace/chat rows justify their count to the right;
-// session rows hug their leading status dot — hence the per-row justify/gap.
-export const ROW_BASE =
-  "flex min-h-7 w-full min-w-0 cursor-pointer items-center border-0 bg-transparent px-2 py-[5px] text-left text-foreground hover:bg-elev focus-visible:bg-elev focus-visible:outline-none"
-export const ROW_ACTIVE = "bg-elev shadow-[inset_2px_0_0_var(--accent)]"
 /**
  * Active treatment for a leaf target row. A session sits nested under its chat,
  * so it skips the chat/workspace accent bar (which reads as a loud left border

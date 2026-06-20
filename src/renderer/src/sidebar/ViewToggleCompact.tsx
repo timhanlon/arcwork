@@ -4,7 +4,7 @@ import { Toggle } from "@base-ui/react/toggle"
 import { Chat, Notebook } from "@phosphor-icons/react"
 import type { ViewKey } from "./ViewToggle.js"
 import { bindingFor } from "../shell/keybindings.js"
-import { ICON_BUTTON_BASE, ICON_BUTTON_REST } from "../ui/IconButton.js"
+import { ICON_TOGGLE_ITEM } from "../ui/IconButton.js"
 
 export interface ViewToggleCompactProps {
   readonly value: ViewKey
@@ -18,10 +18,9 @@ const ITEMS = [
 ] as const
 
 // Borderless segments that read like the nav bar's IconButtons: no surrounding
-// box or padding, accent text marks the active view. Built from IconButton's own
-// class constants so the two stay in lockstep; the base-ui Toggle drives the
-// accent via data-[pressed] in place of IconButton's `active` prop.
-const ITEM = `${ICON_BUTTON_BASE} ${ICON_BUTTON_REST} data-[pressed]:text-accent`
+// box or padding, accent text marks the active view. The shared toggle recipe
+// keeps these flush with the nav's other pane toggles.
+const ITEM = ICON_TOGGLE_ITEM
 
 /**
  * The compact, chrome-free twin of {@link ViewToggle} for the top nav bar. Same

@@ -2,6 +2,7 @@ import type { JSX } from "react"
 import { ToggleGroup } from "@base-ui/react/toggle-group"
 import { Toggle } from "@base-ui/react/toggle"
 import { Chat, Notebook } from "@phosphor-icons/react"
+import { ICON_TOGGLE_ITEM } from "../ui/IconButton.js"
 
 /** Which surface the center pane shows. Mirrors the shell machine's `centerView`. */
 export type ViewKey = "chat" | "work"
@@ -17,8 +18,10 @@ const ITEMS = [
   { value: "work", label: "work", Icon: Notebook },
 ] as const
 
-const ITEM =
-  "flex size-7 cursor-pointer items-center justify-center rounded-[var(--radius)] border border-transparent text-fg-dim outline-none enabled:hover:text-foreground focus-visible:border-border-strong focus-visible:text-foreground data-[pressed]:bg-elev data-[pressed]:text-accent data-[pressed]:shadow-[inset_0_0_0_1px_var(--border)] [&>svg]:size-4"
+// The boxed twin of {@link ViewToggleCompact}: the shared toggle recipe plus a
+// filled pressed segment (the bordered container makes accent-text alone too
+// quiet to read as "selected").
+const ITEM = `${ICON_TOGGLE_ITEM} data-[pressed]:bg-elev data-[pressed]:shadow-[inset_0_0_0_1px_var(--border)]`
 
 /**
  * The left pane's chats / work switcher — a single-select, icon-only segmented

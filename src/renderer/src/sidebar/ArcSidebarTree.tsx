@@ -119,7 +119,7 @@ export function ArcSidebarTree(props: ArcSidebarTreeProps): JSX.Element {
                   Chats
                 </span>
                 <Button
-                  className="min-h-5 w-auto flex-none cursor-pointer rounded-[4px] border border-border-strong bg-transparent px-[7px] py-px font-mono text-[10px] text-fg-dim hover:bg-elev hover:text-foreground focus-visible:bg-elev focus-visible:text-foreground focus-visible:outline-none"
+                  className="min-h-5 w-auto flex-none cursor-pointer rounded-[var(--radius)] border border-border-strong bg-transparent px-[7px] py-px font-mono text-[10px] text-fg-dim hover:bg-elev hover:text-foreground focus-visible:bg-elev focus-visible:text-foreground focus-visible:outline-none"
                   title={`New chat in ${workspace.name}`}
                   onClick={() => props.onCreateChat(workspace.id)}
                 >

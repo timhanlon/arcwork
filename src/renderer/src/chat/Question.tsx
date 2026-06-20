@@ -24,9 +24,6 @@ const OPTION =
   "max-w-full px-[7px] py-1 border border-border bg-input text-foreground font-mono text-[11px] leading-[1.35] [overflow-wrap:anywhere]"
 const OPTION_CHOSEN =
   "inline-flex items-center gap-1 max-w-full px-[7px] py-1 border border-border-strong bg-input text-foreground font-mono text-[11px] font-semibold leading-[1.35] [overflow-wrap:anywhere]"
-// Keep the focus action a hair stronger than the chips, but on the neutral
-// `solid` button skin (border-strong + accent hover) — no request-orange tint.
-const FOCUS_TARGET = "font-semibold"
 const HINT = "font-mono text-[11px] text-fg-faint"
 
 export interface QuestionProps {
@@ -119,7 +116,7 @@ export function Question({ request, onFocusTarget }: QuestionProps): JSX.Element
       )}
       {onFocusTarget && (
         <div className="flex items-baseline gap-2 flex-wrap">
-          <Button variant="solid" className={FOCUS_TARGET} onClick={onFocusTarget}>
+          <Button variant="solid" onClick={onFocusTarget}>
             Focus target
           </Button>
           <span className={HINT}>answer in the target session</span>

@@ -3,7 +3,7 @@ import { type JSX, useEffect, useMemo, useState } from "react"
 import type { GitChangeStatus, GitFileChange, GitStatus } from "../../../shared/git.js"
 import type { Workspace } from "../../../shared/workspace.js"
 import { Button } from "../ui/Button.js"
-import { ROW_BASE } from "../sidebar/row-styles.js"
+import { Row } from "../ui/Row.js"
 import { rpc } from "../rpc-client.js"
 
 export interface GitPaneProps {
@@ -262,10 +262,7 @@ function FileRow({
         .filter(Boolean)
         .join(" ")
   return (
-    <Button
-      className={[ROW_BASE, "gap-2 px-3", selected ? "bg-accent/15" : ""].filter(Boolean).join(" ")}
-      onClick={onSelect}
-    >
+    <Row active={selected} className="gap-2 px-3" onClick={onSelect}>
       <span className={`w-3 flex-none font-mono text-[11px] font-semibold ${STATUS_COLOR[file.status]}`}>
         {STATUS_GLYPH[file.status]}
       </span>
@@ -274,7 +271,7 @@ function FileRow({
       </span>
       {file.staged && <span className="flex-none text-[10px] text-fg-dim">staged</span>}
       {stat && <span className="flex-none font-mono text-[10px] text-fg-dim">{stat}</span>}
-    </Button>
+    </Row>
   )
 }
 

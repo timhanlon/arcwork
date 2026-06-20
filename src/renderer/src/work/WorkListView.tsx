@@ -2,10 +2,10 @@ import type { JSX } from "react"
 import type { Work } from "../../../shared/work.js"
 import { formatActivityDateTime, formatRelativeTime } from "../chat/activity-event-display.js"
 import { Button } from "../ui/Button.js"
+import { Row } from "../ui/Row.js"
 import { Chip } from "../ui/Chip.js"
 import { KbdShortcut } from "../ui/Kbd.js"
 import { comboFor } from "../shell/keybindings.js"
-import { ROW_BASE } from "../sidebar/row-styles.js"
 import { PriorityChip } from "./work-priority-controls.js"
 import { isResolved } from "./work-status-display.js"
 import { WorkStatusMarker } from "./WorkStatusMarker.js"
@@ -76,10 +76,7 @@ export function WorkListView(props: WorkListViewProps): JSX.Element {
               const resolved = isResolved(item.status)
               return (
                 <li key={item.id}>
-                  <Button
-                    className={`${ROW_BASE} gap-2 text-[13px]`}
-                    onClick={() => onSelect(item)}
-                  >
+                  <Row className="gap-2 text-[13px]" onClick={() => onSelect(item)}>
                     <WorkStatusMarker status={item.status} title={item.status} />
                     {item.priority && <PriorityChip priority={item.priority} />}
                     <span
@@ -96,7 +93,7 @@ export function WorkListView(props: WorkListViewProps): JSX.Element {
                     >
                       {formatRelativeTime(item.updatedAt)}
                     </time>
-                  </Button>
+                  </Row>
                 </li>
               )
             })}
