@@ -21,27 +21,31 @@ const parseJson = (raw: string): Rec | undefined => {
   }
 }
 
-// Codex wraps every exec/shell tool result in a fixed telemetry preamble before
-// the real output:
-//   Chunk ID: <hex>
-//   Wall time: <n> seconds
-//   Process exited with code <n>
-//   Original token count: <n>
-//   Output:
-//   <the actual output>
-// None of that header reads as anything but noise in the transcript, so strip it
-// down to the body. The nonzero exit code is the one bit worth keeping — a failed
-// command is a real signal — so surface it as a compact `[exit N]` prefix
-// (mirroring claude.ts's `[error]` convention). Outputs that don't match the
-// exact shape (MCP tool results, apply_patch echoes, a future format change) pass
-// through untouched so we never eat real content.
+// Codex wraps tool results in a fixed telemetry preamble before the real output.
+// Two shapes occur in practice:
+//   exec/shell:                       MCP tool calls:
+//     Chunk ID: <hex>                   Wall time: <n> seconds
+//     Wall time: <n> seconds            Output:
+//     Process exited with code <n>      <the actual output>
+//     Original token count: <n>
+//     Output:
+//     <the actual output>
+// The MCP shape drops Chunk ID, the exit-code line, and the token count — only
+// `Wall time:` and `Output:` are guaranteed — so those three lines are optional
+// here. None of the header reads as anything but noise in the transcript, so
+// strip it down to the body. The nonzero exit code is the one bit worth keeping —
+// a failed command is a real signal — so surface it as a compact `[exit N]`
+// prefix (mirroring claude.ts's `[error]` convention); MCP results carry no exit
+// code, so nothing is prefixed there. Outputs that don't match (apply_patch
+// echoes, a future format change) pass through untouched so we never eat content.
 const EXEC_WRAPPER =
-  /^Chunk ID: \S+\nWall time: [\d.]+ seconds\nProcess exited with code (\d+)\nOriginal token count: \d+\nOutput:\n/
+  /^(?:Chunk ID: \S+\n)?Wall time: [\d.]+ seconds\n(?:Process exited with code (\d+)\n)?(?:Original token count: \d+\n)?Output:\n/
 const unwrapExecOutput = (output: string): string => {
   const match = EXEC_WRAPPER.exec(output)
   if (!match) return output
   const body = output.slice(match[0].length)
-  return match[1] === "0" ? body : `[exit ${match[1]}]\n${body}`
+  const exitCode = match[1]
+  return exitCode === undefined || exitCode === "0" ? body : `[exit ${exitCode}]\n${body}`
 }
 
 // ---------------------------------------------------------------------------
