@@ -38,7 +38,7 @@ export class IngestStore extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<StoredSessionRow>, SqlError>
     readonly getSession: (id: string) => Effect.Effect<StoredSession | undefined, SqlError>
   }
->()("arc-electron/IngestStore") {}
+>()("arcwork/IngestStore") {}
 
 export const IngestStoreLive = Layer.effect(
   IngestStore,

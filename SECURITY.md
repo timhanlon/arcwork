@@ -4,7 +4,7 @@
 
 Please **do not** open a public issue for security vulnerabilities.
 
-Report them privately via [GitHub's private vulnerability reporting](https://github.com/timhanlon/arc/security/advisories/new),
+Report them privately via [GitHub's private vulnerability reporting](https://github.com/timhanlon/arcwork/security/advisories/new),
 or by email to accounts@twofutures.co.
 
 You'll get an acknowledgement, and we'll work with you on a fix and disclosure

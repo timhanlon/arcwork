@@ -9,7 +9,7 @@ import { TargetSessionManager } from "../src/main/services/TargetSessionManager.
 
 /**
  * The renderer<->main RPC transport carrying a *streaming* RPC, exercised
- * in-process — the sibling of `arc-electron-rpc-transport.test.ts` (which covers
+ * in-process — the sibling of `rpc-transport.test.ts` (which covers
  * one-shot calls). `WatchSessions` is the first list moved off the custom
  * `arc:sessions` IPC push onto an Effect RPC server stream.
  *

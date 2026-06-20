@@ -1,4 +1,4 @@
-# arc-electron
+# Arc Work
 
 Single Electron app (Effect v4 main + React renderer + typed Rpc seam). Source
 lives at the repo-root `src/` — `src/main`, `src/renderer`, `src/shared` (no

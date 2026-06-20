@@ -27,7 +27,7 @@ import { arcWorkRuntimeDir, resolveProfile } from "../db/paths.js"
  * and tails it), the channel here is a live socket: main owns the PTY child, so
  * it is always listening while the child runs, and the file transport's
  * survive-while-app-down advantage does not apply. See
- * `.arc/proposals/2026-06-03-arc-electron-hook-signal-binding.md`.
+ * `.arc/proposals/2026-06-03-arcwork-hook-signal-binding.md`.
  */
 
 export const ARC_HOOK_SOCK_ENV = "ARC_HOOK_SOCK"

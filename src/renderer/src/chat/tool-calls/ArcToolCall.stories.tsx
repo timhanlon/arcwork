@@ -63,14 +63,14 @@ const createdWork = {
   title: "Chat pane snaps code block fully into view when scrolling up",
   status: "open",
   priority: "p2",
-  labels: ["bug", "arc-electron", "renderer"],
+  labels: ["bug", "arcwork", "renderer"],
 }
 
 const workCreateArgs = {
   title: "Chat pane snaps code block fully into view when scrolling up (use-stick-to-bottom resize/escape race)",
   status: "open",
   priority: "p2",
-  labels: ["bug", "arc-electron", "renderer"],
+  labels: ["bug", "arcwork", "renderer"],
   body: [
     "## Symptom",
     "",
@@ -119,7 +119,7 @@ const fullWork = {
   status: "open",
   priority: null,
   citations: [
-    { kind: "file", target: "tests/arc-electron-mcp-server.test.ts", note: "Arc regression coverage" },
+    { kind: "file", target: "tests/arcwork-mcp-server.test.ts", note: "Arc regression coverage" },
   ],
 }
 

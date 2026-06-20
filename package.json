@@ -1,17 +1,17 @@
 {
-  "name": "arc-electron",
+  "name": "arcwork",
   "version": "0.0.1",
   "description": "Electron workspace for working with local agent CLIs (Claude Code, Codex, Cursor) from one conversation surface.",
   "license": "MIT",
   "packageManager": "pnpm@10.24.0",
   "author": "Tim Hanlon",
-  "homepage": "https://github.com/timhanlon/arc#readme",
+  "homepage": "https://github.com/timhanlon/arcwork#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/timhanlon/arc.git"
+    "url": "git+https://github.com/timhanlon/arcwork.git"
   },
   "bugs": {
-    "url": "https://github.com/timhanlon/arc/issues"
+    "url": "https://github.com/timhanlon/arcwork/issues"
   },
   "keywords": [
     "electron",

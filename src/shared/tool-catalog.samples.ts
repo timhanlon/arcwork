@@ -31,7 +31,7 @@ export const TOOL_SAMPLES: Readonly<Record<string, ToolSample>> = {
     output: "Progress: 5/5\nDone.",
   },
   "claude:KillShell": { args: { shell_id: "bash_1" }, output: "Shell bash_1 killed." },
-  "claude:Read": { args: { file_path: "package.json" }, output: '{\n  "name": "arc-electron"\n}' },
+  "claude:Read": { args: { file_path: "package.json" }, output: '{\n  "name": "arcwork"\n}' },
   "claude:NotebookRead": { args: { notebook_path: "analysis.ipynb" } },
   "claude:Write": {
     args: {
@@ -151,7 +151,7 @@ export const TOOL_SAMPLES: Readonly<Record<string, ToolSample>> = {
   "cursor:TodoWrite": {
     args: { todos: [{ id: "1", content: "Add parse-jsonc, agents loader", status: "in_progress" }, { id: "2", content: "Update types, schemas, errors", status: "pending" }] },
   },
-  "cursor:Task": { args: { description: "Explore arc-electron structure", prompt: "Explore the arc-electron project and report the architecture…" } },
+  "cursor:Task": { args: { description: "Explore arcwork structure", prompt: "Explore the arcwork project and report the architecture…" } },
   "cursor:ReadLints": {
     args: { paths: ["/Users/you/dev/aux/src/services/artifact-store.ts", "/Users/you/dev/aux/src/cli.ts"] },
     output: "No lint errors.",

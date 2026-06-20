@@ -39,7 +39,7 @@ export class ArtifactIngestService extends Context.Service<
       readonly reproject: { readonly deleted: number; readonly inserted: number }
     }, never>
   }
->()("arc-electron/ArtifactIngestService") {}
+>()("arcwork/ArtifactIngestService") {}
 
 export const ArtifactIngestServiceLive = Layer.effect(
   ArtifactIngestService,

@@ -97,7 +97,7 @@ export const SubagentCollapsed = () => (
       message={msg({
         role: "subagent",
         body:
-          "In the arc-electron app (under /Users/you/dev/aux), I'm investigating a bug: " +
+          "In the Arc Work app (under /Users/you/dev/aux), I'm investigating a bug: " +
           '"Right panel toggle key binding does not work."\n\n' +
           "Find everything related to the right panel and its toggle keybinding in the renderer code. " +
           "Specifically:\n\n" +

@@ -41,7 +41,7 @@
  * keep `IF NOT EXISTS` for idempotent development re-opens; follow-on
  * migrations should not.
  *
- * @since arc-electron
+ * @since arcwork
  */
 import { Effect } from "effect"
 import * as Migrator from "effect/unstable/sql/Migrator"

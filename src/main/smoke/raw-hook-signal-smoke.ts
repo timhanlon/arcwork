@@ -45,7 +45,7 @@ const parseSignal = () => {
 }
 
 const main = async (): Promise<void> => {
-  const dir = mkdtempSync(join(tmpdir(), "arc-electron-smoke-"))
+  const dir = mkdtempSync(join(tmpdir(), "arcwork-smoke-"))
   try {
     const store = ArcStoreLive.pipe(Layer.provide(sqliteLayer(join(dir, "arc.sqlite"))))
     const layer = Layer.mergeAll(store, RawHookSignalServiceLive.pipe(Layer.provide(store)))

@@ -153,7 +153,7 @@ export class WorkStore extends Context.Service<
       workRefId: string,
     ) => Effect.Effect<ReadonlyArray<WorkCommentRow>, SqlError>
   }
->()("arc-electron/WorkStore") {}
+>()("arcwork/WorkStore") {}
 
 export const WorkStoreLive = Layer.effect(
   WorkStore,

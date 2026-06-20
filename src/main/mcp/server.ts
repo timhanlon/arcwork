@@ -42,7 +42,7 @@ import { readMcpProvenanceHeaders, resolveMcpWriteProvenance } from "./provenanc
  * `arc.work.update` — so an agent can discover, read, author, and mutate work
  * through MCP rather than shelling out.
  *
- * Topology: this runs *in-process*, inside the arc-electron main process, over a
+ * Topology: this runs *in-process*, inside the Arc Work main process, over a
  * loopback HTTP transport. The tools call the *same* live `WorkService`/`ReadService`
  * instances the UI uses (memoized by reference through `AppLive`), never a
  * parallel store. MCP is one transport; the domain verbs stay independent of it.

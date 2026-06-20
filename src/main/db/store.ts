@@ -130,7 +130,7 @@ export class ArcStore extends Context.Service<
       targetSessionId: string,
     ) => Effect.Effect<ReadonlyArray<RawHookSignalRow>, SqlError>
   }
->()("arc-electron/ArcStore") {}
+>()("arcwork/ArcStore") {}
 
 const record = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null

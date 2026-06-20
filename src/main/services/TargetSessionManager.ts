@@ -156,7 +156,7 @@ export const TargetSessionManagerLive = Layer.effect(
       }
     }
 
-    // A still-running CLI from a previous arc-electron process inherited the
+    // A still-running CLI from a previous Arc Work process inherited the
     // same deterministic socket path, but the server died with the old app.
     // Re-arm sockets during startup so delayed hooks (notably Codex
     // SessionStart, which can wait until the first submitted prompt) can still

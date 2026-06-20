@@ -165,7 +165,7 @@ export class WorkService extends Context.Service<
      * staleness where a status change in one pane left another's list stale. */
     readonly changes: Stream.Stream<WorkChange>
   }
->()("arc-electron/WorkService") {}
+>()("arcwork/WorkService") {}
 
 const contentHash = (parts: {
   title: string

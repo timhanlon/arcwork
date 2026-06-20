@@ -40,7 +40,7 @@ export class ReadService extends Context.Service<
       params: ArcGetParams,
     ) => Effect.Effect<ArcGetResult, SqlError | ArcRequestError>
   }
->()("arc-electron/ReadService") {}
+>()("arcwork/ReadService") {}
 
 const PREVIEW_MAX = 280
 

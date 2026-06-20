@@ -1,7 +1,7 @@
 # Arc Work Hook Reference
 
 This document is Arc's canonical hook map for the target CLIs that
-`arc-electron` currently installs hooks for:
+Arc Work currently installs hooks for:
 
 - Claude Code via `.claude/settings.local.json`
 - Codex via `.codex/hooks.json`
@@ -403,7 +403,7 @@ Ordering:
    `message_id` when present) and delete any other assistant rows for that turn.
    Codex/Cursor finals without a stream use `assistant-final` dedup only.
 
-## Implementation Status (arc-electron)
+## Implementation Status (Arc Work)
 
 Implemented:
 

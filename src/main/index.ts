@@ -11,22 +11,16 @@ import type { RendererTransport } from "./services/ArcMainController.js"
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// Load `.env` into `process.env`, leaving any variable the parent already set
-// untouched (so an explicit `ARC_PROFILE=… pnpm dev` wins). `util.parseEnv` is
-// the same parser `node --env-file` uses, so quoting/escaping matches Node's own
-// rules — we only own the candidate-path search and the no-override policy.
+// Load the repo-root `.env` into `process.env`, leaving any variable the parent
+// already set untouched (so an explicit `ARC_PROFILE=… pnpm dev` wins).
+// `util.parseEnv` is the same parser `node --env-file` uses, so
+// quoting/escaping matches Node's own rules.
 const loadDotenv = (): void => {
-  const candidates = [
-    path.join(process.cwd(), ".env"),
-    path.join(process.cwd(), "arc-electron", ".env"),
-    path.resolve(dirname, "../..", ".env"),
-  ]
-  for (const envPath of candidates) {
-    if (!existsSync(envPath)) continue
-    const parsed = parseEnv(readFileSync(envPath, "utf8"))
-    for (const [key, value] of Object.entries(parsed)) {
-      if (process.env[key] === undefined) process.env[key] = value
-    }
+  const envPath = path.join(process.cwd(), ".env")
+  if (!existsSync(envPath)) return
+  const parsed = parseEnv(readFileSync(envPath, "utf8"))
+  for (const [key, value] of Object.entries(parsed)) {
+    if (process.env[key] === undefined) process.env[key] = value
   }
 }
 
