@@ -7,16 +7,20 @@ import {
   HELPER_FILENAME,
   HOOK_SIGNAL_HELPER_VERSION,
   HOOK_SIGNAL_SCHEMA_VERSION,
-  helperFile,
-  runtimeDir,
+  arcOwnedHelperFile,
 } from "./signals.js"
 
 /**
- * Installs hook plumbing into a workspace so target CLIs announce lifecycle and
- * tool events to arc. Two artifacts:
- *   1. the helper script in `<repoRoot>/.arc/runtime/` (gitignored)
- *   2. repo-local provider hook config
- *      (gitignored — arc's instrumentation never shows up in `git status`)
+ * Installs hook plumbing so target CLIs announce lifecycle and tool events to
+ * arc. Two artifacts:
+ *   1. the helper script in the Arc-owned runtime dir
+ *      (`~/.arcwork/<profile>/runtime/`, outside any repo — one copy per
+ *      profile, regenerated when its version changes)
+ *   2. provider hook config the CLI reads, pointing at that Arc-owned helper
+ *
+ * Only (2) currently touches the repo (`.claude`/`.codex`/`.cursor`); relocating
+ * those out of the repo is tracked separately. The helper itself no longer lands
+ * in the workspace, so it can never dirty `git status`.
  *
  * Best-effort by contract (Codex tightening #2): a failure returns a reason so
  * the caller can log that native binding is unavailable, but never blocks launch.
@@ -138,51 +142,94 @@ function writeJsonObject(file: string, root: Record<string, unknown>): void {
   fs.writeFileSync(file, `${JSON.stringify(root, null, 2)}\n`)
 }
 
-function quotedCommand(repoRoot: string, provider: string, event: string): string {
-  return `node ${JSON.stringify(helperFile(repoRoot))} ${provider} ${event}`
+function quotedCommand(helperPath: string, provider: string, event: string): string {
+  return `node ${JSON.stringify(helperPath)} ${provider} ${event}`
 }
 
-function appendUniqueClaudeBlock(existing: unknown, command: string): Array<Record<string, unknown>> {
-  const blocks = Array.isArray(existing) ? [...existing] : []
-  const alreadyInstalled = blocks.some(
-    (block) =>
-      isRecord(block) &&
-      Array.isArray(block["hooks"]) &&
-      (block["hooks"] as Array<unknown>).some(
-        (h) => isRecord(h) && typeof h["command"] === "string" && h["command"].includes(command),
-      ),
-  )
-  if (!alreadyInstalled) blocks.push({ matcher: "", hooks: [{ type: "command", command }] })
-  return blocks as Array<Record<string, unknown>>
+/** Every command string reachable from a hook block, whether it carries the
+ * command directly (cursor) or nests it under `hooks[]` (claude/codex). */
+function commandStringsOf(block: unknown): Array<string> {
+  if (!isRecord(block)) return []
+  const out: Array<string> = []
+  if (typeof block["command"] === "string") out.push(block["command"])
+  if (Array.isArray(block["hooks"])) {
+    for (const h of block["hooks"]) {
+      if (isRecord(h) && typeof h["command"] === "string") out.push(h["command"])
+    }
+  }
+  return out
 }
 
-function appendUniqueCursorBlock(existing: unknown, command: string): Array<Record<string, unknown>> {
-  const blocks = Array.isArray(existing) ? [...existing] : []
-  const alreadyInstalled = blocks.some(
-    (block) =>
-      isRecord(block) &&
-      (block["command"] === command ||
-        (Array.isArray(block["hooks"]) &&
-          (block["hooks"] as Array<unknown>).some(
-            (h) => isRecord(h) && typeof h["command"] === "string" && h["command"] === command,
-          ))),
-  )
-  if (!alreadyInstalled) blocks.push({ command })
-  return blocks as Array<Record<string, unknown>>
+/**
+ * Whether a single command string is one Arc installs: `node <path> <provider>
+ * <event>` whose script argument *is* our helper (basename {@link
+ * HELPER_FILENAME}), regardless of the absolute path in front of it — that path
+ * is what changes across the repo-local → Arc-owned move.
+ *
+ * Shape-aware on purpose. A loose `command.includes("arc-hook-signal.mjs")`
+ * would also flag a user's own command that merely mentions the filename
+ * (`./log.sh arc-hook-signal.mjs`, `cat notes-arc-hook-signal.mjs`); matching
+ * the `node <script>` position avoids clobbering those.
+ */
+export const isArcCommand = (command: string): boolean => {
+  const m = command.match(/^node\s+("(?:[^"\\]|\\.)*"|\S+)/)
+  if (!m) return false
+  let script = m[1]!
+  if (script.startsWith('"')) {
+    try {
+      script = JSON.parse(script) as string
+    } catch {
+      script = script.slice(1, -1)
+    }
+  }
+  return path.basename(script) === HELPER_FILENAME
 }
 
-function appendUniqueCommandHookBlock(existing: unknown, command: string): Array<Record<string, unknown>> {
-  const blocks = Array.isArray(existing) ? [...existing] : []
-  const alreadyInstalled = blocks.some(
-    (block) =>
-      isRecord(block) &&
-      Array.isArray(block["hooks"]) &&
-      (block["hooks"] as Array<unknown>).some(
-        (h) => isRecord(h) && typeof h["command"] === "string" && h["command"] === command,
-      ),
-  )
-  if (!alreadyInstalled) blocks.push({ hooks: [{ type: "command", command }] })
-  return blocks as Array<Record<string, unknown>>
+/** Does this block contain *any* Arc-installed command? (Predicate for tests /
+ * diagnostics; pruning itself is command-level, see {@link replaceArcBlock}.) */
+export const isArcBlock = (block: unknown): boolean =>
+  commandStringsOf(block).some(isArcCommand)
+
+/**
+ * Strip Arc's own command(s) out of one existing block, returning the block to
+ * keep — or `null` when it was a pure-Arc block now left empty. A user command
+ * sharing a block with Arc's (combined under one matcher, or a flat cursor
+ * entry) survives: pruning is per-command, not per-block.
+ */
+function stripArcFromBlock(block: Record<string, unknown>): Record<string, unknown> | null {
+  let next = block
+  let changed = false
+  if (typeof next["command"] === "string" && isArcCommand(next["command"])) {
+    const { command: _arc, ...rest } = next
+    next = rest
+    changed = true
+  }
+  if (Array.isArray(next["hooks"])) {
+    const filtered = next["hooks"].filter(
+      (h) => !(isRecord(h) && typeof h["command"] === "string" && isArcCommand(h["command"])),
+    )
+    if (filtered.length !== next["hooks"].length) {
+      next = { ...next, hooks: filtered }
+      changed = true
+    }
+  }
+  if (!changed) return block // no Arc command here — leave the user block untouched
+  return commandStringsOf(next).length > 0 ? next : null // drop only if nothing user-owned remains
+}
+
+/** Prune Arc's prior command(s) from every existing block, then install the
+ * current one as its own block. User blocks — and user commands sharing a block
+ * with Arc's — are preserved. */
+export function replaceArcBlock(
+  existing: unknown,
+  freshBlock: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const kept = (Array.isArray(existing) ? existing : [])
+    .filter(isRecord)
+    .map(stripArcFromBlock)
+    .filter((b): b is Record<string, unknown> => b !== null)
+  kept.push(freshBlock)
+  return kept
 }
 
 const CLAUDE_EVENTS = [
@@ -223,32 +270,35 @@ const CURSOR_EVENTS = [
   "afterAgentResponse", "afterAgentThought", "stop",
 ] as const
 
-function mergeClaudeHooks(file: string, repoRoot: string): void {
+function mergeClaudeHooks(file: string, helperPath: string): void {
   const root = readJsonObject(file)
   const hooks = isRecord(root["hooks"]) ? (root["hooks"] as Record<string, unknown>) : {}
   const nextHooks = { ...hooks }
   for (const event of CLAUDE_EVENTS) {
-    nextHooks[event] = appendUniqueClaudeBlock(nextHooks[event], quotedCommand(repoRoot, "claude", event))
+    const command = quotedCommand(helperPath, "claude", event)
+    nextHooks[event] = replaceArcBlock(nextHooks[event], { matcher: "", hooks: [{ type: "command", command }] })
   }
   writeJsonObject(file, { ...root, hooks: nextHooks })
 }
 
-function mergeCodexHooks(file: string, repoRoot: string): void {
+function mergeCodexHooks(file: string, helperPath: string): void {
   const root = readJsonObject(file)
   const hooks = isRecord(root["hooks"]) ? (root["hooks"] as Record<string, unknown>) : {}
   const nextHooks = { ...hooks }
   for (const event of CODEX_EVENTS) {
-    nextHooks[event] = appendUniqueCommandHookBlock(nextHooks[event], quotedCommand(repoRoot, "codex", event))
+    const command = quotedCommand(helperPath, "codex", event)
+    nextHooks[event] = replaceArcBlock(nextHooks[event], { hooks: [{ type: "command", command }] })
   }
   writeJsonObject(file, { ...root, hooks: nextHooks })
 }
 
-function mergeCursorHooks(file: string, repoRoot: string): void {
+function mergeCursorHooks(file: string, helperPath: string): void {
   const root = readJsonObject(file)
   const hooks = isRecord(root["hooks"]) ? (root["hooks"] as Record<string, unknown>) : {}
   const nextHooks = { ...hooks }
   for (const event of CURSOR_EVENTS) {
-    nextHooks[event] = appendUniqueCursorBlock(nextHooks[event], quotedCommand(repoRoot, "cursor", event))
+    const command = quotedCommand(helperPath, "cursor", event)
+    nextHooks[event] = replaceArcBlock(nextHooks[event], { command })
   }
   writeJsonObject(file, {
     ...root,
@@ -263,18 +313,31 @@ export interface InstallResult {
   readonly reason?: string
 }
 
-/** Write the helper + merge provider hook config. Never throws. */
-export const installProviderHooks = (repoRoot: string, provider: string): Effect.Effect<InstallResult> =>
-  Effect.sync(() => {
-    try {
-      fs.mkdirSync(runtimeDir(repoRoot), { recursive: true })
-      fs.writeFileSync(helperFile(repoRoot), renderHelperSource())
-      if (provider === "claude") mergeClaudeHooks(settingsLocalFile(repoRoot), repoRoot)
-      else if (provider === "codex") mergeCodexHooks(codexHooksFile(repoRoot), repoRoot)
-      else if (provider === "cursor") mergeCursorHooks(cursorHooksFile(repoRoot), repoRoot)
-      else return { installed: true }
-      return { installed: true }
-    } catch (e) {
-      return { installed: false, reason: e instanceof Error ? e.message : String(e) }
-    }
-  })
+/**
+ * Write the Arc-owned helper + merge the provider's hook config to point at it.
+ * Best-effort: the I/O can throw (read-only FS, unparseable user settings), so
+ * this is `Effect.try` rather than `Effect.sync`, and `Effect.match` folds both
+ * channels into an {@link InstallResult} — the caller is told native binding is
+ * unavailable, but launch is never blocked.
+ */
+export const installProviderHooks = (
+  repoRoot: string,
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Effect.Effect<InstallResult> =>
+  Effect.try({
+    try: () => {
+      const helperPath = arcOwnedHelperFile(env)
+      fs.mkdirSync(path.dirname(helperPath), { recursive: true })
+      fs.writeFileSync(helperPath, renderHelperSource())
+      if (provider === "claude") mergeClaudeHooks(settingsLocalFile(repoRoot), helperPath)
+      else if (provider === "codex") mergeCodexHooks(codexHooksFile(repoRoot), helperPath)
+      else if (provider === "cursor") mergeCursorHooks(cursorHooksFile(repoRoot), helperPath)
+    },
+    catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
+  }).pipe(
+    Effect.match({
+      onSuccess: (): InstallResult => ({ installed: true }),
+      onFailure: (reason): InstallResult => ({ installed: false, reason }),
+    }),
+  )

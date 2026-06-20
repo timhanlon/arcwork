@@ -83,6 +83,15 @@ export const userDataDir = (
 export const arcWorkStateDir = (profile: ArcProfile): string =>
   path.join(os.homedir(), ARCWORK_DIRNAME, profile, "state")
 
+/**
+ * The profile's home-rooted Arc Work *runtime* dir — Arc-owned, regenerable
+ * scratch that must live outside any target repo. The hook helper script lives
+ * here (one copy per profile, not one per workspace), so a repo Arc opens never
+ * gets an Arc-owned executable written into it.
+ */
+export const arcWorkRuntimeDir = (profile: ArcProfile): string =>
+  path.join(os.homedir(), ARCWORK_DIRNAME, profile, "runtime")
+
 export interface ResolvedDbPath {
   /** The profile that was selected. */
   readonly profile: ArcProfile

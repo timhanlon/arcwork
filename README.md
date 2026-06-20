@@ -53,21 +53,23 @@ Runtime state is local-only and ignored by git.
 
 ### Hook instrumentation
 
-To observe a target CLI (Claude, Codex, Cursor), Arc Work installs repo-local hooks
-into the workspace it launches: a generated helper at
-`.arc/runtime/arc-hook-signal.mjs`, plus hook config merged into the provider's
-repo-local settings (`.claude/settings.local.json`, `.codex/hooks.json`,
-`.cursor/hooks.json`). Both are gitignored, so Arc Work's instrumentation never shows
-up in `git status`. Two known limitations:
+To observe a target CLI (Claude, Codex, Cursor), Arc Work installs a single
+Arc-owned helper at `~/.arcwork/<profile>/runtime/arc-hook-signal.mjs` — outside
+any repo, one copy per profile — and merges hook config pointing at it into the
+provider's settings (`.claude/settings.local.json`, `.codex/hooks.json`,
+`.cursor/hooks.json`). The helper no longer lands in the workspace, so it can
+never show up in `git status`. Each Arc-launched shell carries `ARC_HOOK_HELPER`
+(the helper's absolute path) next to `ARC_HOOK_SOCK`. One known limitation:
 
-- **Not portable.** The helper path and hook commands are absolute (the workspace
-  root, plus `node` from the runner's PATH), so a fresh clone or a moved repo
-  needs Arc Work to reinstall them — instrumentation does not travel with the repo.
-- **Install only appends.** The merge dedupes by exact command string and never
-  removes stale entries, so a changed path or an older helper leaves an orphaned
-  hook stack firing alongside the current one (and growing `.arc/runtime/`
-  unbounded). If you see double-captured events or an `.arc/runtime` file growing
-  without bound, prune the stale blocks from the provider settings by hand.
+- **Not portable.** The merged hook commands are absolute (the Arc-owned helper
+  path, plus `node` from the runner's PATH), so they only fire under Arc Work —
+  instrumentation does not travel with the repo, by design. Re-running an install
+  *replaces* Arc's prior hook block (matched by the helper filename) rather than
+  appending, so a moved or upgraded helper leaves no orphaned stack behind.
+
+> Relocating the provider settings themselves out of the repo (so a repo Arc
+> opens stays byte-for-byte clean) is tracked separately; today only the helper
+> lives outside the workspace.
 
 ## Contributing
 

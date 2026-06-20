@@ -1,20 +1,27 @@
 import { createHash } from "node:crypto"
 import * as os from "node:os"
 import * as path from "node:path"
-import { resolveProfile } from "../db/paths.js"
+import { arcWorkRuntimeDir, resolveProfile } from "../db/paths.js"
 
 /**
  * The contract between a target CLI's hooks and arc's main process.
  *
  * A launched CLI inherits the `ARC_*` env tags (shared/env-tags.ts) plus
- * `ARC_HOOK_SOCK`. Repo-local provider hooks invoke the installed helper
- * (`arc-hook-signal.mjs`), which connects to that unix socket and writes one
- * JSON line containing the hook payload plus inherited Arc tags. When a
+ * `ARC_HOOK_SOCK` (the socket to write to) and `ARC_HOOK_HELPER` (the absolute
+ * path of the helper to invoke). Provider hooks invoke that Arc-owned helper
+ * (`arc-hook-signal.mjs`), which connects to the socket and writes one JSON line
+ * containing the hook payload plus inherited Arc tags. When a
  * `SessionStart`-class payload contains a native `session_id`,
  * `HookSignalServer` also binds it to the inherited `ARC_TARGET_SESSION_ID` —
  * filling `TargetSession.nativeSessionId`, Arc-owned session metadata persisted
  * to `.arc/state/` (for resume/debugging/import), not a join key into any other
  * database.
+ *
+ * The helper is Arc-owned and lives outside any target repo
+ * (`~/.arcwork/<profile>/runtime/`, see {@link arcOwnedHelperFile}): one copy
+ * per profile rather than a generated executable written into each workspace,
+ * so a repo Arc opens stays clean. Provider hook config and `ARC_HOOK_HELPER`
+ * both point at that single path.
  *
  * Unlike arc-prototype (which appends JSONL to `.arc/runtime/hook-signals.jsonl`
  * and tails it), the channel here is a live socket: main owns the PTY child, so
@@ -24,14 +31,18 @@ import { resolveProfile } from "../db/paths.js"
  */
 
 export const ARC_HOOK_SOCK_ENV = "ARC_HOOK_SOCK"
-export const RUNTIME_REL_DIR = ".arc/runtime"
+export const ARC_HOOK_HELPER_ENV = "ARC_HOOK_HELPER"
 export const HELPER_FILENAME = "arc-hook-signal.mjs"
 export const HOOK_SIGNAL_SCHEMA_VERSION = 1
 export const HOOK_SIGNAL_HELPER_VERSION = 1
 
-export const runtimeDir = (repoRoot: string): string => path.join(repoRoot, RUNTIME_REL_DIR)
-export const helperFile = (repoRoot: string): string =>
-  path.join(runtimeDir(repoRoot), HELPER_FILENAME)
+/**
+ * Absolute path of the Arc-owned hook helper for the current profile. Stable
+ * across every workspace, so it can be both written once and referenced from
+ * provider hook config / `ARC_HOOK_HELPER` without touching any repo.
+ */
+export const arcOwnedHelperFile = (env: NodeJS.ProcessEnv = process.env): string =>
+  path.join(arcWorkRuntimeDir(resolveProfile(env)), HELPER_FILENAME)
 
 /**
  * The unix socket lives in the OS temp dir, NOT the repo: a `sun_path` is capped

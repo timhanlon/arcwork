@@ -12,7 +12,7 @@ import { arcEnvTags } from "../../shared/env-tags.js"
 import { installProviderHooks } from "../hooks/install.js"
 import { installMcpConfig } from "../mcp/install.js"
 import { isMcpProvider } from "../mcp/client-config.js"
-import { ARC_HOOK_SOCK_ENV } from "../hooks/signals.js"
+import { ARC_HOOK_HELPER_ENV, ARC_HOOK_SOCK_ENV, arcOwnedHelperFile } from "../hooks/signals.js"
 import { HookSignalServer } from "./HookSignalServer.js"
 import { ProviderRegistry } from "./ProviderRegistry.js"
 import { WorkspaceService } from "./WorkspaceService.js"
@@ -370,6 +370,9 @@ export const TargetSessionManagerLive = Layer.effect(
             }),
             ...extraEnv,
             [ARC_HOOK_SOCK_ENV]: sockPath,
+            // The Arc-owned helper to invoke (provider hooks + the git
+            // post-commit hook both read this rather than a repo-local path).
+            [ARC_HOOK_HELPER_ENV]: arcOwnedHelperFile(),
           } as Record<string, string>,
         })
         let firstDataSeen = false

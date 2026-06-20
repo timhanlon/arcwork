@@ -222,11 +222,14 @@ derives — see [HOOKS.md](HOOKS.md).
 1. **Arm the hook socket** before spawn — `HookSignalServer.ensureListening(cwd)`
    creates a per-workspace Unix socket (path is a short hash under `$TMPDIR`, since
    socket paths are length-capped on macOS).
-2. **Install provider hooks** into the repo-local config the CLI reads
+2. **Install provider hooks** into the config the CLI reads
    (`.claude/settings.local.json`, `.codex/hooks.json`, `.cursor/hooks.json`),
-   all pointing at a generated helper script (`arc-hook-signal.mjs`).
+   all pointing at the Arc-owned helper script (`arc-hook-signal.mjs`) under
+   `~/.arcwork/<profile>/runtime/` — one copy per profile, never written into
+   the workspace. Re-installing replaces Arc's prior hook block (matched by the
+   helper filename) rather than appending.
 3. **Spawn the PTY** with env tags (`ARC_TARGET_SESSION_ID`, `ARC_CHAT_ID`,
-   `ARC_HOOK_SOCK`, `ARC_PROFILE`, …) and the renderer-measured grid size (Ink
+   `ARC_HOOK_SOCK`, `ARC_HOOK_HELPER`, `ARC_PROFILE`, …) and the renderer-measured grid size (Ink
    reads `stdout.columns` once at startup and can't reflow later).
 4. **Attach** raw `onData`/`onExit` handlers — output is published as events the
    controller broadcasts to the renderer over `arc:pty-data`.

@@ -25,15 +25,17 @@ Sources used:
 
 ## Arc Hook Signal Envelope
 
-Provider hooks do not talk to the renderer directly. Arc installs a generated
-helper:
+Provider hooks do not talk to the renderer directly. Arc installs a single
+Arc-owned helper, outside any repo (one copy per profile):
 
 ```text
-.arc/runtime/arc-hook-signal.mjs
+~/.arcwork/<profile>/runtime/arc-hook-signal.mjs
 ```
 
-The helper receives the provider's raw hook JSON on stdin and sends one
-versioned `HookSignal` record to the main process over `ARC_HOOK_SOCK`.
+Provider hook config invokes it by absolute path, and each Arc-launched shell
+also carries that path in `ARC_HOOK_HELPER`. The helper receives the provider's
+raw hook JSON on stdin and sends one versioned `HookSignal` record to the main
+process over `ARC_HOOK_SOCK`.
 
 Arc wrapper fields:
 
