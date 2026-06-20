@@ -10,7 +10,7 @@ import type { IPty } from "node-pty"
 import type { TargetSession } from "../../shared/instance.js"
 import { arcEnvTags } from "../../shared/env-tags.js"
 import { installProviderHooks } from "../hooks/install.js"
-import { installMcpConfig } from "../mcp/install.js"
+import { cursorPluginLaunchArgs, installCursorPlugin } from "../hooks/cursor-plugin.js"
 import { isMcpProvider, providerMcpLaunchArgs } from "../mcp/client-config.js"
 import { ARC_HOOK_HELPER_ENV, ARC_HOOK_SOCK_ENV, arcOwnedHelperFile } from "../hooks/signals.js"
 import { HookSignalServer } from "./HookSignalServer.js"
@@ -326,6 +326,23 @@ export const TargetSessionManagerLive = Layer.effect(
     const list = SubscriptionRef.get(store).pipe(Effect.map(asList))
     const changes = Stream.map(SubscriptionRef.changes(store), asList)
 
+    // Provider integration argv, shared by launch + resume. cursor writes its
+    // Arc-owned plugin dir and loads it via `--plugin-dir`; claude/codex declare
+    // the arc MCP server inline. Best-effort: a failed cursor plugin write logs
+    // and falls through to no extra args rather than blocking the spawn.
+    const buildProviderArgs = (provider: string): Effect.Effect<Array<string>> =>
+      Effect.gen(function* () {
+        if (provider === "cursor") {
+          const plugin = installCursorPlugin()
+          if (!plugin.installed) {
+            yield* Effect.logWarning(`cursor plugin install failed: ${plugin.reason ?? "unknown error"}`)
+            return []
+          }
+          return [...cursorPluginLaunchArgs(plugin.dir)]
+        }
+        return isMcpProvider(provider) ? [...providerMcpLaunchArgs(provider)] : []
+      })
+
     const resumeArgs = (provider: string, nativeSessionId: string | undefined): Array<string> | null => {
       if (!nativeSessionId) return null
       switch (provider) {
@@ -464,24 +481,11 @@ export const TargetSessionManagerLive = Layer.effect(
             `hook install failed for ${req.provider} in ${cwd}; hook signals unavailable: ${result.reason}`,
           )
         }
-        if (isMcpProvider(req.provider)) {
-          const mcpResult = installMcpConfig(req.provider)
-          if (!mcpResult.installed) {
-            yield* Effect.logWarning(
-              `MCP config install failed for ${req.provider}: ${mcpResult.reason ?? "unknown error"} — run arc-mcp ${req.provider} --write`,
-            )
-          } else if (mcpResult.scope === "user") {
-            yield* Effect.logInfo(`merged arc MCP server into user-scoped config for ${req.provider}`)
-          }
-        }
-
-        // Apply the provider's prompt-injection mode. A prefill (argv/env) only
-        // *seeds* the composer; stdin-after-start writes text+Enter, i.e. submits.
-        // The MCP argv (claude/codex declare the arc server inline; cursor takes
-        // `--approve-mcps`) leads so codex's global `-c` sits before any subcommand.
-        const args: Array<string> = isMcpProvider(req.provider)
-          ? [...providerMcpLaunchArgs(req.provider)]
-          : []
+        // Provider integration argv (hooks + MCP), all Arc-owned and repo-clean.
+        // cursor: one `--plugin-dir` plugin bundles its hooks + MCP. claude/codex:
+        // declare the arc MCP server inline (`--mcp-config`/`-c`). The MCP argv
+        // leads so codex's global `-c` sits before any subcommand.
+        const args: Array<string> = yield* buildProviderArgs(req.provider)
         let writeAfterStart: string | undefined
         let seededViaPrefill = false
         const extraEnv: Record<string, string> = {}
@@ -590,20 +594,10 @@ export const TargetSessionManagerLive = Layer.effect(
           )
         }
 
-        // The arc server is no longer persisted in a repo file, so resume must
-        // re-declare it just like launch: inline argv for claude/codex, the
-        // home-merge for cursor. MCP argv leads (codex `-c` before `resume`).
-        if (isMcpProvider(existing.provider)) {
-          const mcpResult = installMcpConfig(existing.provider)
-          if (!mcpResult.installed) {
-            yield* Effect.logWarning(
-              `resume MCP config install failed for ${existing.provider}: ${mcpResult.reason ?? "unknown error"}`,
-            )
-          }
-        }
-        const args = isMcpProvider(existing.provider)
-          ? [...providerMcpLaunchArgs(existing.provider), ...resumeBase]
-          : resumeBase
+        // Hooks/MCP aren't persisted in a repo file, so resume re-declares them
+        // exactly like launch (cursor plugin / inline argv). Integration argv
+        // leads so codex's global `-c` sits before the `resume` subcommand.
+        const args = [...(yield* buildProviderArgs(existing.provider)), ...resumeBase]
 
         const session: TargetSession = { ...existing, attached: true, state: "running" }
         yield* spawnAttached(session, spec.interactive.launchCmd, args, req.cols, req.rows, sockPath)

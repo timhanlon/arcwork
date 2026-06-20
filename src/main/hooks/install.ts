@@ -117,7 +117,6 @@ process.exit(0)
 const settingsLocalFile = (repoRoot: string): string =>
   path.join(repoRoot, ".claude", "settings.local.json")
 const codexHooksFile = (repoRoot: string): string => path.join(repoRoot, ".codex", "hooks.json")
-const cursorHooksFile = (repoRoot: string): string => path.join(repoRoot, ".cursor", "hooks.json")
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null
@@ -258,7 +257,7 @@ const CODEX_EVENTS = [
   "Stop",
 ] as const
 
-const CURSOR_EVENTS = [
+export const CURSOR_EVENTS = [
   "sessionStart", "sessionEnd", "workspaceOpen",
   "beforeSubmitPrompt",
   "preToolUse", "postToolUse", "postToolUseFailure",
@@ -292,25 +291,22 @@ function mergeCodexHooks(file: string, helperPath: string): void {
   writeJsonObject(file, { ...root, hooks: nextHooks })
 }
 
-function mergeCursorHooks(file: string, helperPath: string): void {
-  const root = readJsonObject(file)
-  const hooks = isRecord(root["hooks"]) ? (root["hooks"] as Record<string, unknown>) : {}
-  const nextHooks = { ...hooks }
-  for (const event of CURSOR_EVENTS) {
-    const command = quotedCommand(helperPath, "cursor", event)
-    nextHooks[event] = replaceArcBlock(nextHooks[event], { command })
-  }
-  writeJsonObject(file, {
-    ...root,
-    version: root["version"] ?? 1,
-    hooks: nextHooks,
-    _arcNote: "arc-electron installed repo-local hook observers; hooks are best-effort and should not affect CLI behavior.",
-  })
-}
 
 export interface InstallResult {
   readonly installed: boolean
   readonly reason?: string
+}
+
+/**
+ * Write the single Arc-owned helper to its profile dir (idempotent) and return
+ * its absolute path. Shared by the provider-hook installer and the cursor plugin
+ * builder — both need the helper on disk and pointing hooks at the same path.
+ */
+export const ensureArcOwnedHelper = (env: NodeJS.ProcessEnv = process.env): string => {
+  const helperPath = arcOwnedHelperFile(env)
+  fs.mkdirSync(path.dirname(helperPath), { recursive: true })
+  fs.writeFileSync(helperPath, renderHelperSource())
+  return helperPath
 }
 
 /**
@@ -319,6 +315,9 @@ export interface InstallResult {
  * this is `Effect.try` rather than `Effect.sync`, and `Effect.match` folds both
  * channels into an {@link InstallResult} — the caller is told native binding is
  * unavailable, but launch is never blocked.
+ *
+ * Cursor is intentionally absent: it gets its hooks (and MCP) from an Arc-owned
+ * plugin passed via `--plugin-dir` (see `cursor-plugin.ts`), never a repo write.
  */
 export const installProviderHooks = (
   repoRoot: string,
@@ -327,12 +326,9 @@ export const installProviderHooks = (
 ): Effect.Effect<InstallResult> =>
   Effect.try({
     try: () => {
-      const helperPath = arcOwnedHelperFile(env)
-      fs.mkdirSync(path.dirname(helperPath), { recursive: true })
-      fs.writeFileSync(helperPath, renderHelperSource())
+      const helperPath = ensureArcOwnedHelper(env)
       if (provider === "claude") mergeClaudeHooks(settingsLocalFile(repoRoot), helperPath)
       else if (provider === "codex") mergeCodexHooks(codexHooksFile(repoRoot), helperPath)
-      else if (provider === "cursor") mergeCursorHooks(cursorHooksFile(repoRoot), helperPath)
     },
     catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
   }).pipe(

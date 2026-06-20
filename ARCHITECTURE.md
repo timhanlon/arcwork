@@ -369,9 +369,12 @@ that need it) stamps `x-arc-*` headers. Handlers trust headers first, then fall
 back to voluntary tool params. The auto launch path declares the `arc` server
 repo-clean (`mcp/client-config.ts` `providerMcpLaunchArgs`): claude and codex
 get it inline through argv (`--mcp-config '<json>'`, `-c mcp_servers.arc.*`),
-writing nothing; cursor has no inline lever so it merges into home-global
-`~/.cursor/mcp.json` (+ `--approve-mcps`). The explicit `arc-mcp <provider>
---write` CLI still writes a persistent repo/user config for hand-editing.
+writing nothing; cursor has no inline lever so it loads an Arc-owned plugin via
+`--plugin-dir` (`hooks/cursor-plugin.ts`) — one dir under
+`~/.arcwork/<profile>/runtime/` bundling its hooks + `mcp.json` (+
+`--approve-mcps`), never touching the repo or `~/.cursor`. The explicit `arc-mcp
+<provider> --write` CLI still writes a persistent repo/user config for
+hand-editing.
 
 **Read surface** (`src/main/read/service.ts`, contract in `src/shared/read.ts`):
 `ReadService` is a thin composition over `WorkService` / `ChatService` /

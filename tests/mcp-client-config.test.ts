@@ -2,7 +2,6 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   MCP_PROVIDERS,
-  cursorHomeMcpFile,
   isMcpProvider,
   mergeArcServer,
   providerClientConfig,
@@ -121,8 +120,7 @@ describe("repo-clean MCP launch args", () => {
     ])
   })
 
-  it("cursor only needs --approve-mcps (server lives in home-global mcp.json)", () => {
+  it("cursor only needs --approve-mcps (server lives in the plugin's mcp.json)", () => {
     expect(providerMcpLaunchArgs("cursor")).toEqual(["--approve-mcps"])
-    expect(cursorHomeMcpFile("/home/dev")).toBe(join("/home/dev", ".cursor", "mcp.json"))
   })
 })

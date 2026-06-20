@@ -74,13 +74,11 @@ export const providerMcpLaunchArgs = (provider: McpProvider): ReadonlyArray<stri
         `mcp_servers.arc.bearer_token_env_var="ARC_MCP_TOKEN"`,
       ]
     case "cursor":
+      // cursor declares the server in its plugin's mcp.json (loaded via
+      // --plugin-dir); launch only needs to auto-approve it. See cursor-plugin.ts.
       return ["--approve-mcps"]
   }
 }
-
-/** Cursor's home-global MCP config — the only repo-clean home for the arc server,
- * since `cursor-agent` has no config flag or `CURSOR_HOME` to relocate it. */
-export const cursorHomeMcpFile = (home: string): string => path.join(home, ".cursor", "mcp.json")
 
 export interface ProviderClientConfig {
   /** Absolute path to the file this provider reads its MCP config from. */
