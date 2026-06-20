@@ -3,16 +3,21 @@
 [![CI](https://github.com/timhanlon/arcwork/actions/workflows/ci.yml/badge.svg)](https://github.com/timhanlon/arcwork/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Arc Work is an Electron app for working with local agent CLIs from a unified
-workspace.
+I'm building this because I’m not convinced we know what the end-game UI for agentic development looks like yet.
 
-> **Status:** early release (`0.0.1`), macOS-only, distributed source-only —
+I actively use Claude Code, Codex, and Cursor CLI. I feel like using them together gets a better (and cheaper) result, but I was finding it impossible to stay on track while juggling terminal panes and a sprawl of Markdown. Particularly while working on more than one project at a time.
+
+Arc Work is my exploration of a unified development environment, where conversations, tasks, diffs, and multiple harnesses, are part of the same application and workflows.
+
+It’s built primarily for myself, but I’m putting it out into the world to see if it resonates.
+
+> **Status:** early, macOS-only, distributed source-only —
 > run it with `pnpm dev` (see below). No packaged build yet.
 
 ## Requirements
 
 - Node.js 22 or newer
-- pnpm 10.11.1 or newer
+- pnpm 10.24 or newer
 - macOS for the current Electron development target
 
 ## Development
