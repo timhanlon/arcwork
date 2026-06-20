@@ -11,7 +11,7 @@ import type { TargetSession } from "../../shared/instance.js"
 import { arcEnvTags } from "../../shared/env-tags.js"
 import { installProviderHooks } from "../hooks/install.js"
 import { installMcpConfig } from "../mcp/install.js"
-import { isMcpProvider } from "../mcp/client-config.js"
+import { isMcpProvider, providerMcpLaunchArgs } from "../mcp/client-config.js"
 import { ARC_HOOK_HELPER_ENV, ARC_HOOK_SOCK_ENV, arcOwnedHelperFile } from "../hooks/signals.js"
 import { HookSignalServer } from "./HookSignalServer.js"
 import { ProviderRegistry } from "./ProviderRegistry.js"
@@ -465,21 +465,23 @@ export const TargetSessionManagerLive = Layer.effect(
           )
         }
         if (isMcpProvider(req.provider)) {
-          const mcpResult = installMcpConfig(cwd, req.provider)
+          const mcpResult = installMcpConfig(req.provider)
           if (!mcpResult.installed) {
             yield* Effect.logWarning(
               `MCP config install failed for ${req.provider}: ${mcpResult.reason ?? "unknown error"} — run arc-mcp ${req.provider} --write`,
             )
           } else if (mcpResult.scope === "user") {
-            yield* Effect.logInfo(
-              `installed arc MCP stdio proxy in user-scoped config for ${req.provider}`,
-            )
+            yield* Effect.logInfo(`merged arc MCP server into user-scoped config for ${req.provider}`)
           }
         }
 
         // Apply the provider's prompt-injection mode. A prefill (argv/env) only
         // *seeds* the composer; stdin-after-start writes text+Enter, i.e. submits.
-        const args: Array<string> = []
+        // The MCP argv (claude/codex declare the arc server inline; cursor takes
+        // `--approve-mcps`) leads so codex's global `-c` sits before any subcommand.
+        const args: Array<string> = isMcpProvider(req.provider)
+          ? [...providerMcpLaunchArgs(req.provider)]
+          : []
         let writeAfterStart: string | undefined
         let seededViaPrefill = false
         const extraEnv: Record<string, string> = {}
@@ -575,8 +577,8 @@ export const TargetSessionManagerLive = Layer.effect(
             arcRequestError(`Target session "${existing.id}" has no resumable native session`),
           )
         }
-        const args = resumeArgs(existing.provider, existing.nativeSessionId)
-        if (!args) {
+        const resumeBase = resumeArgs(existing.provider, existing.nativeSessionId)
+        if (!resumeBase) {
           return yield* Effect.fail(arcRequestError(`Target session "${existing.id}" has no native session id to resume`))
         }
 
@@ -587,6 +589,21 @@ export const TargetSessionManagerLive = Layer.effect(
             `resume hook install failed for ${existing.provider} in ${existing.cwd}; hook signals unavailable: ${result.reason}`,
           )
         }
+
+        // The arc server is no longer persisted in a repo file, so resume must
+        // re-declare it just like launch: inline argv for claude/codex, the
+        // home-merge for cursor. MCP argv leads (codex `-c` before `resume`).
+        if (isMcpProvider(existing.provider)) {
+          const mcpResult = installMcpConfig(existing.provider)
+          if (!mcpResult.installed) {
+            yield* Effect.logWarning(
+              `resume MCP config install failed for ${existing.provider}: ${mcpResult.reason ?? "unknown error"}`,
+            )
+          }
+        }
+        const args = isMcpProvider(existing.provider)
+          ? [...providerMcpLaunchArgs(existing.provider), ...resumeBase]
+          : resumeBase
 
         const session: TargetSession = { ...existing, attached: true, state: "running" }
         yield* spawnAttached(session, spec.interactive.launchCmd, args, req.cols, req.rows, sockPath)

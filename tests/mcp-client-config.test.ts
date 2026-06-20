@@ -2,9 +2,11 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   MCP_PROVIDERS,
+  cursorHomeMcpFile,
   isMcpProvider,
   mergeArcServer,
   providerClientConfig,
+  providerMcpLaunchArgs,
   providerServerEntry,
 } from "../src/main/mcp/client-config.js"
 
@@ -94,5 +96,33 @@ describe("MCP client config (per-provider, HTTP bearer)", () => {
   it("isMcpProvider guards the known set", () => {
     for (const p of MCP_PROVIDERS) expect(isMcpProvider(p)).toBe(true)
     expect(isMcpProvider("gemini")).toBe(false)
+  })
+})
+
+describe("repo-clean MCP launch args", () => {
+  it("claude declares the arc server inline as a --mcp-config JSON string", () => {
+    const args = providerMcpLaunchArgs("claude")
+    expect(args[0]).toBe("--mcp-config")
+    expect(JSON.parse(args[1]!)).toEqual({
+      mcpServers: {
+        arc: { type: "http", url: URL, headers: { Authorization: "Bearer ${ARC_MCP_TOKEN}" } },
+      },
+    })
+    // no file path, no repo mention — it's a literal config payload
+    expect(args.join(" ")).not.toContain(".mcp.json")
+  })
+
+  it("codex overrides nested config inline with -c (no file touched)", () => {
+    expect(providerMcpLaunchArgs("codex")).toEqual([
+      "-c",
+      `mcp_servers.arc.url="${URL}"`,
+      "-c",
+      `mcp_servers.arc.bearer_token_env_var="ARC_MCP_TOKEN"`,
+    ])
+  })
+
+  it("cursor only needs --approve-mcps (server lives in home-global mcp.json)", () => {
+    expect(providerMcpLaunchArgs("cursor")).toEqual(["--approve-mcps"])
+    expect(cursorHomeMcpFile("/home/dev")).toBe(join("/home/dev", ".cursor", "mcp.json"))
   })
 })

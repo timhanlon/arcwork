@@ -44,6 +44,44 @@ export const providerServerEntry = (provider: McpProvider): Record<string, unkno
   return provider === "claude" ? { type: "http", ...http } : http
 }
 
+/**
+ * Extra argv that declares the `arc` MCP server to a launched CLI *without*
+ * writing a config file into the repo — the repo-clean lever for the auto
+ * launch path (Arc owns the spawn argv at `TargetSessionManager`):
+ *
+ *   • claude — `--mcp-config '<json>'` accepts the server inline as a JSON
+ *     string (no `--strict-mcp-config`, so the user's own MCP servers still load).
+ *   • codex  — `-c mcp_servers.arc.*=<toml>` overrides nested config inline,
+ *     touching neither the repo nor the user's `~/.codex/config.toml`.
+ *   • cursor — has no inline lever; the server lives in `~/.cursor/mcp.json`
+ *     (see {@link cursorHomeMcpFile}), so launch only needs `--approve-mcps`
+ *     to skip the approval prompt.
+ *
+ * Passed through node-pty's argv array (no shell), so the JSON/TOML values reach
+ * the CLI verbatim — no quoting hazard. `${ARC_MCP_TOKEN}` / `bearer_token_env_var`
+ * resolve from the session's injected env at connect time, exactly as the file
+ * forms do.
+ */
+export const providerMcpLaunchArgs = (provider: McpProvider): ReadonlyArray<string> => {
+  switch (provider) {
+    case "claude":
+      return ["--mcp-config", JSON.stringify({ mcpServers: { arc: providerServerEntry("claude") } })]
+    case "codex":
+      return [
+        "-c",
+        `mcp_servers.arc.url="${defaultArcMcpUrl()}"`,
+        "-c",
+        `mcp_servers.arc.bearer_token_env_var="ARC_MCP_TOKEN"`,
+      ]
+    case "cursor":
+      return ["--approve-mcps"]
+  }
+}
+
+/** Cursor's home-global MCP config — the only repo-clean home for the arc server,
+ * since `cursor-agent` has no config flag or `CURSOR_HOME` to relocate it. */
+export const cursorHomeMcpFile = (home: string): string => path.join(home, ".cursor", "mcp.json")
+
 export interface ProviderClientConfig {
   /** Absolute path to the file this provider reads its MCP config from. */
   readonly file: string

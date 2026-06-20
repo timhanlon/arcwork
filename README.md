@@ -67,9 +67,16 @@ never show up in `git status`. Each Arc-launched shell carries `ARC_HOOK_HELPER`
   *replaces* Arc's prior hook block (matched by the helper filename) rather than
   appending, so a moved or upgraded helper leaves no orphaned stack behind.
 
-> Relocating the provider settings themselves out of the repo (so a repo Arc
-> opens stays byte-for-byte clean) is tracked separately; today only the helper
-> lives outside the workspace.
+The **MCP server** Arc exposes to those CLIs is wired repo-clean too: Claude and
+Codex receive it inline on the launch command (`--mcp-config`, `-c`), writing
+nothing; Cursor (which has no inline lever) gets it in your home-global
+`~/.cursor/mcp.json`. Nothing MCP-related is written into the workspace. The
+explicit `arc-mcp <provider> --write` command still drops a persistent repo/user
+config if you want one.
+
+> The provider *hook* settings (`.claude/`, `.codex/`, `.cursor/`) are still
+> merged into the repo today; relocating those out of the workspace (so a repo
+> Arc opens stays byte-for-byte clean) is tracked separately.
 
 ## Contributing
 

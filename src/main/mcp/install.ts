@@ -2,6 +2,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import {
+  cursorHomeMcpFile,
   type McpProvider,
   mergeArcServer,
   repoMcpConfigFile,
@@ -84,9 +85,37 @@ export const installUserMcpConfig = (
   }
 }
 
-/** Install MCP config for a provider (repo-local and/or user-scoped). */
-export const installMcpConfig = (repoRoot: string, provider: McpProvider): InstallResult => {
-  const repo = installRepoMcpConfig(repoRoot, provider)
-  if (repo.scope === "repo") return repo
-  return installUserMcpConfig(provider, os.homedir())
+/**
+ * Merge the arc server into Cursor's home-global `~/.cursor/mcp.json`. Keyed by
+ * server name (`mergeArcServer` overwrites `mcpServers.arc`), so it's idempotent
+ * and leaves the user's own servers untouched — no append/prune dance needed.
+ */
+export const installCursorHomeMcpConfig = (home: string = os.homedir()): InstallResult => {
+  const file = cursorHomeMcpFile(home)
+  try {
+    let root: Record<string, unknown> = {}
+    if (fs.existsSync(file)) {
+      const existing: unknown = JSON.parse(fs.readFileSync(file, "utf8"))
+      if (isRecord(existing)) root = existing
+      else throw new Error(`existing ${file} is not a JSON object`)
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, `${JSON.stringify(mergeArcServer(root, "cursor"), null, 2)}\n`)
+    return { installed: true, scope: "user" }
+  } catch (e) {
+    return { installed: false, scope: "user", reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * Launch-time MCP setup for the auto path — repo-clean by construction.
+ * claude/codex declare the arc server inline through argv (see
+ * `providerMcpLaunchArgs`), so there is nothing to write; only cursor, which has
+ * no inline lever, needs a file — and that file is its home-global config, never
+ * the repo. The explicit `arc-mcp <provider> --write` CLI still writes repo/user
+ * files for users who want a persistent hand-editable config.
+ */
+export const installMcpConfig = (provider: McpProvider): InstallResult => {
+  if (provider === "cursor") return installCursorHomeMcpConfig()
+  return { installed: true, scope: "none" }
 }
