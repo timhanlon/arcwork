@@ -24,7 +24,7 @@ import { orderedPendingSessionIds } from "./sidebar/grouping.js"
 import { TargetSessionPane } from "./chat/TargetSessionPane.js"
 import { sync as syncTerminals } from "./terminal/terminalRegistry.js"
 import { UnifiedChatPane, type ChatPaneHandle } from "./chat/UnifiedChatPane.js"
-import { WorkPane } from "./work/WorkPane.js"
+import { WorkPane, type WorkPaneHandle } from "./work/WorkPane.js"
 import { GitPane } from "./git/GitPane.js"
 import { NavBar } from "./shell/NavBar.js"
 import { ArcSearchPanel } from "./search/ArcSearchPanel.js"
@@ -207,6 +207,7 @@ export function App(): JSX.Element {
   // (The terminal's `focusTerminal` is handled in the terminal registry: each
   // entry subscribes for the signal independent of React mount state.)
   const chatPaneRef = useRef<ChatPaneHandle>(null)
+  const workPaneRef = useRef<WorkPaneHandle>(null)
   const { actor } = shell.actions
   useEffect(() => {
     const focus = actor.on("focusComposer", () => {
@@ -215,9 +216,16 @@ export function App(): JSX.Element {
     const scroll = actor.on("scrollChatToBottom", () => {
       requestAnimationFrame(() => chatPaneRef.current?.scrollToBottom())
     })
+    // The new-work command surfaces the work view in the same transition that
+    // opens the create form, so defer a frame for the freshly-mounted pane
+    // (mirrors focusComposer).
+    const create = actor.on("startWorkCreate", () => {
+      requestAnimationFrame(() => workPaneRef.current?.startCreate())
+    })
     return () => {
       focus.unsubscribe()
       scroll.unsubscribe()
+      create.unsubscribe()
     }
   }, [actor])
 
@@ -230,6 +238,18 @@ export function App(): JSX.Element {
       // remembered id back through `open`), rather than landing on the list — an
       // absent workId would read as a deselect and clear the pick.
       showWorkView: () => shell.actions.open({ kind: "work", workId: vm.workId }, "center"),
+      // New chat lands in the selected workspace, falling back to the first — a
+      // no-op when none are open yet. Unlike createWork it's an async RPC, so it
+      // runs here rather than as a machine transition (inlined off the stable
+      // atom setter to keep this handler map memoized).
+      createChat: () => {
+        const workspaceId = vm.workspaceId ?? workspaces[0]?.id
+        if (!workspaceId) return
+        void runCreateChat({ payload: { workspaceId } }).then((exit) => {
+          if (Exit.isSuccess(exit)) shell.actions.selectChat(workspaceId, exit.value.id)
+        })
+      },
+      createWork: shell.actions.createWork,
       showTerminalView: () => shell.actions.open({ kind: "terminal" }, "right"),
       showGitView: () => shell.actions.open({ kind: "git" }, "right"),
       focusComposer: shell.actions.focusComposer,
@@ -246,7 +266,7 @@ export function App(): JSX.Element {
       }
     }
     return handlers
-  }, [shell.actions, pendingOrder, vm.detachedSession, vm.workId])
+  }, [shell.actions, pendingOrder, vm.detachedSession, vm.workId, vm.workspaceId, workspaces, runCreateChat])
   useKeyboardShortcuts(shortcutHandlers)
 
   const createChat = async (workspaceId: string): Promise<void> => {
@@ -403,6 +423,7 @@ export function App(): JSX.Element {
         <Panel defaultSize="38%" minSize="24%" className="min-w-[280px]">
           {center.surface.kind === "work" ? (
             <WorkPane
+              ref={workPaneRef}
               chatId={vm.chat?.id}
               selectedId={vm.workId}
               onSelectWork={(workId) => shell.actions.open({ kind: "work", workId }, "center")}

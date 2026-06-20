@@ -104,6 +104,7 @@ export type ArcShellEmitted =
   | { readonly type: "focusComposer" }
   | { readonly type: "focusTerminal" }
   | { readonly type: "scrollChatToBottom" }
+  | { readonly type: "startWorkCreate" }
 
 export type ArcShellEvent =
   | {
@@ -155,6 +156,7 @@ export type ArcShellEvent =
     }
   | { readonly type: "COMPOSER_FOCUS_REQUESTED" }
   | { readonly type: "CHAT_JUMP_TO_BOTTOM_REQUESTED" }
+  | { readonly type: "WORK_CREATE_REQUESTED" }
   | { readonly type: "LEFT_PANEL_TOGGLED" }
   | { readonly type: "RIGHT_PANEL_TOGGLED" }
   | { readonly type: "LEFT_PANEL_COLLAPSED_CHANGED"; readonly collapsed: boolean }
@@ -516,6 +518,18 @@ export const arcShellMachine = createMachine({
               layout: showCenter(context.layout, { kind: "chat" }),
             })),
             emit({ type: "scrollChatToBottom" }),
+          ],
+        },
+        WORK_CREATE_REQUESTED: {
+          // "Let me author work now": surface the navigator (center) over whatever
+          // was showing — the remembered selection is left untouched, the create
+          // form just renders over it — then emit so the pane opens the form, even
+          // when work was already visible.
+          actions: [
+            assign(({ context }) => ({
+              layout: showCenter(context.layout, { kind: "work" }),
+            })),
+            emit({ type: "startWorkCreate" }),
           ],
         },
         LEFT_PANEL_TOGGLED: {

@@ -27,6 +27,7 @@ const DEFAULT_ACTIONS: ArcShellActions = {
   stopSession: noop,
   focusComposer: noop,
   jumpChatToBottom: noop,
+  createWork: noop,
   toggleLeftPanel: noop,
   toggleRightPanel: noop,
   setLeftCollapsed: noop,

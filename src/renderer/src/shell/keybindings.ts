@@ -19,6 +19,8 @@ export type GlobalCommandId =
   | "toggleRightPanel"
   | "showChatView"
   | "showWorkView"
+  | "createChat"
+  | "createWork"
   | "showTerminalView"
   | "showGitView"
   | "focusComposer"
@@ -128,6 +130,11 @@ export const keybindings: ReadonlyArray<Keybinding<GlobalCommandId>> = [
   // toggled blind, leaving room for a third center view later.
   binding("showChatView", "mod+shift+c"),
   binding("showWorkView", "mod+shift+w"),
+  // new-chat / new-work: each surfaces its view and opens a fresh item from
+  // anywhere — the keyboard twins of the sidebar's "+ chat" and the work list's
+  // "+ new work" buttons. The combos below are defaults; they're rebindable.
+  binding("createChat", "mod+n"),
+  binding("createWork", "mod+shift+n"),
   // ⌘⇧T / ⌘⇧G switch the right panel between the terminal and git views (the
   // segmented control on the right side of the nav bar).
   binding("showTerminalView", "mod+shift+t"),

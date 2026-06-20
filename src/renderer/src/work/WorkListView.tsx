@@ -3,6 +3,8 @@ import type { Work } from "../../../shared/work.js"
 import { formatActivityDateTime, formatRelativeTime } from "../chat/activity-event-display.js"
 import { Button } from "../ui/Button.js"
 import { Chip } from "../ui/Chip.js"
+import { KbdShortcut } from "../ui/Kbd.js"
+import { comboFor } from "../shell/keybindings.js"
 import { ROW_BASE } from "../sidebar/row-styles.js"
 import { PriorityChip } from "./work-priority-controls.js"
 import { isResolved } from "./work-status-display.js"
@@ -19,21 +21,20 @@ export interface WorkListViewProps {
   readonly onTab: (tab: StatusTab) => void
   readonly onSelect: (work: Work) => void
   readonly onNew: () => void
-  readonly onRefresh: () => void
 }
 
 export function WorkListView(props: WorkListViewProps): JSX.Element {
-  const { work, counts, tab, loading, error, onTab, onSelect, onNew, onRefresh } = props
+  const { work, counts, tab, loading, error, onTab, onSelect, onNew } = props
   return (
     <>
       <header className={HEADER}>
         <h1 className={PANE_TITLE}>work</h1>
         <div className={HEADER_ACTIONS}>
-          <Button variant="quiet" size="sm" onClick={onRefresh}>
-            refresh
-          </Button>
           <Button size="sm" onClick={onNew}>
-            + new work
+            <span className="inline-flex items-center gap-1.5">
+              + new work
+              <KbdShortcut combo={comboFor("createWork")} />
+            </span>
           </Button>
         </div>
       </header>

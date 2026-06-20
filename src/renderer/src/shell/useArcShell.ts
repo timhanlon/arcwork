@@ -36,6 +36,8 @@ export interface ArcShellActions {
   readonly stopSession: (sessionId: string) => void
   readonly focusComposer: () => void
   readonly jumpChatToBottom: () => void
+  /** Surface the work navigator (center) and open the new-work form. */
+  readonly createWork: () => void
   readonly toggleLeftPanel: () => void
   readonly toggleRightPanel: () => void
   readonly setLeftCollapsed: (collapsed: boolean) => void
@@ -161,6 +163,9 @@ export function useArcShell({
       },
       jumpChatToBottom: () => {
         actor.send({ type: "CHAT_JUMP_TO_BOTTOM_REQUESTED" })
+      },
+      createWork: () => {
+        actor.send({ type: "WORK_CREATE_REQUESTED" })
       },
       toggleLeftPanel: () => {
         actor.send({ type: "LEFT_PANEL_TOGGLED" })

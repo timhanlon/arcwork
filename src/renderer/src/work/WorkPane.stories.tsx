@@ -145,7 +145,6 @@ export const List = () => (
       onTab={noop}
       onSelect={noop}
       onNew={noop}
-      onRefresh={noop}
     />
   </Frame>
 )
@@ -160,7 +159,6 @@ export const EmptyList = () => (
       onTab={noop}
       onSelect={noop}
       onNew={noop}
-      onRefresh={noop}
     />
   </Frame>
 )

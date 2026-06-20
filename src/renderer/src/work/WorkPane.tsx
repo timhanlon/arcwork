@@ -1,4 +1,4 @@
-import { type JSX, useMemo, useState } from "react"
+import { type JSX, forwardRef, useImperativeHandle, useMemo, useState } from "react"
 import { useAllWork } from "./useAllWork.js"
 import { useWorkComments } from "./useWorkComments.js"
 import { WorkCreateForm } from "./WorkCreateForm.js"
@@ -36,13 +36,25 @@ export interface WorkPaneProps {
   readonly onSelectWork?: (workId: string | undefined) => void
 }
 
+/**
+ * Imperative handle for driving the pane from the shell — `startCreate` opens the
+ * new-work form, the keyboard twin of the list header's button. App calls it after
+ * surfacing the work view, the same way it drives the chat pane's composer.
+ */
+export interface WorkPaneHandle {
+  readonly startCreate: () => void
+}
+
 // `h-full` fills the bounded resizable Panel so the inner flex chain
 // (min-h-0 + flex-1) can establish internal scroll regions — otherwise the
 // section grows to content and the whole pane scrolls, leaving nothing for the
 // detail editor's action bar to pin against.
 const PANE_SHELL = "flex h-full min-h-0 min-w-0 flex-col border-r border-border bg-background"
 
-export function WorkPane({ chatId, selectedId, onSelectWork }: WorkPaneProps = {}): JSX.Element {
+export const WorkPane = forwardRef<WorkPaneHandle, WorkPaneProps>(function WorkPane(
+  { chatId, selectedId, onSelectWork },
+  ref,
+): JSX.Element {
   const { work, loading, reload } = useAllWork(chatId)
   const [tab, setTab] = useState<StatusTab>("open")
   const [creating, setCreating] = useState(false)
@@ -56,6 +68,16 @@ export function WorkPane({ chatId, selectedId, onSelectWork }: WorkPaneProps = {
       onSelectWork?.(made.id)
     },
   })
+
+  // Open the new-work form on demand — driven by App's `startWorkCreate` signal,
+  // the keyboard twin of the list header's button. Clears any stale error so the
+  // form opens fresh, exactly like the button's `onNew`.
+  useImperativeHandle(ref, () => ({
+    startCreate: () => {
+      setError(undefined)
+      setCreating(true)
+    },
+  }), [setError])
 
   const counts = useMemo(() => {
     const map: Record<StatusTab, number> = {
@@ -134,8 +156,7 @@ export function WorkPane({ chatId, selectedId, onSelectWork }: WorkPaneProps = {
           setCreating(true)
           setError(undefined)
         }}
-        onRefresh={reload}
       />
     </section>
   )
-}
+})
