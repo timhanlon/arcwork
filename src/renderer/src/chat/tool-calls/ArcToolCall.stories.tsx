@@ -94,7 +94,6 @@ const workComment = {
   _tag: "WorkComment",
   id: "comment_01ktyg4cdpexrszzjznne7hnaz",
   workRefId: "work_01ktxk6mp1fvmrtndffwwc9d33",
-  kind: "decision-note",
   body: "Investigation update — the fix does not need to patch Effect at all. arc owns the HTTP layer, so add a global `HttpRouter.middleware` that rewrites empty-body 200 → 202. Survives `pnpm install`, spec-correct, version-proof.",
 }
 
@@ -107,7 +106,7 @@ const workUpdateArgs = {
     priority: "p1",
     body: "Decision: rewrite empty-body 200 → 202 in a global `HttpRouter.middleware` at arc's HTTP layer — no node_modules patch.",
   },
-  addComment: { kind: "decision-note", body: workComment.body },
+  addComment: { body: workComment.body },
 }
 
 const fullWork = {

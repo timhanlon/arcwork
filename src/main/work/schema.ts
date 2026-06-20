@@ -180,7 +180,6 @@ export interface WorkCommentRow {
   readonly subjectKind: string // node | ref
   readonly subjectId: string // a graph_node id (node) or graph_ref id (ref)
   readonly body: string
-  readonly kind: string // comment | review | decision-note
   readonly actor: string | null
   readonly sessionId: string | null
   readonly chatId: string | null
@@ -703,5 +702,41 @@ export const workMigrations: Migrations = {
         WHERE r.id = search_document.ref
       ))
       WHERE source_kind = 'comment'`,
+  ),
+  // Comment `kind` (comment/review/decision-note) was a write-only vocabulary —
+  // no read path or UI ever branched on it. Cut to a single comment type before
+  // the OSS release. Recreate the comment→search_document trigger without the
+  // column (metadata_text becomes empty for comment rows), then drop it.
+  "0008_drop_comment_kind": sqlMigration(
+    `DROP TRIGGER work_comment_search_ai`,
+    `CREATE TRIGGER work_comment_search_ai AFTER INSERT ON work_comment BEGIN
+    INSERT OR REPLACE INTO search_document(
+      id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
+      labels_json, status, created_at, updated_at
+    )
+    SELECT
+      'comment:' || new.id,
+      new.work_ref_id,
+      'work',
+      'comment',
+      new.work_ref_id,
+      COALESCE(new.chat_id, n.chat_id),
+      COALESCE(new.workspace_id, n.workspace_id, r.workspace_id),
+      n.title,
+      new.body,
+      '',
+      n.labels_json,
+      COALESCE((
+        SELECT se.to_id FROM graph_edge se
+        WHERE se.from_id = new.work_ref_id AND se.type = 'status_set'
+        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
+      ), n.status),
+      new.created_at,
+      new.created_at
+    FROM graph_ref r
+    JOIN graph_node n ON n.id = r.current_node_id
+    WHERE r.id = new.work_ref_id;
+  END`,
+    `ALTER TABLE work_comment DROP COLUMN kind`,
   ),
 }

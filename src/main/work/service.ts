@@ -9,12 +9,10 @@ import type {
   WorkChange,
   WorkComment,
   WorkCommentInput,
-  WorkCommentKind,
   WorkCommentListing,
   WorkCommentSubjectKind,
   WorkCreateInput,
   WorkExecution,
-  WorkLinkType,
   WorkPriority,
   WorkProvenance,
   WorkReviseInput,
@@ -87,16 +85,6 @@ export class WorkService extends Context.Service<
       refId: string,
       edits: WorkReviseInput,
       provenance: WorkProvenance,
-    ) => Effect.Effect<Work, SqlError | ArcRequestError>
-    /** Relate two units of work with a typed live edge (blocks/depends_on/…).
-     * Both refs must exist; self-links and exact duplicates are rejected/no-op.
-     * Returns the `from` work. `ArcRequestError` on unknown work or self-link. */
-    readonly link: (
-      fromRefId: string,
-      type: WorkLinkType,
-      toRefId: string,
-      provenance: WorkProvenance,
-      note?: string,
     ) => Effect.Effect<Work, SqlError | ArcRequestError>
     /** Stamp a typed external citation (commit/pr/url/file/session) onto an
      * existing unit of work — the post-creation form of the `citations` accepted
@@ -582,55 +570,6 @@ export const WorkServiceLive = Layer.effect(
         }),
     )
 
-    const link = Effect.fn("WorkService.link")(
-      (
-        fromRefId: string,
-        type: WorkLinkType,
-        toRefId: string,
-        provenance: WorkProvenance,
-        note?: string,
-      ) =>
-        Effect.gen(function* () {
-          provenance = yield* scopedProvenance(provenance)
-          if (fromRefId === toRefId) {
-            return yield* Effect.fail(arcRequestError("cannot link a unit of work to itself"))
-          }
-          const from = yield* store.loadWork(fromRefId)
-          if (!from) return yield* Effect.fail(arcRequestError(`unknown work: ${fromRefId}`))
-          const to = yield* store.loadWork(toRefId)
-          if (!to) return yield* Effect.fail(arcRequestError(`unknown work: ${toRefId}`))
-
-          // Idempotent: an identical (from, type, to) edge is a no-op.
-          const existing = yield* store.loadEdges(fromRefId, type)
-          if (existing.some((e) => e.toId === toRefId)) return yield* toWork(from)
-
-          const now = yield* nowIso
-          const edge: WorkEdgeRow = {
-            id: newArcId("work_edge"),
-            type,
-            fromKind: "ref",
-            fromId: fromRefId,
-            toKind: "ref",
-            toId: toRefId,
-            family: "live",
-            source: "user_confirmed",
-            confidence: "high",
-            note: note ?? null,
-            actor: provenance.actor ?? null,
-            sessionId: provenance.sessionId ?? null,
-            workspaceId: provenance.workspaceId ?? null,
-            observedSource: provenance.source,
-            createdAt: now,
-            schemaVersion: WORK_SCHEMA_VERSION,
-          }
-          yield* store.recordEdge(fromRefId, edge, now)
-          const row = yield* store.loadWork(fromRefId)
-          if (!row) return yield* Effect.die(new Error(`work ${fromRefId} vanished after link`))
-          yield* publishChange(fromRefId, provenance.chatId)
-          return yield* toWork(row)
-        }),
-    )
-
     const addCitation = Effect.fn("WorkService.addCitation")(
       (refId: string, citation: Citation, provenance: WorkProvenance, note?: string) =>
         Effect.gen(function* () {
@@ -829,7 +768,6 @@ export const WorkServiceLive = Layer.effect(
         subjectKind: row.subjectKind as WorkCommentSubjectKind,
         subjectId: row.subjectId,
         body: row.body,
-        kind: row.kind as WorkCommentKind,
         createdAt: row.createdAt,
         provenance: {
           actor: row.actor ?? undefined,
@@ -860,7 +798,6 @@ export const WorkServiceLive = Layer.effect(
             subjectKind: toRef ? "ref" : "node",
             subjectId: toRef ? refId : current.nodeId,
             body: input.body,
-            kind: input.kind ?? "comment",
             actor: provenance.actor ?? null,
             sessionId: provenance.sessionId ?? null,
             chatId: provenance.chatId ?? null,
@@ -904,7 +841,6 @@ export const WorkServiceLive = Layer.effect(
       updateStatus,
       updatePriority,
       revise,
-      link,
       addCitation,
       linkTargetSession,
       listOpen,

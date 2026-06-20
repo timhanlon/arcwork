@@ -208,15 +208,6 @@ export const WorkCommentSubjectKind = Schema.Literals(["node", "ref"])
 export type WorkCommentSubjectKind = typeof WorkCommentSubjectKind.Type
 
 /**
- * The flavour of a comment. `comment` is a plain remark (the default); `review`
- * marks reviewer feedback; `decision-note` records a decision rationale. These
- * are descriptive, not workflow states — they never change the work's status.
- */
-export const WORK_COMMENT_KINDS = ["comment", "review", "decision-note"] as const
-export const WorkCommentKind = Schema.Literals(WORK_COMMENT_KINDS)
-export type WorkCommentKind = typeof WorkCommentKind.Type
-
-/**
  * A comment attached to a piece of work — the durable place agents capture a
  * Codex/Claude back-and-forth without copying text around. It anchors to the
  * specific graph object discussed: by default the *current revision node* (so
@@ -231,7 +222,6 @@ export const WorkComment = Schema.Struct({
   subjectKind: WorkCommentSubjectKind,
   subjectId: Schema.String, // a work_rev_… node (subjectKind 'node') or work_… ref ('ref')
   body: Schema.String,
-  kind: WorkCommentKind,
   createdAt: Schema.String,
   provenance: WorkProvenance,
 })
@@ -243,7 +233,6 @@ export type WorkComment = typeof WorkComment.Type
  */
 export const WorkCommentInput = Schema.Struct({
   body: Schema.String,
-  kind: Schema.optional(WorkCommentKind),
   /** Attach to the durable work ref instead of the current revision node. */
   ref: Schema.optional(Schema.Boolean),
 })
@@ -264,21 +253,6 @@ export const WorkCommentListing = Schema.Struct({
   olderRevisionCommentCount: Schema.Number,
 })
 export type WorkCommentListing = typeof WorkCommentListing.Type
-
-/**
- * Typed relationships between two units of work (the proposal's "live" edge
- * vocabulary, work-to-work subset). `references` is reserved for citations and
- * `supersedes` gets its own verb, so neither is here.
- */
-export const WORK_LINK_TYPES = [
-  "blocks",
-  "depends_on",
-  "duplicates",
-  "resolved_by",
-  "implements",
-] as const
-export const WorkLinkType = Schema.Literals(WORK_LINK_TYPES)
-export type WorkLinkType = typeof WorkLinkType.Type
 
 /**
  * The change descriptor `WorkService.changes` publishes on every real mutation,

@@ -91,7 +91,6 @@ const comment = (
   workRefId: "work_01a",
   subjectKind: "node",
   subjectId: CURRENT_NODE,
-  kind: "comment",
   createdAt: "2026-06-08T14:20:00.000Z",
   provenance: { source: "cli", actor: "codex", sessionId: "target_01abc234def" },
   ...over,
@@ -103,7 +102,6 @@ const currentComments: WorkCommentListing = {
   comments: [
     comment({
       id: "comment_01a",
-      kind: "review",
       body: "Codex flags the **CAS** path: status edges should not allocate a new node.",
       provenance: { source: "cli", actor: "codex", sessionId: "target_01abc234def" },
     }),
@@ -111,7 +109,6 @@ const currentComments: WorkCommentListing = {
       id: "comment_01b",
       subjectKind: "ref",
       subjectId: "work_01a",
-      kind: "decision-note",
       body: "Decision: keep comments append-only; no resolving in v0.",
       provenance: { source: "rpc", chatId: "chat_01xyz789" },
     }),

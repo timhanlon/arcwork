@@ -15,7 +15,6 @@ import {
   Work,
   WorkCommentListing,
   WorkCreateInput,
-  WorkLinkType,
   WorkPriority,
   WorkReviseInput,
   WorkStatus,
@@ -313,16 +312,6 @@ export const ArcRpcs = RpcGroup.make(
   }),
   Rpc.make("ReviseWork", {
     payload: { id: Schema.String, edits: WorkReviseInput },
-    success: Work,
-    error: RpcError,
-  }),
-  Rpc.make("LinkWork", {
-    payload: {
-      fromId: Schema.String,
-      type: WorkLinkType,
-      toId: Schema.String,
-      note: Schema.optional(Schema.String),
-    },
     success: Work,
     error: RpcError,
   }),

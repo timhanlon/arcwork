@@ -179,11 +179,6 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
         "ReviseWork",
         Effect.flatMap(WorkService, (_) => _.revise(req.id, req.edits, { source: "rpc" })),
       ),
-    LinkWork: (req) =>
-      rpcEffect(
-        "LinkWork",
-        Effect.flatMap(WorkService, (_) => _.link(req.fromId, req.type, req.toId, { source: "rpc" }, req.note)),
-      ),
   }),
 )
 

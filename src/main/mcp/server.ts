@@ -17,7 +17,6 @@ import {
   WorkComment,
   WorkPriority,
   WorkStatus,
-  WorkCommentKind,
 } from "../../shared/work.js"
 import {
   ArcGetParams,
@@ -122,7 +121,6 @@ const WorkUpdateTool = Tool.make("arc.work.update", {
     addComment: Schema.optional(
       Schema.Struct({
         body: Schema.String,
-        kind: Schema.optional(WorkCommentKind),
         ref: Schema.optional(Schema.Boolean),
       }),
     ),
@@ -229,7 +227,7 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
           if (addComment) {
             comment = yield* work.comment(
               params.workRefId,
-              { body: addComment.body, kind: addComment.kind, ref: addComment.ref },
+              { body: addComment.body, ref: addComment.ref },
               provenance,
             )
           }

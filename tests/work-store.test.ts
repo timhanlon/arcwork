@@ -258,44 +258,6 @@ describe("work create + projection (in-memory graph store)", () => {
     expect(result.same.nodeId).toBe(result.created.nodeId)
   })
 
-  it("link records a typed live edge between two work refs", async () => {
-    const result = await run(
-      Effect.gen(function* () {
-        const work = yield* WorkService
-        const store = yield* WorkStore
-        const a = yield* work.create({ title: "feature", body: "x" }, cliProvenance)
-        const b = yield* work.create({ title: "blocker", body: "y" }, cliProvenance)
-        yield* work.link(a.id, "depends_on", b.id, { source: "cli" }, "needs the API first")
-        const edges = yield* store.loadEdges(a.id, "depends_on")
-        return { a, b, edge: edges[0] }
-      }),
-    )
-    expect(result.edge?.toId).toBe(result.b.id)
-    expect(result.edge?.toKind).toBe("ref")
-    expect(result.edge?.family).toBe("live")
-    expect(result.edge?.note).toBe("needs the API first")
-  })
-
-  it("link is idempotent and rejects self-links and unknown work", async () => {
-    const result = await run(
-      Effect.gen(function* () {
-        const work = yield* WorkService
-        const store = yield* WorkStore
-        const a = yield* work.create({ title: "a", body: "x" }, cliProvenance)
-        const b = yield* work.create({ title: "b", body: "y" }, cliProvenance)
-        yield* work.link(a.id, "blocks", b.id, { source: "cli" })
-        yield* work.link(a.id, "blocks", b.id, { source: "cli" }) // duplicate -> no-op
-        const dupCount = (yield* store.loadEdges(a.id, "blocks")).length
-        const self = yield* Effect.exit(work.link(a.id, "blocks", a.id, { source: "cli" }))
-        const unknown = yield* Effect.exit(work.link(a.id, "blocks", "work_nope", { source: "cli" }))
-        return { dupCount, self: self._tag, unknown: unknown._tag }
-      }),
-    )
-    expect(result.dupCount).toBe(1)
-    expect(result.self).toBe("Failure")
-    expect(result.unknown).toBe("Failure")
-  })
-
   it("revise fails ArcRequestError on unknown work", async () => {
     const exit = await run(
       Effect.gen(function* () {
@@ -569,25 +531,12 @@ describe("work create + projection (in-memory graph store)", () => {
     // Default subject is the work's current revision node.
     expect(result.comment.subjectKind).toBe("node")
     expect(result.comment.subjectId).toBe(result.created.nodeId)
-    expect(result.comment.kind).toBe("comment")
     expect(result.comment.body).toBe("Codex suggests Redis")
     expect(result.comment.provenance).toMatchObject({ source: "cli", sessionId: "target_abc" })
     // It surfaces as a current-revision comment, with no older revisions yet.
     expect(result.listing.comments.map((c) => c.id)).toEqual([result.comment.id])
     expect(result.listing.currentNodeId).toBe(result.created.nodeId)
     expect(result.listing.olderRevisionCommentCount).toBe(0)
-  })
-
-  it("honors the comment kind", async () => {
-    const kind = await run(
-      Effect.gen(function* () {
-        const work = yield* WorkService
-        const created = yield* work.create({ title: "t", body: "x" }, cliProvenance)
-        const c = yield* work.comment(created.id, { body: "looks good", kind: "review" }, cliProvenance)
-        return c.kind
-      }),
-    )
-    expect(kind).toBe("review")
   })
 
   it("a comment bumps the work ref's updated_at to the comment time (recency)", async () => {
