@@ -4,7 +4,7 @@ import { ArcRpcs, type RpcError } from "../shared/rpc.js"
 import { ElectronRpcServerProtocol } from "./rpc-transport.js"
 import { WorkspaceService } from "./services/WorkspaceService.js"
 import { WorkspaceFilesService } from "./services/WorkspaceFilesService.js"
-import { GitService, toWirePullRequest } from "./services/GitService.js"
+import { GitService, toWirePullRequest, toWireWorktree } from "./services/GitService.js"
 import { ProviderRegistry } from "./services/ProviderRegistry.js"
 import { PresetRegistry } from "./services/PresetRegistry.js"
 import { ChatService } from "./services/ChatService.js"
@@ -83,6 +83,60 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
         Effect.map(
           Effect.flatMap(GitService, (_) => _.syncPullRequests(req.workspaceId)),
           (rows) => rows.map(toWirePullRequest),
+        ),
+      ),
+    CreateWorktree: (req) =>
+      rpcEffect(
+        "CreateWorktree",
+        Effect.map(
+          Effect.flatMap(GitService, (_) =>
+            _.createWorktree(req.workspaceId, {
+              branch: req.branch,
+              baseRef: req.baseRef,
+              createBranch: req.createBranch,
+            }),
+          ),
+          toWireWorktree,
+        ),
+      ),
+    OpenWorktree: (req) =>
+      rpcEffect("OpenWorktree", Effect.flatMap(GitService, (_) => _.openWorktree(req.worktreePath))),
+    RemoveWorktree: (req) =>
+      rpcEffect(
+        "RemoveWorktree",
+        Effect.as(
+          Effect.flatMap(GitService, (_) =>
+            _.removeWorktree(req.workspaceId, req.worktreePath, { force: req.force }),
+          ),
+          { removed: true },
+        ),
+      ),
+    PruneWorktrees: (req) =>
+      rpcEffect(
+        "PruneWorktrees",
+        Effect.map(
+          Effect.flatMap(GitService, (_) => _.pruneWorktrees(req.workspaceId)),
+          (removed) => ({ removed }),
+        ),
+      ),
+    PruneMergedWorktrees: (req) =>
+      rpcEffect(
+        "PruneMergedWorktrees",
+        Effect.flatMap(GitService, (_) => _.pruneMergedWorktrees(req.workspaceId)),
+      ),
+    CreatePullRequest: (req) =>
+      rpcEffect(
+        "CreatePullRequest",
+        Effect.map(
+          Effect.flatMap(GitService, (_) =>
+            _.createPullRequest(req.workspaceId, {
+              title: req.title,
+              body: req.body,
+              base: req.base,
+              draft: req.draft,
+            }),
+          ),
+          (pr) => (pr ? toWirePullRequest(pr) : null),
         ),
       ),
     ListPresets: () => rpcEffect("ListPresets", Effect.flatMap(PresetRegistry, (_) => _.list)),

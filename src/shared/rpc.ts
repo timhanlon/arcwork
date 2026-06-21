@@ -5,7 +5,7 @@ import { Preset } from "./preset.js"
 import { Chat } from "./chat.js"
 import { ActivityEvent } from "./activity-event.js"
 import { ChatMessage } from "./chat-message.js"
-import { GitFileDiff, GitStatus, PullRequest, WorkspaceGitContext } from "./git.js"
+import { GitFileDiff, GitStatus, PullRequest, Worktree, WorkspaceGitContext } from "./git.js"
 import { PendingRequest } from "./chat-request.js"
 import { Instance, TargetSession } from "./instance.js"
 import { LiveTargetState } from "./live-target-state.js"
@@ -163,6 +163,60 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("SyncWorkspacePullRequests", {
     payload: { workspaceId: Schema.String },
     success: Schema.Array(PullRequest),
+    error: RpcError,
+  }),
+  /** Create an arc-managed worktree for a branch under the workspace's repo.
+   * `createBranch` cuts a new branch off `baseRef` (default branch when omitted). */
+  Rpc.make("CreateWorktree", {
+    payload: {
+      workspaceId: Schema.String,
+      branch: Schema.String,
+      baseRef: Schema.optional(Schema.String),
+      createBranch: Schema.optional(Schema.Boolean),
+    },
+    success: Worktree,
+    error: RpcError,
+  }),
+  /** Open an existing worktree path as a workspace (no dialog). */
+  Rpc.make("OpenWorktree", {
+    payload: { worktreePath: Schema.String },
+    success: Workspace,
+    error: RpcError,
+  }),
+  /** Remove a worktree (`git worktree remove`); `force` overrides a dirty tree. */
+  Rpc.make("RemoveWorktree", {
+    payload: {
+      workspaceId: Schema.String,
+      worktreePath: Schema.String,
+      force: Schema.optional(Schema.Boolean),
+    },
+    success: Schema.Struct({ removed: Schema.Boolean }),
+    error: RpcError,
+  }),
+  /** Prune missing worktrees and reconcile the read model; returns the count. */
+  Rpc.make("PruneWorktrees", {
+    payload: { workspaceId: Schema.String },
+    success: Schema.Struct({ removed: Schema.Number }),
+    error: RpcError,
+  }),
+  /** Auto-prune arc-managed worktrees whose branch has a merged PR (safe-only).
+   * Returns the paths actually pruned. */
+  Rpc.make("PruneMergedWorktrees", {
+    payload: { workspaceId: Schema.String },
+    success: Schema.Array(Schema.String),
+    error: RpcError,
+  }),
+  /** Open a GitHub PR for the workspace's current branch via `gh pr create`,
+   * then sync it into the read model. */
+  Rpc.make("CreatePullRequest", {
+    payload: {
+      workspaceId: Schema.String,
+      title: Schema.optional(Schema.String),
+      body: Schema.optional(Schema.String),
+      base: Schema.optional(Schema.String),
+      draft: Schema.optional(Schema.Boolean),
+    },
+    success: Schema.NullOr(PullRequest),
     error: RpcError,
   }),
   Rpc.make("ListPresets", { success: Schema.Array(Preset), error: RpcError }),

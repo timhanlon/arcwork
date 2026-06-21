@@ -92,6 +92,40 @@ export const arcWorkStateDir = (profile: ArcProfile): string =>
 export const arcWorkRuntimeDir = (profile: ArcProfile): string =>
   path.join(os.homedir(), ARCWORK_DIRNAME, profile, "runtime")
 
+/**
+ * The profile's home-rooted Arc Work *worktrees* dir — where arc-managed git
+ * worktrees are created, one tree per repo/branch. Arc owns these directories
+ * (create on `worktree add`, remove on prune), so they live outside any source
+ * checkout rather than as siblings the user has to clean up.
+ */
+export const arcWorkWorktreesDir = (
+  profile: ArcProfile,
+  env: NodeJS.ProcessEnv = process.env,
+): string => {
+  // `ARC_WORKTREES_DIR` is an escape hatch (tests, sandboxing) that pins the
+  // managed-worktree root outright — the worktree analogue of `ARC_DB_PATH`.
+  const override = env["ARC_WORKTREES_DIR"]?.trim()
+  if (override && override.length > 0) return override
+  return path.join(os.homedir(), ARCWORK_DIRNAME, profile, "worktrees")
+}
+
+/** Filesystem-safe slug for a repo or branch segment of a managed worktree path:
+ * lowercased, non-alphanumerics collapsed to `-`, trimmed. `feat/git` →
+ * `feat-git`, so a branch with slashes never spawns nested directories. */
+export const worktreeSlug = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "x"
+
+/** Absolute path for an arc-managed worktree of `branch` under `repoSlug`:
+ * `~/.arcwork/<profile>/worktrees/<repoSlug>/<branchSlug>`. */
+export const arcWorkWorktreePath = (
+  profile: ArcProfile,
+  repoSlug: string,
+  branch: string,
+): string => path.join(arcWorkWorktreesDir(profile), worktreeSlug(repoSlug), worktreeSlug(branch))
+
 export interface ResolvedDbPath {
   /** The profile that was selected. */
   readonly profile: ArcProfile

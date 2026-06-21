@@ -19,6 +19,10 @@ export class WorkspaceService extends Context.Service<
     readonly list: Effect.Effect<ReadonlyArray<Workspace>>
     readonly changes: Stream.Stream<ReadonlyArray<Workspace>>
     readonly open: Effect.Effect<Workspace | undefined, SqlError>
+    /** Register (or refresh) a workspace at an explicit directory — the no-dialog
+     * sibling of {@link open}, used to open an arc-created worktree as a
+     * workspace. Idempotent on path. */
+    readonly openAt: (dir: string) => Effect.Effect<Workspace, SqlError>
   }
 >()("WorkspaceService") {}
 
@@ -80,6 +84,6 @@ export const WorkspaceServiceLive = Layer.effect(
       return yield* upsertByPath(result.filePaths[0]!)
     }).pipe(Effect.withSpan("arc.workspace.open_dialog"))
 
-    return { list, changes, open }
+    return { list, changes, open, openAt: upsertByPath }
   }),
 )

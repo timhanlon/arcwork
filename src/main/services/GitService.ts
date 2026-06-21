@@ -1,6 +1,7 @@
 import { Context, Duration, Effect, Fiber, Layer, PubSub, Stream } from "effect"
 import { execFile } from "node:child_process"
 import * as fs from "node:fs/promises"
+import { realpathSync } from "node:fs"
 import * as path from "node:path"
 import type {
   GitChangeStatus,
@@ -19,6 +20,7 @@ import { WorkspaceService } from "./WorkspaceService.js"
 import { ArcStore } from "../db/store.js"
 import { newArcId } from "../../shared/ids.js"
 import { nowIso } from "../clock.js"
+import { arcWorkWorktreePath, arcWorkWorktreesDir, resolveProfile } from "../db/paths.js"
 
 export class GitService extends Context.Service<
   GitService,
@@ -61,6 +63,52 @@ export class GitService extends Context.Service<
      * DEBOUNCED PR sync (per workspace, latest push wins) rather than syncing
      * now. Best-effort. */
     readonly notifyPrePush: (cwd: string) => Effect.Effect<void>
+    /** Create an arc-managed worktree for `branch` under the workspace's repo.
+     * The tree lands in `~/.arcwork/<profile>/worktrees/<repo>/<branch>` (arc
+     * owns it). `createBranch` makes a new branch off `baseRef` (default branch
+     * when omitted); otherwise `branch` must already exist. Resolves to the
+     * persisted worktree row. */
+    readonly createWorktree: (
+      workspaceId: string,
+      options: {
+        readonly branch: string
+        readonly baseRef?: string
+        readonly createBranch?: boolean
+      },
+    ) => Effect.Effect<WorktreeRow, ArcRequestError>
+    /** Open an existing worktree path as a workspace (no dialog): register the
+     * workspace, detect/bind its repo+branch, and return it. */
+    readonly openWorktree: (worktreePath: string) => Effect.Effect<Workspace, ArcRequestError>
+    /** Remove a worktree via `git worktree remove` and drop its read-model row.
+     * Refuses the main worktree; without `force`, git refuses a dirty/locked
+     * tree. */
+    readonly removeWorktree: (
+      workspaceId: string,
+      worktreePath: string,
+      options?: { readonly force?: boolean },
+    ) => Effect.Effect<void, ArcRequestError>
+    /** `git worktree prune` for missing trees, then reconcile the read model.
+     * Resolves to the number of stale rows removed. */
+    readonly pruneWorktrees: (workspaceId: string) => Effect.Effect<number, ArcRequestError>
+    /** Auto-prune arc-managed worktrees whose branch has a merged PR — the
+     * "remove after merge when safe" lifecycle step. Skips the main worktree,
+     * non-arc-managed trees, and any tree with uncommitted changes. Resolves to
+     * the paths actually pruned. */
+    readonly pruneMergedWorktrees: (
+      workspaceId: string,
+    ) => Effect.Effect<ReadonlyArray<string>, ArcRequestError>
+    /** Open a GitHub PR for the workspace's current branch via `gh pr create`
+     * (base = repo default branch unless overridden), then sync it into the read
+     * model. Resolves to the new PR row, or null if it couldn't be read back. */
+    readonly createPullRequest: (
+      workspaceId: string,
+      options: {
+        readonly title?: string
+        readonly body?: string
+        readonly base?: string
+        readonly draft?: boolean
+      },
+    ) => Effect.Effect<PullRequestRow | null, ArcRequestError>
   }
 >()("GitService") {}
 
@@ -140,12 +188,25 @@ interface LineStat {
   readonly isBinary: boolean
 }
 
+// Every git child resolves its repo from `-C <cwd>`, so any inherited GIT_*
+// vars (GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE/…) must be stripped — otherwise a
+// process that itself started inside a git context (e.g. arc launched from a
+// hook, or the test suite running under `git commit`'s pre-commit) would point
+// git at the wrong repo. Computed once; the set is stable for the process.
+const GIT_CLEAN_ENV: NodeJS.ProcessEnv = (() => {
+  const env: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith("GIT_")) env[key] = value
+  }
+  return env
+})()
+
 const runGit = (cwd: string, args: ReadonlyArray<string>): Promise<GitResult> =>
   new Promise((resolve) => {
     execFile(
       "git",
       ["-C", cwd, ...args],
-      { maxBuffer: 64 * 1024 * 1024 },
+      { maxBuffer: 64 * 1024 * 1024, env: GIT_CLEAN_ENV },
       (error, stdout) => {
         const exitCode =
           typeof (error as { code?: unknown } | null)?.code === "number"
@@ -154,6 +215,32 @@ const runGit = (cwd: string, args: ReadonlyArray<string>): Promise<GitResult> =>
               ? 1
               : 0
         resolve({ stdout, exitCode })
+      },
+    )
+  })
+
+interface GitCapture {
+  readonly stdout: string
+  readonly stderr: string
+  readonly exitCode: number
+}
+
+/** Like {@link runGit} but keeps stderr — git writes failure messages there, so
+ * mutations (worktree add/remove/prune) need it to surface a real error. */
+const runGitCapture = (cwd: string, args: ReadonlyArray<string>): Promise<GitCapture> =>
+  new Promise((resolve) => {
+    execFile(
+      "git",
+      ["-C", cwd, ...args],
+      { maxBuffer: 64 * 1024 * 1024, env: GIT_CLEAN_ENV },
+      (error, stdout, stderr) => {
+        const exitCode =
+          typeof (error as { code?: unknown } | null)?.code === "number"
+            ? (error as { code: number }).code
+            : error
+              ? 1
+              : 0
+        resolve({ stdout, stderr: stderr ?? "", exitCode })
       },
     )
   })
@@ -489,7 +576,7 @@ interface GhResult {
 
 const runGh = (cwd: string, args: ReadonlyArray<string>): Promise<GhResult> =>
   new Promise((resolve) => {
-    execFile("gh", args, { cwd, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
+    execFile("gh", args, { cwd, maxBuffer: 64 * 1024 * 1024, env: GIT_CLEAN_ENV }, (error, stdout) => {
       resolve({
         stdout,
         exitCode:
@@ -830,6 +917,10 @@ export const GitServiceLive = Layer.effect(
               if (existing) yield* Fiber.interrupt(existing)
               const fiber = yield* Effect.sleep(PUSH_SYNC_DELAY).pipe(
                 Effect.flatMap(() => syncPullRequests(w.id)),
+                // A deliberate push is the right moment to reap worktrees whose PR
+                // just merged — unlike the passive open-sync, which must never
+                // delete trees. Best-effort; failures here are swallowed below.
+                Effect.flatMap(() => pruneMergedWorktrees(w.id)),
                 Effect.flatMap(() => publishChange(w.id)),
                 Effect.asVoid,
                 Effect.catch((e) => Effect.logWarning(`git push PR sync failed for ${w.path}: ${e}`)),
@@ -841,11 +932,242 @@ export const GitServiceLive = Layer.effect(
         )
       }).pipe(Effect.withSpan("arc.git.notify_pre_push", { attributes: { "arc.cwd": cwd } }))
 
+    // --- Worktree lifecycle (create / open / remove / prune) + PR creation. ---
+
+    const profile = resolveProfile()
+    const managedWorktreesRoot = arcWorkWorktreesDir(profile)
+
+    const requireRepository = (workspaceId: string): Effect.Effect<RepositoryRow, ArcRequestError> =>
+      detectRepository(workspaceId).pipe(
+        Effect.flatMap((repo) =>
+          repo
+            ? Effect.succeed(repo)
+            : Effect.fail(arcRequestError(`Workspace ${workspaceId} is not in a git repository`)),
+        ),
+      )
+
+    // The slug arc files a managed worktree under: the GitHub repo name when we
+    // have one, else the clone's directory name.
+    const repoSlugFor = (repo: RepositoryRow): string => repo.githubRepo ?? path.basename(repo.rootPath)
+
+    // git reports symlink-resolved paths (e.g. /private/var on macOS) while the
+    // managed root is derived from os.homedir(); canonicalize both before the
+    // prefix check, or a symlinked home would read as "not arc-managed".
+    const canonical = (p: string): string => {
+      try {
+        return realpathSync(p)
+      } catch {
+        return path.resolve(p)
+      }
+    }
+    const isManaged = (worktreePath: string): boolean =>
+      canonical(worktreePath).startsWith(canonical(managedWorktreesRoot) + path.sep)
+
+    const createWorktree = (
+      workspaceId: string,
+      options: { readonly branch: string; readonly baseRef?: string; readonly createBranch?: boolean },
+    ): Effect.Effect<WorktreeRow, ArcRequestError> =>
+      Effect.gen(function* () {
+        const repo = yield* requireRepository(workspaceId)
+        const dest = arcWorkWorktreePath(profile, repoSlugFor(repo), options.branch)
+        // `git worktree add` creates the leaf dir; ensure the repo-slug parent exists.
+        yield* Effect.tryPromise({
+          try: () => fs.mkdir(path.dirname(dest), { recursive: true }),
+          catch: (e) => arcRequestError(`worktree dir create failed: ${e}`),
+        })
+        const args = options.createBranch
+          ? ["worktree", "add", "-b", options.branch, dest, options.baseRef ?? repo.defaultBranch ?? "HEAD"]
+          : ["worktree", "add", dest, options.branch]
+        const result = yield* Effect.promise(() => runGitCapture(repo.rootPath, args))
+        if (result.exitCode !== 0) {
+          return yield* Effect.fail(
+            arcRequestError(`git worktree add failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`),
+          )
+        }
+        // detectRepository re-enumerates every worktree under the common git dir,
+        // so the new tree lands in the read model; read it back to return its row.
+        yield* detectRepository(workspaceId)
+        const rows = yield* store
+          .loadWorktreesForRepository(repo.id)
+          .pipe(Effect.mapError((e) => arcRequestError(`worktree load failed: ${e}`)))
+        // Match on branch, not path: git reports the canonical (symlink-resolved)
+        // path, which can differ from `dest` (e.g. /private/var vs /var on macOS),
+        // and a branch is checked out in at most one worktree.
+        const created = rows.find((w) => w.branch === options.branch)
+        if (!created) return yield* Effect.fail(arcRequestError(`worktree created but not found for ${options.branch}`))
+        yield* publishChange(workspaceId)
+        return created
+      }).pipe(Effect.withSpan("arc.git.create_worktree", { attributes: { "arc.workspace_id": workspaceId } }))
+
+    const openWorktree = (worktreePath: string): Effect.Effect<Workspace, ArcRequestError> =>
+      Effect.gen(function* () {
+        const workspace = yield* workspaces
+          .openAt(worktreePath)
+          .pipe(Effect.mapError((e) => arcRequestError(`open worktree failed: ${e}`)))
+        yield* detectRepository(workspace.id)
+        yield* publishChange(workspace.id)
+        return workspace
+      }).pipe(Effect.withSpan("arc.git.open_worktree", { attributes: { "arc.worktree_path": worktreePath } }))
+
+    const removeWorktree = (
+      workspaceId: string,
+      worktreePath: string,
+      options?: { readonly force?: boolean },
+    ): Effect.Effect<void, ArcRequestError> =>
+      Effect.gen(function* () {
+        const repo = yield* requireRepository(workspaceId)
+        if (path.resolve(worktreePath) === path.resolve(repo.rootPath)) {
+          return yield* Effect.fail(arcRequestError("Refusing to remove the main worktree"))
+        }
+        const args = ["worktree", "remove", ...(options?.force ? ["--force"] : []), worktreePath]
+        const result = yield* Effect.promise(() => runGitCapture(repo.rootPath, args))
+        if (result.exitCode !== 0) {
+          return yield* Effect.fail(
+            arcRequestError(`git worktree remove failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`),
+          )
+        }
+        yield* store
+          .deleteWorktreeByPath(worktreePath)
+          .pipe(Effect.mapError((e) => arcRequestError(`worktree row delete failed: ${e}`)))
+        yield* publishChange(workspaceId)
+      }).pipe(Effect.withSpan("arc.git.remove_worktree", { attributes: { "arc.workspace_id": workspaceId } }))
+
+    const pruneWorktrees = (workspaceId: string): Effect.Effect<number, ArcRequestError> =>
+      Effect.gen(function* () {
+        const repo = yield* requireRepository(workspaceId)
+        const result = yield* Effect.promise(() => runGitCapture(repo.rootPath, ["worktree", "prune"]))
+        if (result.exitCode !== 0) {
+          return yield* Effect.fail(
+            arcRequestError(`git worktree prune failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`),
+          )
+        }
+        // Reconcile: git no longer lists pruned trees, so drop their stale rows
+        // (detectRepository only upserts; it never deletes vanished worktrees).
+        const live = parseWorktreeList(
+          (yield* Effect.promise(() => runGit(repo.rootPath, ["worktree", "list", "--porcelain"]))).stdout,
+        )
+        const livePaths = new Set(live.map((w) => path.resolve(w.path)))
+        const persisted = yield* store
+          .loadWorktreesForRepository(repo.id)
+          .pipe(Effect.mapError((e) => arcRequestError(`worktree load failed: ${e}`)))
+        let removed = 0
+        for (const row of persisted) {
+          if (livePaths.has(path.resolve(row.path))) continue
+          yield* store
+            .deleteWorktreeByPath(row.path)
+            .pipe(Effect.mapError((e) => arcRequestError(`worktree row delete failed: ${e}`)))
+          removed++
+        }
+        if (removed > 0) yield* publishChange(workspaceId)
+        return removed
+      }).pipe(Effect.withSpan("arc.git.prune_worktrees", { attributes: { "arc.workspace_id": workspaceId } }))
+
+    const pruneMergedWorktrees = (
+      workspaceId: string,
+    ): Effect.Effect<ReadonlyArray<string>, ArcRequestError> =>
+      Effect.gen(function* () {
+        const repo = yield* requireRepository(workspaceId)
+        const worktrees = yield* store
+          .loadWorktreesForRepository(repo.id)
+          .pipe(Effect.mapError((e) => arcRequestError(`worktree load failed: ${e}`)))
+        const prs = yield* store
+          .loadPullRequestsForRepository(repo.id)
+          .pipe(Effect.mapError((e) => arcRequestError(`PR load failed: ${e}`)))
+        const mergedBranches = new Set(prs.filter((pr) => pr.state === "merged").map((pr) => pr.headRef))
+
+        const pruned: Array<string> = []
+        for (const wt of worktrees) {
+          if (!wt.branch || !mergedBranches.has(wt.branch)) continue
+          if (path.resolve(wt.path) === path.resolve(repo.rootPath)) continue
+          // Only ever auto-delete trees arc created and owns — never a user's.
+          if (!isManaged(wt.path)) {
+            yield* Effect.logDebug(`auto-prune skip (not arc-managed): ${wt.path}`)
+            continue
+          }
+          const dirty = (yield* Effect.promise(() => runGit(wt.path, ["status", "--porcelain"]))).stdout.trim()
+          if (dirty.length > 0) {
+            yield* Effect.logInfo(`auto-prune skip (uncommitted changes): ${wt.path}`)
+            continue
+          }
+          const result = yield* Effect.promise(() =>
+            runGitCapture(repo.rootPath, ["worktree", "remove", wt.path]),
+          )
+          if (result.exitCode !== 0) {
+            yield* Effect.logWarning(`auto-prune failed for ${wt.path}: ${result.stderr.trim() || `exit ${result.exitCode}`}`)
+            continue
+          }
+          yield* store
+            .deleteWorktreeByPath(wt.path)
+            .pipe(Effect.mapError((e) => arcRequestError(`worktree row delete failed: ${e}`)))
+          yield* Effect.logInfo(`auto-pruned merged worktree: ${wt.path}`)
+          pruned.push(wt.path)
+        }
+        if (pruned.length > 0) yield* publishChange(workspaceId)
+        return pruned
+      }).pipe(Effect.withSpan("arc.git.prune_merged_worktrees", { attributes: { "arc.workspace_id": workspaceId } }))
+
+    const createPullRequest = (
+      workspaceId: string,
+      options: {
+        readonly title?: string
+        readonly body?: string
+        readonly base?: string
+        readonly draft?: boolean
+      },
+    ): Effect.Effect<PullRequestRow | null, ArcRequestError> =>
+      Effect.gen(function* () {
+        const repo = yield* requireRepository(workspaceId)
+        if (!repo.githubOwner || !repo.githubRepo) {
+          return yield* Effect.fail(arcRequestError("No GitHub remote for this repository"))
+        }
+        const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
+        if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
+        const branch = (
+          yield* Effect.promise(() => runGit(workspace.path, ["rev-parse", "--abbrev-ref", "HEAD"]))
+        ).stdout.trim()
+        if (!branch || branch === "HEAD") {
+          return yield* Effect.fail(arcRequestError("Cannot open a PR from a detached HEAD"))
+        }
+        const base = options.base ?? repo.defaultBranch ?? "main"
+        const slug = `${repo.githubOwner}/${repo.githubRepo}`
+        const args = [
+          "pr",
+          "create",
+          "--repo",
+          slug,
+          "--base",
+          base,
+          "--head",
+          branch,
+          ...(options.draft ? ["--draft"] : []),
+          ...(options.title ? ["--title", options.title] : []),
+          ...(options.body !== undefined ? ["--body", options.body] : []),
+          // No explicit title → let gh fill title/body from the branch's commits.
+          ...(options.title ? [] : ["--fill"]),
+        ]
+        const result = yield* Effect.promise(() => runGh(workspace.path, args))
+        if (result.exitCode !== 0) {
+          return yield* Effect.fail(
+            arcRequestError(`gh pr create failed (exit ${result.exitCode}) — branch may be unpushed or a PR may already exist`),
+          )
+        }
+        // Pull the freshly opened PR into the read model and return its row.
+        const synced = yield* syncPullRequests(workspaceId)
+        yield* publishChange(workspaceId)
+        return synced.find((pr) => pr.headRef === branch) ?? null
+      }).pipe(Effect.withSpan("arc.git.create_pull_request", { attributes: { "arc.workspace_id": workspaceId } }))
+
     return GitService.of({
       status,
       detectRepository,
       syncPullRequests,
       gitContext,
+      createWorktree,
+      openWorktree,
+      removeWorktree,
+      pruneWorktrees,
+      pruneMergedWorktrees,
+      createPullRequest,
       changes,
       notifyCheckout,
       notifyPrePush,
