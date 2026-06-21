@@ -1,7 +1,7 @@
 import { Fragment, type JSX, useMemo } from "react"
 import { Collapsible } from "@base-ui/react/collapsible"
 import { Button } from "@base-ui/react/button"
-import { CaretDown, CaretRight, GitBranch } from "@phosphor-icons/react"
+import { CaretDown, CaretRight } from "@phosphor-icons/react"
 import type { Workspace } from "../../../shared/workspace.js"
 import type { Chat } from "../../../shared/chat.js"
 import type { TargetSession } from "../../../shared/instance.js"
@@ -41,22 +41,14 @@ function DisclosureTrigger({ label }: { readonly label: string }): JSX.Element {
   )
 }
 
-/** The project tier's header: the repo label (`owner/repo` or basename) with the
- * default branch as quiet secondary metadata. Grouping cue only — not selectable. */
-function ProjectHeader({
-  label,
-  defaultBranch,
-}: {
-  readonly label: string
-  readonly defaultBranch: string | null
-}): JSX.Element {
+/** The project tier's header: a disclosure caret and the repo label (`owner/repo`
+ * or basename). Collapsing it hides the whole project. Grouping cue, not
+ * selectable; the repo's own branches live on the workspace rows beneath it. */
+function ProjectHeader({ label }: { readonly label: string }): JSX.Element {
   return (
-    <div className="mt-1 flex items-center gap-1.5 px-2 py-1">
-      <GitBranch size={12} className="flex-none text-fg-faint" aria-hidden />
+    <div className="mt-1 flex items-center gap-1 py-1 pr-2">
+      <DisclosureTrigger label={`Toggle ${label}`} />
       <span className="min-w-0 truncate text-[12px] font-medium text-foreground">{label}</span>
-      {defaultBranch ? (
-        <span className="flex-none font-mono text-[10px] text-fg-faint">{defaultBranch}</span>
-      ) : null}
     </div>
   )
 }
@@ -213,14 +205,17 @@ export function ArcSidebarTree(props: ArcSidebarTreeProps): JSX.Element {
         </Collapsible.Root>
         ))
         // Plain folders render in place with no header; a repository-backed
-        // project gets a header with its checkouts/worktrees nested under it.
+        // project gets a collapsible header with its checkouts/worktrees nested
+        // under it.
         return project.repositoryId === null ? (
           <Fragment key={project.key}>{members}</Fragment>
         ) : (
-          <div key={project.key} role="group" aria-label={project.label} className="min-w-0">
-            <ProjectHeader label={project.label} defaultBranch={project.defaultBranch} />
-            <div className="ml-1">{members}</div>
-          </div>
+          <Collapsible.Root key={project.key} defaultOpen className="min-w-0">
+            <ProjectHeader label={project.label} />
+            <Collapsible.Panel role="group" aria-label={project.label} className="ml-1">
+              {members}
+            </Collapsible.Panel>
+          </Collapsible.Root>
         )
       })}
     </div>

@@ -29,8 +29,11 @@ export function WorkspaceRow({ workspace, selected, onSelect, disclosure }: Work
           <span className="flex min-w-0 items-center gap-1.5">
             <span className={TREE_LABEL}>{workspace.name}</span>
             {workspace.branch ? (
-              <span className="flex flex-none items-center gap-1 rounded-[var(--radius)] bg-elev px-1 font-mono text-[10px] text-fg-dim">
-                {workspace.isWorktree ? <GitBranch size={9} aria-hidden /> : null}
+              <span
+                className="flex flex-none items-center gap-1 rounded-[var(--radius)] bg-elev px-1 font-mono text-[10px] text-fg-dim"
+                title={workspace.isWorktree ? `worktree on ${workspace.branch}` : `branch ${workspace.branch}`}
+              >
+                <GitBranch size={9} aria-hidden />
                 {workspace.branch}
               </span>
             ) : null}
