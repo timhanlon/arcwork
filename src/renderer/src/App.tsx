@@ -28,12 +28,14 @@ import { WorkPane, type WorkPaneHandle } from "./work/WorkPane.js"
 import { GitPane } from "./git/GitPane.js"
 import { NavBar } from "./shell/NavBar.js"
 import { ArcSearchPanel } from "./search/ArcSearchPanel.js"
+import { CommandPalette } from "./shell/CommandPalette.js"
+import type { Command } from "./shell/commandPaletteModel.js"
 import { useArcShell } from "./shell/useArcShell.js"
 import { ShellActionsProvider } from "./shell/ShellActionsContext.js"
 import { unadoptedSessions } from "./shell/sessionAdoption.js"
 import { deriveShellViewModel } from "./shell/shellSelectors.js"
 import { useKeyboardShortcuts } from "./shell/useKeyboardShortcuts.js"
-import { focusRequestId, REQUEST_SLOTS, type GlobalCommandId } from "./shell/keybindings.js"
+import { bindingFor, focusRequestId, REQUEST_SLOTS, type GlobalCommandId } from "./shell/keybindings.js"
 
 /**
  * The surface. Sidebar lists workspaces, chats, and sessions. The center pane
@@ -67,6 +69,7 @@ export function App(): JSX.Element {
     [workspacesResult],
   )
   const [searchOpen, setSearchOpen] = useState(false)
+  const [commandOpen, setCommandOpen] = useState(false)
 
   const providersResult = useAtomValue(providersAtom)
   const providers = AsyncResult.isSuccess(providersResult) ? providersResult.value : []
@@ -254,6 +257,7 @@ export function App(): JSX.Element {
       showGitView: () => shell.actions.open({ kind: "git" }, "right"),
       focusComposer: shell.actions.focusComposer,
       openSearchPalette: () => setSearchOpen(true),
+      openCommandPalette: () => setCommandOpen(true),
       jumpToChatBottom: shell.actions.jumpChatToBottom,
       resumeDetachedSession: () => {
         if (vm.detachedSession?.resumable) shell.actions.resumeDetached()
@@ -277,6 +281,34 @@ export function App(): JSX.Element {
   const renameChat = async (chatId: string, title: string): Promise<void> => {
     await rpc("UpdateChatTitle", { chatId, title })
   }
+
+  // Commands for the ⌘K palette. Leaf commands reuse the shortcut handlers (and
+  // borrow their combo for the on-row hint); "New chat in workspace…" opens a
+  // second stage over the open workspaces and lands the chat in the chosen one.
+  const leafCommand = (id: GlobalCommandId, title: string): Command => ({
+    id,
+    title,
+    combo: bindingFor(id)?.combo,
+    run: shortcutHandlers[id],
+  })
+  const paletteCommands: ReadonlyArray<Command> = [
+    {
+      id: "newChatInWorkspace",
+      title: "New chat in workspace…",
+      choosePlaceholder: "choose a workspace",
+      choices: workspaces.map((w) => ({ id: w.id, title: w.name, subtitle: w.path })),
+      onChoose: (workspaceId) => void createChat(workspaceId),
+    },
+    leafCommand("createChat", "New chat"),
+    leafCommand("createWork", "New work item"),
+    leafCommand("showChatView", "Show chat"),
+    leafCommand("showWorkView", "Show work"),
+    leafCommand("showTerminalView", "Show terminal"),
+    leafCommand("showGitView", "Show git"),
+    leafCommand("toggleLeftPanel", "Toggle left panel"),
+    leafCommand("toggleRightPanel", "Toggle right panel"),
+    leafCommand("openSearchPalette", "Search…"),
+  ]
 
   const selectChat = (workspaceId: string, chatId: string): void => {
     shell.actions.selectChat(workspaceId, chatId)
@@ -365,6 +397,9 @@ export function App(): JSX.Element {
           onOpenChat={selectChat}
           onClose={() => setSearchOpen(false)}
         />
+      ) : null}
+      {commandOpen ? (
+        <CommandPalette commands={paletteCommands} onClose={() => setCommandOpen(false)} />
       ) : null}
       <NavBar
         isDev={isDev}

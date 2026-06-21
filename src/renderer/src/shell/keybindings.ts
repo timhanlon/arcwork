@@ -27,6 +27,7 @@ export type GlobalCommandId =
   | "jumpToChatBottom"
   | "resumeDetachedSession"
   | "openSearchPalette"
+  | "openCommandPalette"
   | `focusRequest${RequestSlot}`
 
 /**
@@ -157,6 +158,9 @@ export const keybindings: ReadonlyArray<Keybinding<GlobalCommandId>> = [
   binding("resumeDetachedSession", "mod+shift+p"),
   // ⌘⇧F opens the unified Arc search command palette.
   binding("openSearchPalette", "mod+shift+f"),
+  // ⌘K opens the command palette — run any command, or pick a target (the
+  // workspace for "new chat in…", a worktree to launch in).
+  binding("openCommandPalette", "mod+k"),
   // ⌘1…⌘9 jump straight to the Nth session waiting for the user, counted in the
   // sidebar's top-to-bottom order. The matching number shows on each pending row.
   ...REQUEST_SLOTS.map((slot) => binding(focusRequestId(slot), `mod+${slot}`)),
