@@ -1,11 +1,18 @@
-import { type JSX, useMemo } from "react"
+import { Fragment, type JSX, useMemo } from "react"
 import { Collapsible } from "@base-ui/react/collapsible"
 import { Button } from "@base-ui/react/button"
-import { CaretDown, CaretRight } from "@phosphor-icons/react"
+import { CaretDown, CaretRight, GitBranch } from "@phosphor-icons/react"
 import type { Workspace } from "../../../shared/workspace.js"
 import type { Chat } from "../../../shared/chat.js"
 import type { TargetSession } from "../../../shared/instance.js"
-import { groupSidebarData, liveActivityFor, sessionStatus, type LiveStateById } from "./grouping.js"
+import {
+  groupByProject,
+  groupSidebarData,
+  liveActivityFor,
+  sessionStatus,
+  type LiveStateById,
+  type WorkspaceGroup,
+} from "./grouping.js"
 import { DISCLOSURE } from "./row-styles.js"
 import { WorkspaceRow } from "./WorkspaceRow.js"
 import { ChatRow } from "./ChatRow.js"
@@ -31,6 +38,26 @@ function DisclosureTrigger({ label }: { readonly label: string }): JSX.Element {
         </button>
       )}
     />
+  )
+}
+
+/** The project tier's header: the repo label (`owner/repo` or basename) with the
+ * default branch as quiet secondary metadata. Grouping cue only — not selectable. */
+function ProjectHeader({
+  label,
+  defaultBranch,
+}: {
+  readonly label: string
+  readonly defaultBranch: string | null
+}): JSX.Element {
+  return (
+    <div className="mt-1 flex items-center gap-1.5 px-2 py-1">
+      <GitBranch size={12} className="flex-none text-fg-faint" aria-hidden />
+      <span className="min-w-0 truncate text-[12px] font-medium text-foreground">{label}</span>
+      {defaultBranch ? (
+        <span className="flex-none font-mono text-[10px] text-fg-faint">{defaultBranch}</span>
+      ) : null}
+    </div>
   )
 }
 
@@ -73,8 +100,8 @@ const EMPTY_LIVE_STATES: LiveStateById = new Map()
 
 export function ArcSidebarTree(props: ArcSidebarTreeProps): JSX.Element {
   const liveStateById = props.liveStateById ?? EMPTY_LIVE_STATES
-  const groups = useMemo(
-    () => groupSidebarData(props.workspaces, props.chats, props.sessions),
+  const projects = useMemo(
+    () => groupByProject(groupSidebarData(props.workspaces, props.chats, props.sessions)),
     [props.workspaces, props.chats, props.sessions],
   )
 
@@ -103,8 +130,9 @@ export function ArcSidebarTree(props: ArcSidebarTreeProps): JSX.Element {
       role="tree"
       aria-label="Arc workspaces"
     >
-      {groups.map(({ workspace, chats, sessionsByChat }) => (
-        <Collapsible.Root key={workspace.id} defaultOpen className="min-w-0">
+      {projects.map((project) => {
+        const members = project.members.map(({ workspace, chats, sessionsByChat }) => (
+          <Collapsible.Root key={workspace.id} defaultOpen className="min-w-0">
           <WorkspaceRow
             workspace={workspace}
             selected={props.selectedWorkspaceId === workspace.id && !props.selectedChatId}
@@ -183,7 +211,18 @@ export function ArcSidebarTree(props: ArcSidebarTreeProps): JSX.Element {
             </div>
           </Collapsible.Panel>
         </Collapsible.Root>
-      ))}
+        ))
+        // Plain folders render in place with no header; a repository-backed
+        // project gets a header with its checkouts/worktrees nested under it.
+        return project.repositoryId === null ? (
+          <Fragment key={project.key}>{members}</Fragment>
+        ) : (
+          <div key={project.key} role="group" aria-label={project.label} className="min-w-0">
+            <ProjectHeader label={project.label} defaultBranch={project.defaultBranch} />
+            <div className="ml-1">{members}</div>
+          </div>
+        )
+      })}
     </div>
   )
 }

@@ -29,6 +29,75 @@ export interface WorkspaceGroup {
 }
 
 /**
+ * A project tier over workspace groups. A repository-backed project (`repositoryId`
+ * set) collects every workspace sharing that repo — its main checkout plus any
+ * worktrees — under one header (`label`). A plain folder has `repositoryId` null,
+ * is its own single-member project, and renders with no header. Order follows
+ * each project's first appearance in the workspace list.
+ */
+export interface ProjectGroup {
+  readonly key: string
+  readonly repositoryId: string | null
+  readonly label: string
+  readonly defaultBranch: string | null
+  readonly members: ReadonlyArray<WorkspaceGroup>
+}
+
+/** Bucket workspace groups under their repository. Members of a repo project are
+ * ordered main-checkout-first, then worktrees by branch; plain folders stay
+ * top-level in place. */
+export function groupByProject(
+  groups: ReadonlyArray<WorkspaceGroup>,
+): ReadonlyArray<ProjectGroup> {
+  type Mutable = {
+    key: string
+    repositoryId: string | null
+    label: string
+    defaultBranch: string | null
+    members: Array<WorkspaceGroup>
+  }
+  const byRepo = new Map<string, Mutable>()
+  const ordered: Array<Mutable> = []
+
+  for (const group of groups) {
+    const repoId = group.workspace.repositoryId
+    if (repoId === null) {
+      ordered.push({
+        key: group.workspace.id,
+        repositoryId: null,
+        label: group.workspace.name,
+        defaultBranch: null,
+        members: [group],
+      })
+      continue
+    }
+    const existing = byRepo.get(repoId)
+    if (existing) {
+      existing.members.push(group)
+      continue
+    }
+    const created: Mutable = {
+      key: repoId,
+      repositoryId: repoId,
+      label: group.workspace.repoLabel ?? group.workspace.name,
+      defaultBranch: group.workspace.defaultBranch,
+      members: [group],
+    }
+    byRepo.set(repoId, created)
+    ordered.push(created)
+  }
+
+  for (const project of ordered) {
+    if (project.repositoryId === null) continue
+    project.members.sort((a, b) => {
+      if (a.workspace.isWorktree !== b.workspace.isWorktree) return a.workspace.isWorktree ? 1 : -1
+      return (a.workspace.branch ?? a.workspace.name).localeCompare(b.workspace.branch ?? b.workspace.name)
+    })
+  }
+  return ordered
+}
+
+/**
  * Collapse a session's live activity into the single word a row displays. The
  * currently focused session reads "active" (its focus halo), but only while it's
  * actually live: a dead session (`exited`/`detached`) always shows its dead state

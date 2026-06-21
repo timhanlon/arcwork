@@ -68,7 +68,25 @@ export const LIVE_ACTIVITIES: ReadonlyArray<LiveTargetActivity> = [
 
 /** A populated two-workspace tree used by the integration stories. */
 export const workspacesFixture: ReadonlyArray<Workspace> = [
-  workspace({ id: "workspace_arc", name: "arc-test", path: "/Users/you/dev/arc-test" }),
+  workspace({
+    id: "workspace_arc",
+    name: "arc-test",
+    path: "/Users/you/dev/arc-test",
+    repositoryId: "repo_arc",
+    repoLabel: "acme/arc",
+    defaultBranch: "main",
+    branch: "main",
+  }),
+  workspace({
+    id: "workspace_arc_feat",
+    name: "arc-feat-git",
+    path: "/Users/you/.worktrees/arc-feat-git",
+    repositoryId: "repo_arc",
+    repoLabel: "acme/arc",
+    defaultBranch: "main",
+    branch: "feat/git",
+    isWorktree: true,
+  }),
   workspace({
     id: "workspace_long",
     name: "compound-engineering",

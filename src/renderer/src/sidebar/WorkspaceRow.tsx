@@ -1,5 +1,6 @@
 import type { JSX, ReactNode } from "react"
 import { Button } from "@base-ui/react/button"
+import { GitBranch } from "@phosphor-icons/react"
 import type { Workspace } from "../../../shared/workspace.js"
 import { ROW_ACTIVE, ROW_BASE, ROW_GRID, TREE_LABEL, TREE_MAIN, TREE_SUBTITLE } from "./row-styles.js"
 
@@ -25,7 +26,15 @@ export function WorkspaceRow({ workspace, selected, onSelect, disclosure }: Work
         onClick={onSelect}
       >
         <span className={TREE_MAIN}>
-          <span className={TREE_LABEL}>{workspace.name}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className={TREE_LABEL}>{workspace.name}</span>
+            {workspace.branch ? (
+              <span className="flex flex-none items-center gap-1 rounded-[var(--radius)] bg-elev px-1 font-mono text-[10px] text-fg-dim">
+                {workspace.isWorktree ? <GitBranch size={9} aria-hidden /> : null}
+                {workspace.branch}
+              </span>
+            ) : null}
+          </span>
           <span className={TREE_SUBTITLE}>{workspace.path}</span>
         </span>
       </Button>
