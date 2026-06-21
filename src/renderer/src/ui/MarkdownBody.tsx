@@ -2,6 +2,7 @@ import type { JSX, MouseEvent, ReactNode } from "react"
 import remarkGfm from "remark-gfm"
 import { Streamdown } from "streamdown"
 import { code } from "@streamdown/code"
+import { mermaid } from "@streamdown/mermaid"
 import { useShellActions } from "../shell/ShellActionsContext.js"
 import { Button } from "./Button.js"
 
@@ -153,7 +154,7 @@ export function MarkdownBody({
       // so we must re-add gfm ourselves or tables/strikethrough/task-lists stop
       // parsing — see the work-link plugin below.
       remarkPlugins={[remarkGfm, remarkWorkLinks]}
-      plugins={{ code }}
+      plugins={{ code, mermaid }}
       skipHtml
     >
       {children}
