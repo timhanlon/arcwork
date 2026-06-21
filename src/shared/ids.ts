@@ -9,6 +9,8 @@ export type ArcIdPrefix =
   | "run"
   | "target"
   | "workspace"
+  // a comm endpoint a worker talks through (harness/model/preset)
+  | "channel"
   // git/github domain read model: a local clone, its worktrees, and a synced PR
   | "repo"
   | "worktree"

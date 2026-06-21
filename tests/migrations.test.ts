@@ -169,11 +169,12 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
         yield* runMigrations("arc_migrations", arcMigrations)
 
         const channels = yield* sql.unsafe<{
+          id: string
           provider: string
           preset: string | null
           kind: string
           model: string | null
-        }>(`SELECT provider, preset, kind, model FROM channels ORDER BY provider, preset`)
+        }>(`SELECT id, provider, preset, kind, model FROM channels ORDER BY provider, preset`)
 
         const sessions = yield* sql.unsafe<{
           id: string
@@ -195,10 +196,12 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
     )
 
     // One local channel per distinct (provider, preset); model null = harness default.
-    expect(result.channels).toEqual([
+    expect(result.channels.map(({ id: _id, ...rest }) => rest)).toEqual([
       { provider: "claude", preset: null, kind: "local", model: null },
       { provider: "codex", preset: "gpt-5", kind: "local", model: null },
     ])
+    // Channel ids are TypeIDs.
+    for (const c of result.channels) expect(c.id).toMatch(/^channel_[0-9a-z]+$/)
 
     const byId = Object.fromEntries(result.sessions.map((s) => [s.id, s] as const))
     // Comm endpoint: every session resolves to a channel matching its own provider;

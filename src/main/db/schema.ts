@@ -12,6 +12,7 @@
 
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
+import { newArcId } from "../../shared/ids.js"
 import { sqlMigration, type Migrations } from "./migrator.js"
 
 const addSearchDocumentWorkspaceColumn = Effect.gen(function* () {
@@ -126,8 +127,9 @@ export interface ChatRow {
  * `'local'` today; the remote tier adds `'remote'`/`'cloudflare-sandbox'`
  * without a model change. Distinct from the diff endpoint (`workspaces`), which
  * is the "where code state lives" half; a `target_sessions` row binds the two.
- * Derived from `(provider, preset)` for now (model null = "harness default"),
- * so the id is deterministic: `ch:<provider>:<model>:<preset>`. */
+ * `id` is a TypeID (`channel_…`) like every other arc id; identity/dedup is the
+ * `(kind, provider, model, preset)` tuple, enforced by a unique index (model
+ * null = "harness default"). */
 export interface ChannelRow {
   readonly id: string
   readonly kind: string
@@ -730,35 +732,64 @@ export const arcMigrations: Migrations = {
   // Split them: `channels` is the comm endpoint (the only new table); the diff
   // endpoint is the existing `workspaces`. `target_sessions` gains `channel_id`
   // + `workspace_id` refs alongside the still-inlined `provider`/`preset`/`cwd`,
-  // which stay dual-written until the launch path reads the refs (a later
-  // slice). Backfill is behavior-preserving: one local channel per distinct
+  // which stay dual-written alongside. Backfill: one local channel per distinct
   // `(provider, preset)` in use (model null = "harness default"), and each
   // session points at the workspace whose path equals its cwd. A cwd with no
   // matching workspace row leaves `workspace_id` null and falls back to the
-  // retained `cwd` column — no orphan exists under today's launch (cwd = the
-  // chat workspace path), the null branch is defensive.
-  "0007_worker_comm_diff_endpoints": sqlMigration(
-    `CREATE TABLE channels (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    model TEXT,
-    preset TEXT,
-    created_at TEXT NOT NULL,
-    last_used_at TEXT NOT NULL
-  )`,
-    `ALTER TABLE target_sessions ADD COLUMN channel_id TEXT REFERENCES channels(id)`,
-    `ALTER TABLE target_sessions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id)`,
-    `INSERT OR IGNORE INTO channels (id, kind, provider, model, preset, created_at, last_used_at)
-   SELECT 'ch:' || provider || '::' || COALESCE(preset, ''), 'local', provider, NULL, preset,
-          MIN(started_at), MAX(started_at)
-   FROM target_sessions
-   GROUP BY provider, preset`,
-    `UPDATE target_sessions
-     SET channel_id = 'ch:' || provider || '::' || COALESCE(preset, '')`,
-    `UPDATE target_sessions
-     SET workspace_id = (SELECT id FROM workspaces WHERE workspaces.path = target_sessions.cwd)`,
-    `CREATE INDEX IF NOT EXISTS target_sessions_channel ON target_sessions(channel_id)`,
-    `CREATE INDEX IF NOT EXISTS target_sessions_workspace ON target_sessions(workspace_id)`,
-  ),
+  // `cwd` column.
+  //
+  // Channel ids are minted TypeIDs; identity/dedup is the `(kind, provider,
+  // model, preset)` tuple, held by a unique index over `COALESCE(model,'')`/
+  // `COALESCE(preset,'')` so the nullable columns still dedupe (SQLite treats
+  // NULL as distinct in a plain UNIQUE).
+  "0007_worker_comm_diff_endpoints": Effect.gen(function* () {
+    const sql = yield* SqlClient
+    yield* sql.unsafe(`CREATE TABLE channels (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT,
+      preset TEXT,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT NOT NULL
+    )`)
+    yield* sql.unsafe(
+      `CREATE UNIQUE INDEX channels_identity ON channels(kind, provider, COALESCE(model, ''), COALESCE(preset, ''))`,
+    )
+    yield* sql.unsafe(`ALTER TABLE target_sessions ADD COLUMN channel_id TEXT REFERENCES channels(id)`)
+    yield* sql.unsafe(`ALTER TABLE target_sessions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id)`)
+
+    // One local channel per distinct (provider, preset) in use, each with a
+    // freshly minted TypeID; timestamps span the sessions that used it.
+    const groups = yield* sql.unsafe<{
+      provider: string
+      preset: string | null
+      firstAt: string
+      lastAt: string
+    }>(`SELECT provider, preset, MIN(started_at) AS firstAt, MAX(started_at) AS lastAt
+        FROM target_sessions GROUP BY provider, preset`)
+    for (const g of groups) {
+      yield* sql`INSERT INTO channels ${sql.insert({
+        id: newArcId("channel"),
+        kind: "local",
+        provider: g.provider,
+        model: null,
+        preset: g.preset,
+        createdAt: g.firstAt,
+        lastUsedAt: g.lastAt,
+      })} ON CONFLICT (kind, provider, COALESCE(model, ''), COALESCE(preset, '')) DO NOTHING`
+    }
+
+    yield* sql.unsafe(`UPDATE target_sessions
+      SET channel_id = (
+        SELECT id FROM channels c
+        WHERE c.kind = 'local'
+          AND c.provider = target_sessions.provider
+          AND COALESCE(c.preset, '') = COALESCE(target_sessions.preset, '')
+      )`)
+    yield* sql.unsafe(`UPDATE target_sessions
+      SET workspace_id = (SELECT id FROM workspaces WHERE workspaces.path = target_sessions.cwd)`)
+    yield* sql.unsafe(`CREATE INDEX target_sessions_channel ON target_sessions(channel_id)`)
+    yield* sql.unsafe(`CREATE INDEX target_sessions_workspace ON target_sessions(workspace_id)`)
+  }),
 }

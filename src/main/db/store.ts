@@ -14,6 +14,7 @@ import {
   type WorktreeRow,
 } from "./schema.js"
 import { runMigrations } from "./migrator.js"
+import { newArcId } from "../../shared/ids.js"
 import type { ChatMessageUpsertMode } from "../hooks/chat-message.js"
 
 /**
@@ -354,14 +355,12 @@ export const ArcStoreLive = Layer.effect(
         return rows[0]?.workspaceId ?? null
       })
 
-    // Read the worker through its two endpoints: provider/preset come from the
-    // comm endpoint (`channels`) and cwd from the diff endpoint (`workspaces`),
-    // falling back to the still-written inlined columns only for a backfill
-    // orphan (null ref). This is the weld-break — the refs are now the source of
-    // truth on the read path, so a later slice can drop the inlined columns
-    // without changing any consumer. The gate is the ref id's presence, not
-    // COALESCE on the resolved value: `preset` is legitimately nullable, so a
-    // channel whose preset is null must still win over a stale inlined preset.
+    // Read the worker through its two endpoints: provider/preset from the comm
+    // endpoint (`channels`) and cwd from the diff endpoint (`workspaces`),
+    // falling back to the inlined columns when a ref is null (a backfill orphan).
+    // Gate on the ref id's presence so a channel whose preset is null still wins
+    // over the inlined preset — preset is nullable, so the resolved value alone
+    // can't distinguish "no channel" from "channel with a null preset".
     const loadTargetSessions =
       sql<TargetSessionRow>`SELECT
           ts.id AS "id",
@@ -380,26 +379,42 @@ export const ArcStoreLive = Layer.effect(
         LEFT JOIN workspaces w ON w.id = ts.workspace_id
         ORDER BY ts.started_at, ts.id`
 
+    // Find-or-create the comm endpoint for a `(provider, model, preset)` and
+    // return its id. A fresh TypeID is offered; the unique index over
+    // `(kind, provider, COALESCE(model,''), COALESCE(preset,''))` collapses it to
+    // an existing row when one matches, and `RETURNING id` hands back whichever
+    // id won.
+    const ensureChannel = (
+      provider: string,
+      model: string | null,
+      preset: string | null,
+      at: string,
+    ) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{ id: string }>`INSERT INTO channels ${sql.insert({
+          id: newArcId("channel"),
+          kind: "local",
+          provider,
+          model,
+          preset,
+          createdAt: at,
+          lastUsedAt: at,
+        })} ON CONFLICT (kind, provider, COALESCE(model, ''), COALESCE(preset, ''))
+          DO UPDATE SET last_used_at = excluded.last_used_at
+          RETURNING id`
+        return rows[0]!.id
+      })
+
     // A target session is the bound pair of a comm endpoint (`channels`) and a
-    // diff endpoint (`workspaces`). The two refs are derived here — the single
+    // diff endpoint (`workspaces`). Both refs are derived here — the single
     // place sessions are persisted — so the launch path stays unchanged until a
     // later slice reads them: the comm endpoint is the `(provider, preset)`
-    // channel (created on demand, model null = "harness default"), the diff
-    // endpoint is the workspace whose path equals the cwd (null for an orphan
-    // cwd, which then falls back to the still-written `cwd` column). The id
-    // scheme matches migration 0007's backfill: `ch:<provider>:<model>:<preset>`.
+    // channel (model null = "harness default"), the diff endpoint is the
+    // workspace whose path equals the cwd (null for an orphan cwd, which then
+    // falls back to the still-written `cwd` column).
     const upsertTargetSession = (s: Omit<TargetSessionRow, "channelId" | "workspaceId">) =>
       Effect.gen(function* () {
-        const channelId = `ch:${s.provider}::${s.preset ?? ""}`
-        yield* sql`INSERT INTO channels ${sql.insert({
-          id: channelId,
-          kind: "local",
-          provider: s.provider,
-          model: null,
-          preset: s.preset,
-          createdAt: s.startedAt,
-          lastUsedAt: s.startedAt,
-        })} ON CONFLICT(id) DO UPDATE SET last_used_at = excluded.last_used_at`
+        const channelId = yield* ensureChannel(s.provider, null, s.preset, s.startedAt)
         const workspaceRows = yield* sql<{ id: string }>`
           SELECT id FROM workspaces WHERE path = ${s.cwd} LIMIT 1`
         const workspaceId = workspaceRows[0]?.id ?? null
