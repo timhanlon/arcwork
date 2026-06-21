@@ -10,7 +10,16 @@ import type { ChatScopedWork } from "./WorkspaceTree.js"
 export const REFERENCE_NOW = "2026-06-07T17:00:00.000Z"
 
 export function workspace(over: Partial<Workspace> & Pick<Workspace, "id">): Workspace {
-  return { path: "/Users/you/dev/arc-test", name: "arc-test", ...over }
+  return {
+    path: "/Users/you/dev/arc-test",
+    name: "arc-test",
+    repositoryId: null,
+    repoLabel: null,
+    defaultBranch: null,
+    branch: null,
+    isWorktree: false,
+    ...over,
+  }
 }
 
 export function chat(over: Partial<Chat> & Pick<Chat, "id" | "workspaceId" | "title">): Chat {

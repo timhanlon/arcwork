@@ -30,7 +30,16 @@ beforeAll(() => {
   fs.writeFileSync(path.join(repoDir, "README.md"), "# widgets\n")
   git(repoDir, "add", "README.md")
   git(repoDir, "commit", "-m", "initial")
-  workspace = { id: "workspace_test", path: fs.realpathSync(repoDir), name: "widgets" }
+  workspace = {
+    id: "workspace_test",
+    path: fs.realpathSync(repoDir),
+    name: "widgets",
+    repositoryId: null,
+    repoLabel: null,
+    defaultBranch: null,
+    branch: null,
+    isWorktree: false,
+  }
 })
 
 afterAll(() => {
@@ -45,6 +54,7 @@ const run = async <A, E>(program: Effect.Effect<A, E, GitService | ArcStore>): P
       changes: Stream.empty,
       open: Effect.succeed(undefined),
       openAt: () => Effect.succeed(workspace),
+      refresh: Effect.void,
     }),
   )
   const StoreLive = ArcStoreLive.pipe(Layer.provide(sqliteLayer(":memory:")))

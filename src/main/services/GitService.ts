@@ -705,6 +705,10 @@ export const GitServiceLive = Layer.effect(
           gitHeadSha: ownWorktree?.headSha ?? null,
         }).pipe(Effect.mapError((e) => arcRequestError(`workspace bind failed: ${e}`)))
 
+        // Push the freshly-bound repo/branch onto the workspace list so the
+        // sidebar's project grouping reflects detection without a reload.
+        yield* workspaces.refresh
+
         return repository
       }).pipe(Effect.withSpan("arc.git.detect_repository", { attributes: { "arc.workspace_id": workspaceId } }))
 
