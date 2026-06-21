@@ -354,8 +354,31 @@ export const ArcStoreLive = Layer.effect(
         return rows[0]?.workspaceId ?? null
       })
 
+    // Read the worker through its two endpoints: provider/preset come from the
+    // comm endpoint (`channels`) and cwd from the diff endpoint (`workspaces`),
+    // falling back to the still-written inlined columns only for a backfill
+    // orphan (null ref). This is the weld-break — the refs are now the source of
+    // truth on the read path, so a later slice can drop the inlined columns
+    // without changing any consumer. The gate is the ref id's presence, not
+    // COALESCE on the resolved value: `preset` is legitimately nullable, so a
+    // channel whose preset is null must still win over a stale inlined preset.
     const loadTargetSessions =
-      sql<TargetSessionRow>`SELECT * FROM target_sessions ORDER BY started_at, id`
+      sql<TargetSessionRow>`SELECT
+          ts.id AS "id",
+          ts.chat_id AS "chatId",
+          CASE WHEN ts.channel_id IS NOT NULL THEN c.provider ELSE ts.provider END AS "provider",
+          CASE WHEN ts.channel_id IS NOT NULL THEN c.preset ELSE ts.preset END AS "preset",
+          CASE WHEN ts.workspace_id IS NOT NULL THEN w.path ELSE ts.cwd END AS "cwd",
+          ts.channel_id AS "channelId",
+          ts.workspace_id AS "workspaceId",
+          ts.native_session_id AS "nativeSessionId",
+          ts.native_transcript_path AS "nativeTranscriptPath",
+          ts.state AS "state",
+          ts.started_at AS "startedAt"
+        FROM target_sessions ts
+        LEFT JOIN channels c ON c.id = ts.channel_id
+        LEFT JOIN workspaces w ON w.id = ts.workspace_id
+        ORDER BY ts.started_at, ts.id`
 
     // A target session is the bound pair of a comm endpoint (`channels`) and a
     // diff endpoint (`workspaces`). The two refs are derived here — the single
