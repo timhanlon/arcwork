@@ -14,12 +14,33 @@ const workspaceChoices = [
   { id: "ws_notes", title: "notes", subtitle: "~/notes (no repo)" },
 ]
 
+const worktreeChoices = [
+  { id: "/repo/main", title: "main", subtitle: "~/dev/aux" },
+  { id: "/wt/feat-git", title: "feat/git", subtitle: "~/.worktrees/arc-feat-git" },
+  { id: "/wt/spike", title: "spike/remote-tier", subtitle: "~/.worktrees/arc-spike" },
+]
+
 const commands: ReadonlyArray<Command> = [
   {
     id: "newChatInWorkspace",
     title: "New chat in workspace…",
     choices: workspaceChoices,
     choosePlaceholder: "choose a workspace",
+    onChoose: noop,
+  },
+  {
+    id: "newWorktree",
+    title: "New worktree…",
+    promptPlaceholder: "new branch name",
+    onSubmit: noop,
+  },
+  {
+    id: "openWorktree",
+    title: "Open worktree…",
+    choosePlaceholder: "choose a worktree",
+    // Resolves after a beat so the "loading…" state is visible on entry.
+    loadChoices: () =>
+      new Promise((resolve) => setTimeout(() => resolve(worktreeChoices), 600)),
     onChoose: noop,
   },
   { id: "createChat", title: "New chat", combo: "mod+n", run: noop },

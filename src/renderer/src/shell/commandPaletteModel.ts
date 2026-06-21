@@ -10,19 +10,32 @@ export interface CommandChoice {
   readonly subtitle?: string
 }
 
-/** One palette entry. A leaf command has `run` and fires on select; a
- * parameterized command has `choices` + `onChoose` and opens a second stage to
- * pick a target (the workspace for "New chat in…", later a worktree to launch
- * in). `combo` is the keybinding (see keybindings.ts) shown as chips when set. */
+/** One palette entry, in one of three shapes:
+ * - leaf: `run` fires on select;
+ * - pick: opens a second stage to choose a target (static `choices`, or a
+ *   `loadChoices` thunk resolved on entry), then calls `onChoose` with its id;
+ * - prompt: opens a second stage to type a value (`promptPlaceholder`), then
+ *   calls `onSubmit` with the trimmed text — for naming a new worktree branch.
+ * `combo` is the keybinding (see keybindings.ts) shown as chips when set. */
 export interface Command {
   readonly id: string
   readonly title: string
   readonly combo?: string
   readonly run?: () => void
   readonly choices?: ReadonlyArray<CommandChoice>
+  readonly loadChoices?: () => Promise<ReadonlyArray<CommandChoice>>
   readonly choosePlaceholder?: string
   readonly onChoose?: (choiceId: string) => void
+  readonly promptPlaceholder?: string
+  readonly onSubmit?: (value: string) => void
 }
+
+/** True when selecting `command` opens a target-picking second stage. */
+export const isParameterized = (command: Command): boolean =>
+  command.choices !== undefined || command.loadChoices !== undefined
+
+/** True when selecting `command` opens a free-text second stage. */
+export const isPrompt = (command: Command): boolean => command.onSubmit !== undefined
 
 /** Case-insensitive substring match on the title, in declaration order. Empty
  * query returns the list unchanged. */

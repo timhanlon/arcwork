@@ -278,6 +278,26 @@ export function App(): JSX.Element {
     if (Exit.isSuccess(exit)) shell.actions.selectChat(workspaceId, exit.value.id)
   }
 
+  // Open a worktree as a workspace (minting its row if needed), then start a
+  // chat in it — for a worktree that already exists.
+  const openWorktreeChat = async (worktreePath: string): Promise<void> => {
+    const workspace = await rpc("OpenWorktree", { worktreePath })
+    await createChat(workspace.id)
+  }
+
+  // Branch a fresh worktree off the repo's default branch, open it, and chat in
+  // it — the "start a new isolated line of work" path. baseRef is omitted, so
+  // the main side defaults it to the repo's default branch.
+  const newWorktreeChat = async (branch: string): Promise<void> => {
+    if (!vm.workspaceId) return
+    const worktree = await rpc("CreateWorktree", {
+      workspaceId: vm.workspaceId,
+      branch,
+      createBranch: true,
+    })
+    await openWorktreeChat(worktree.path)
+  }
+
   const renameChat = async (chatId: string, title: string): Promise<void> => {
     await rpc("UpdateChatTitle", { chatId, title })
   }
@@ -298,6 +318,27 @@ export function App(): JSX.Element {
       choosePlaceholder: "choose a workspace",
       choices: workspaces.map((w) => ({ id: w.id, title: w.name, subtitle: w.path })),
       onChoose: (workspaceId) => void createChat(workspaceId),
+    },
+    {
+      id: "newWorktree",
+      title: "New worktree…",
+      promptPlaceholder: "new branch name",
+      onSubmit: (branch) => void newWorktreeChat(branch),
+    },
+    {
+      id: "openWorktree",
+      title: "Open worktree…",
+      choosePlaceholder: "choose a worktree",
+      loadChoices: async () => {
+        if (!vm.workspaceId) return []
+        const context = await rpc("GetWorkspaceGitContext", { workspaceId: vm.workspaceId })
+        return context.worktrees.map((worktree) => ({
+          id: worktree.path,
+          title: worktree.branch ?? (worktree.path.split("/").pop() ?? worktree.path),
+          subtitle: worktree.path,
+        }))
+      },
+      onChoose: (worktreePath) => void openWorktreeChat(worktreePath),
     },
     leafCommand("createChat", "New chat"),
     leafCommand("createWork", "New work item"),
