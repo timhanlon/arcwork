@@ -2,7 +2,7 @@ import type { JSX } from "react"
 import type { Provider } from "../../../../shared/provider.js"
 import type { ToolCall as ToolCallData } from "../../../../shared/tool-call.js"
 import { useShellActions } from "../../shell/ShellActionsContext.js"
-import { arcOutputIsWork, arcToolBody, arcToolLabel, arcToolOutput, isArcTool } from "./arc-tool-body.js"
+import { arcResultSupersedesInput, arcToolBody, arcToolLabel, arcToolOutput, isArcTool } from "./arc-tool-body.js"
 import { chromeToolBody, chromeToolLabel, isChromeTool } from "./chrome-tool-body.js"
 import { CodeBlock, FLAG, flagsFor, formatArgs, toolBody } from "./tool-body.js"
 
@@ -42,9 +42,10 @@ export function ToolCall({
   // click target, script) the same way arc does — another MCP namespace whose
   // arg shapes we model, so it skips the generic raw-JSON fallback.
   const chrome = !arc && isChromeTool(tool.toolName)
-  // For work create/update/get the result Work is the canonical line; the authored
-  // input echo would just duplicate it, so render the result alone once it lands.
-  const supersededByResult = arc && tool.output ? arcOutputIsWork(tool.output) : false
+  // For work create/update/get (and an arc.get entity batch) the result card is the
+  // canonical line; the authored input echo would just duplicate it, so render the
+  // result alone once it lands.
+  const supersededByResult = arc && tool.output ? arcResultSupersedesInput(tool.output) : false
   const body =
     arc
       ? supersededByResult

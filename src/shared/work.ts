@@ -27,6 +27,11 @@ export const WORK_STATUSES = ["open", "active", "blocked", "done", "superseded"]
 export const WorkStatus = Schema.Literals(WORK_STATUSES)
 export type WorkStatus = typeof WorkStatus.Type
 
+/** Narrow an unknown (e.g. a JSON-parsed tool payload) to a {@link WorkStatus}.
+ * The one canonical guard — surfaces that render status must not re-derive it. */
+export const isWorkStatus = (value: unknown): value is WorkStatus =>
+  typeof value === "string" && (WORK_STATUSES as ReadonlyArray<string>).includes(value)
+
 /**
  * The non-terminal statuses (everything not done/superseded): the open buckets a
  * queue projection surfaces, and — as {@link OpenWorkStatus} — the only transitions
@@ -53,6 +58,10 @@ export type OpenWorkStatus = typeof OpenWorkStatus.Type
 export const WORK_PRIORITIES = ["p0", "p1", "p2", "p3"] as const
 export const WorkPriority = Schema.Literals(WORK_PRIORITIES)
 export type WorkPriority = typeof WorkPriority.Type
+
+/** Narrow an unknown to a {@link WorkPriority}. Canonical guard — see {@link isWorkStatus}. */
+export const isWorkPriority = (value: unknown): value is WorkPriority =>
+  typeof value === "string" && (WORK_PRIORITIES as ReadonlyArray<string>).includes(value)
 
 export const CITATION_KINDS = ["file", "commit", "pr", "session", "url", "work"] as const
 export const CitationKind = Schema.Literals(CITATION_KINDS)

@@ -1,21 +1,17 @@
 import type { WorkStatus } from "../../../shared/work.js"
+import { WORK_STATUSES } from "../../../shared/work.js"
 import { XSquareIcon,MinusSquareIcon, CheckSquareIcon } from "@phosphor-icons/react"
 import type { Icon } from "@phosphor-icons/react"
 
 /**
- * Shared presentation of authored work status — the dot colour and the label
- * both the chat-scoped list (`ChatWork`) and the global navigator (`WorkPane`)
- * render, so the two surfaces never drift on what "blocked" looks like.
+ * Shared presentation of authored work status — the dot colour, icon, and resolved
+ * test every work surface (chat list, sidebar tree, navigator, arc MCP cards)
+ * renders, so they never drift on what "blocked" or "done" looks like. The status
+ * lifecycle order itself is the single list in `shared/work.ts`, re-exported here
+ * so presentation consumers reach status through one import.
  */
 
-/** Every status in lifecycle order — the order the navigator's filter shows. */
-export const WORK_STATUSES: ReadonlyArray<WorkStatus> = [
-  "open",
-  "active",
-  "blocked",
-  "done",
-  "superseded",
-]
+export { WORK_STATUSES }
 
 /** {@link WORK_STATUSES} shaped for the shared `Select` picker. */
 export const STATUS_OPTIONS = WORK_STATUSES.map((value) => ({ value }))

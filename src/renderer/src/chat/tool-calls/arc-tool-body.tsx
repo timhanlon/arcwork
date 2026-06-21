@@ -1,6 +1,9 @@
 import type { JSX, ReactNode } from "react"
-import type { WorkPriority, WorkStatus } from "../../../../shared/work.js"
+import type { WorkStatus } from "../../../../shared/work.js"
+import { isWorkPriority, isWorkStatus } from "../../../../shared/work.js"
 import { PriorityChip } from "../../work/work-priority-controls.js"
+import { isResolved } from "../../work/work-status-display.js"
+import { WorkStatusMarker } from "../../work/WorkStatusMarker.js"
 import { Button } from "../../ui/Button.js"
 import { Label } from "../../ui/Label.js"
 import { Collapsible, obj, str } from "./tool-body.js"
@@ -39,9 +42,10 @@ const Chip = ({ children }: { readonly children: ReactNode }): JSX.Element => (
 )
 
 /** Status as a bare word — the reported state on an arc card, where status is the
- * payload. No icon: the word already says "done", so a check beside it is pure
- * redundancy. (The sidebar lists, which show no word, keep the check-square as
- * their only completion signal — see `WorkStatusMarker`.) */
+ * payload (a pending `→ active`, the settled state on a work line). Pairs with the
+ * shared `WorkStatusMarker` icon, which carries the resolved/blocked glance and
+ * the title dimming; this is the precise word, the one signal the marker omits for
+ * the open/active states. */
 const StatusBadge = ({ status }: { readonly status: WorkStatus }): JSX.Element => (
   <span className="flex-none font-mono text-[11px] text-fg-dim">{status}</span>
 )
@@ -76,20 +80,18 @@ const Body = ({ text }: { readonly text: string }): JSX.Element | null => {
   return preview.length === 0 ? null : <p className="m-0 line-clamp-2 text-[11px] text-fg-faint">{preview}</p>
 }
 
-const isStatus = (value: unknown): value is WorkStatus =>
-  value === "open" || value === "active" || value === "blocked" || value === "done" || value === "superseded"
-
-const isPriority = (value: unknown): value is WorkPriority =>
-  value === "p0" || value === "p1" || value === "p2" || value === "p3"
 
 // ── work line ─────────────────────────────────────────────────────────────────
 
 /**
- * A unit of work as a single compact line — `active  title  [priority]`. The
+ * A unit of work as a single compact line — `[✓] title  status  [priority]`. The
  * transcript card is a *reference* to the work, not a reproduction: the body,
  * labels and citations all live in the work pane, one click away via the id. The
  * shared shape for an authored `work_create` and a hydrated `work_get` / result
- * Work — the status word leads, the title truncates to one row.
+ * Work. Built from the same status primitives as every other surface — the shared
+ * `WorkStatusMarker` leads with the resolved/blocked glance and drives the dimmed
+ * title (`isResolved`), the title fills the row, then the precise status word and
+ * priority trail to the right.
  */
 const WorkLine = ({
   work,
@@ -102,10 +104,11 @@ const WorkLine = ({
   const status = work["status"]
   const priority = work["priority"]
   const id = str(work["id"])
-  const titleCls = "min-w-0 flex-1 truncate text-left text-[12px] text-foreground"
+  const resolved = isWorkStatus(status) && isResolved(status)
+  const titleCls = `min-w-0 flex-1 truncate text-left text-[12px] ${resolved ? "text-fg-faint" : "text-foreground"}`
   return (
     <div className="flex items-center gap-2 min-w-0">
-      {isStatus(status) && <StatusBadge status={status} />}
+      {isWorkStatus(status) && <WorkStatusMarker status={status} title={status} placeholder={false} />}
       {id && onOpenWork ? (
         <Button
           variant="link"
@@ -120,7 +123,8 @@ const WorkLine = ({
           {title}
         </span>
       )}
-      {isPriority(priority) && <PriorityChip priority={priority} />}
+      {isWorkStatus(status) && <StatusBadge status={status} />}
+      {isWorkPriority(priority) && <PriorityChip priority={priority} />}
     </div>
   )
 }
@@ -154,6 +158,108 @@ const SearchHits = ({ hits, total }: { readonly hits: ReadonlyArray<unknown>; re
     </Collapsible>
   </div>
 )
+
+// ── get: hydrated entities ──────────────────────────────────────────────────
+
+/** A stable list key for a hydrated entity — the contained record's id, falling
+ * back to the array index when (defensively) absent. */
+const entityRef = (e: Record<string, unknown>): string | null =>
+  str(obj(e["work"])?.["id"]) ?? str(obj(e["chat"])?.["id"]) ?? str(obj(e["message"])?.["id"])
+
+/** One hydrated entity from `arc.get`, dispatched on `_tag`. Every kind leads
+ * with the same kind chip (the shared left column across a mixed batch — work's
+ * status/priority are trailing detail on the reused `WorkLine`, not the leading
+ * token); `chat`/`message` render their title/preview. The transcript stays a
+ * *reference* — the full body (and comment thread) is one click away in the pane,
+ * so even a message body is a two-line preview. */
+const EntityLine = ({
+  entity,
+  onOpenWork,
+}: {
+  readonly entity: Record<string, unknown>
+  readonly onOpenWork?: (workId: string) => void
+}): JSX.Element | null => {
+  switch (str(entity["_tag"])) {
+    case "work": {
+      const work = obj(entity["work"])
+      if (!work) return null
+      return (
+        <div className="flex items-center gap-2 min-w-0">
+          <Chip>work</Chip>
+          <div className="min-w-0 flex-1">
+            <WorkLine work={work} onOpenWork={onOpenWork} />
+          </div>
+        </div>
+      )
+    }
+    case "chat": {
+      const chat = obj(entity["chat"])
+      if (!chat) return null
+      return (
+        <div className="flex items-center gap-2 min-w-0">
+          <Chip>chat</Chip>
+          <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">
+            {str(chat["title"]) ?? "untitled"}
+          </span>
+        </div>
+      )
+    }
+    case "message": {
+      const message = obj(entity["message"])
+      if (!message) return null
+      // A tool row leads with the tool name; a conversational row with its role.
+      const label = str(obj(message["payload"])?.["toolName"]) ?? str(message["role"]) ?? "message"
+      return (
+        <div className="grid gap-1 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <Chip>{label}</Chip>
+          </div>
+          <Body text={str(message["body"]) ?? ""} />
+        </div>
+      )
+    }
+    default:
+      return null
+  }
+}
+
+/** The `arc.get` result — a batch of hydrated entities plus any refs that
+ * resolved to nothing. A single entity renders bare (it reads like a `work_get`);
+ * a batch lists them on bordered rows, collapsing past a screenful. `notFound` is
+ * never an error — a partial batch still shows what resolved. */
+const GetEntities = ({
+  entities,
+  notFound,
+  onOpenWork,
+}: {
+  readonly entities: ReadonlyArray<unknown>
+  readonly notFound: ReadonlyArray<string>
+  readonly onOpenWork?: (workId: string) => void
+}): JSX.Element => {
+  const cards = entities.map(obj)
+  return (
+    <div className="grid gap-1.5 min-w-0">
+      {cards.length === 1 && cards[0] ? (
+        <EntityLine entity={cards[0]} onOpenWork={onOpenWork} />
+      ) : (
+        cards.length > 1 && (
+          <Collapsible collapsedHeight={200}>
+            <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+              {cards.map((entity, i) =>
+                entity ? (
+                  <li key={entityRef(entity) ?? i} className="border-l border-border pl-2 min-w-0">
+                    <EntityLine entity={entity} onOpenWork={onOpenWork} />
+                  </li>
+                ) : null,
+              )}
+            </ul>
+          </Collapsible>
+        )
+      )}
+      {notFound.length > 0 && <span className={FIELD_LABEL}>not found: {notFound.join(", ")}</span>}
+    </div>
+  )
+}
 
 // ── input dispatch ────────────────────────────────────────────────────────────
 
@@ -203,13 +309,13 @@ const WorkUpdateArgs = ({ a }: { readonly a: Record<string, unknown> }): JSX.Ele
   const priority = set["priority"]
   return (
     <div className="flex flex-wrap items-center gap-2 min-w-0">
-      {isStatus(status) && (
+      {isWorkStatus(status) && (
         <>
           <span className="text-fg-faint">→</span>
           <StatusBadge status={status} />
         </>
       )}
-      {isPriority(priority) && <PriorityChip priority={priority} />}
+      {isWorkPriority(priority) && <PriorityChip priority={priority} />}
     </div>
   )
 }
@@ -249,7 +355,7 @@ export function arcToolBody(
       return (
         <div className="flex items-center gap-2 min-w-0">
           {refField(a, onOpenWork)}
-          {isStatus(a["status"]) && (
+          {isWorkStatus(a["status"]) && (
             <>
               <span className="text-fg-faint">→</span>
               <StatusBadge status={a["status"]} />
@@ -336,12 +442,18 @@ const resultWork = (output: string): Record<string, unknown> | null => {
 }
 
 /**
- * True when the result is a Work echo (create / update / get / status). The
- * authored input for those verbs would just duplicate it, so `ToolCall` renders
- * the result line alone — see the supersede check there.
+ * True when the result card already conveys what the input would — a Work echo
+ * (create / update / get / status), or an `arc.get` batch of hydrated entities
+ * (whose refs the input merely names). `ToolCall` then renders the result alone,
+ * dropping the now-redundant input line. Stays false for a degenerate empty get
+ * (no entities, nothing not-found) so we don't hide a card that won't render.
  */
-export function arcOutputIsWork(output: string): boolean {
-  return resultWork(output) !== null
+export function arcResultSupersedesInput(output: string): boolean {
+  if (resultWork(output) !== null) return true
+  const parsed = obj(tryParse(output))
+  if (!parsed || !Array.isArray(parsed["entities"])) return false
+  const notFound = Array.isArray(parsed["notFound"]) ? parsed["notFound"] : []
+  return parsed["entities"].length > 0 || notFound.length > 0
 }
 
 export function arcToolOutput(output: string, onOpenWork?: (workId: string) => void): JSX.Element | null {
@@ -352,6 +464,15 @@ export function arcToolOutput(output: string, onOpenWork?: (workId: string) => v
   // search: { hits, total, nextCursor }
   if (Array.isArray(parsed["hits"])) {
     return <SearchHits hits={parsed["hits"]} total={typeof parsed["total"] === "number" ? parsed["total"] : parsed["hits"].length} />
+  }
+  // get: { entities, notFound }
+  if (Array.isArray(parsed["entities"])) {
+    const entities = parsed["entities"]
+    const notFound = Array.isArray(parsed["notFound"])
+      ? parsed["notFound"].map(str).filter((r): r is string => Boolean(r))
+      : []
+    if (entities.length === 0 && notFound.length === 0) return null
+    return <GetEntities entities={entities} notFound={notFound} onOpenWork={onOpenWork} />
   }
   return null
 }

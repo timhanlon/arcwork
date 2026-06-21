@@ -1,15 +1,15 @@
 import type { WorkPriority } from "../../../shared/work.js"
+import { WORK_PRIORITIES } from "../../../shared/work.js"
 
 /**
- * Shared presentation of authored work priority — the chip colour and the
- * ordering both the chat-scoped list (`ChatWork`) and the global navigator
- * (`WorkPane`) render, so the two surfaces never drift. Priority is the one
- * ranking signal labels can't express; unset is a real state (no chip), distinct
- * from `p3`.
+ * Shared presentation of authored work priority — the chip colour and ordering
+ * every work surface renders, so they never drift on what a priority looks like.
+ * Priority is the one ranking signal labels can't express; unset is a real state
+ * (no chip), distinct from `p3`. The priority list itself is the single array in
+ * `shared/work.ts`, re-exported here so presentation consumers have one import.
  */
 
-/** Every priority, highest first — the order a picker offers and the queue sorts. */
-export const WORK_PRIORITIES: ReadonlyArray<WorkPriority> = ["p0", "p1", "p2", "p3"]
+export { WORK_PRIORITIES }
 
 /** Priority → theme colour token for its chip. p0 reads as urgent and fades to p3. */
 export const PRIORITY_COLOR: Record<WorkPriority, string> = {

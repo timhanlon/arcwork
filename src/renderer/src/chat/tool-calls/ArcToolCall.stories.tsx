@@ -170,41 +170,48 @@ export const WorkUpdateCodexName = () => (
   />
 )
 
-/** A lookup: thin ref arg, result hydrates the full work card + comment count. */
-export const WorkGet = () => (
+/** The triad hydrator — `arc.get` of a single ref: thin ref arg, hydrated work
+ * card as the result. */
+export const Get = () => (
   <Case
-    label="arc.work_get"
-    tool={tool("mcp__arc__arc_work_get", { workRefId: fullWork.id }, JSON.stringify({ work: fullWork, comments: [{}, {}], olderRevisionCommentCount: 0 }))}
-  />
-)
-
-/** The reviewer gate — decision chip + summary; here the work wasn't awaiting
- * review, so the result is an error that falls back to the raw block. */
-export const ReviewCompletion = () => (
-  <Case
-    label="arc.review_completion (error result)"
+    label="arc.get (single work)"
     tool={tool(
-      "mcp__arc__arc_review_completion",
-      { workRefId: createdWork.id, decision: "approve", summary: "Committed as 91ca827 on main: React.memo + resize instant. Typechecks clean, dev app runs with no scroll regression." },
-      "[error] ArcRequestError: work work_01ktym68j0f20vjh5jj780n9w1 is not awaiting completion review",
-      "output-error",
+      "arc_get",
+      { ref: fullWork.id },
+      JSON.stringify({
+        entities: [{ _tag: "work", work: fullWork, comments: [{}, {}], olderRevisionCommentCount: 0 }],
+        notFound: [],
+      }),
     )}
   />
 )
 
-/** Delegation to an implementer CLI — provider chip + instructions. */
-export const HandoffCreate = () => (
+/** A batched `arc.get` mixing kinds — work / chat / message entities listed on
+ * bordered rows, with a `notFound` line for the ref that resolved to nothing. */
+export const GetBatch = () => (
   <Case
-    label="arc.handoff_create"
-    tool={tool("mcp__arc__arc_handoff_create", { workRefId: fullWork.id, provider: "claude", instructions: "Apply fixes #1 and #2, run the suite, and report a completion_candidate." })}
-  />
-)
-
-/** An implementer reporting back — state chip + summary. */
-export const HandoffReport = () => (
-  <Case
-    label="arc.handoff_report"
-    tool={tool("mcp__arc__arc_handoff_report", { workRefId: fullWork.id, state: "completion_candidate", summary: "Both fixes landed and verified locally; suite green." }, JSON.stringify({ ...fullWork, status: "active" }))}
+    label="arc.get (batch + notFound)"
+    tool={tool(
+      "arc_get",
+      { refs: [fullWork.id, "chat_01ktxdtcv3fewvsj1rsvpk5a9a", "message_01ktxk6mp1fvmrtndffwwc9d34", "work_deadbeef"] },
+      JSON.stringify({
+        entities: [
+          { _tag: "work", work: fullWork, comments: [{}], olderRevisionCommentCount: 0 },
+          { _tag: "chat", chat: { _tag: "Chat", id: "chat_01ktxdtcv3fewvsj1rsvpk5a9a", title: "arc MCP server hardening" } },
+          {
+            _tag: "message",
+            message: {
+              _tag: "ChatMessage",
+              id: "message_01ktxk6mp1fvmrtndffwwc9d34",
+              role: "tool",
+              body: "Process exited with code 0\nAll 379 tests passed.",
+              payload: { kind: "tool", toolName: "shell" },
+            },
+          },
+        ],
+        notFound: ["work_deadbeef"],
+      }),
+    )}
   />
 )
 
@@ -237,10 +244,11 @@ export const StatusChangePending = () => (
   </div>
 )
 
-/** Every status as a *result* Work card — exercises `WorkLine`'s marker: a
- * check-square with a dimmed title once resolved (done/superseded), a plain
- * title otherwise. The result supersedes the input line, so this is the card a
- * settled `work.update` leaves in the transcript. */
+/** Every status as a *result* Work card — exercises `WorkLine`'s shared
+ * `WorkStatusMarker` (an icon for blocked/done/superseded, none for open/active),
+ * the dimmed title for resolved work, and the trailing status word. The result
+ * supersedes the input line, so this is the card a settled `work.update` leaves
+ * in the transcript. */
 export const StatusChangeResult = () => (
   <div style={{ display: "grid", gap: 22 }}>
     {WORK_STATUSES.map((status) => (
@@ -271,10 +279,8 @@ export const All = () => (
     <WorkCreate />
     <WorkUpdate />
     <WorkUpdateCodexName />
-    <WorkGet />
-    <ReviewCompletion />
-    <HandoffCreate />
-    <HandoffReport />
+    <Get />
+    <GetBatch />
     <Search />
     <Pending />
   </div>
