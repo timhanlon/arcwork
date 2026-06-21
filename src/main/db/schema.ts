@@ -121,13 +121,38 @@ export interface ChatRow {
   readonly createdAt: string
 }
 
-/** One row per interactive PTY target session, keyed `(chatId, provider)`. */
+/** A communication endpoint — the "where turns flow" half of a worker: the
+ * harness/provider, the (eventually selectable) model, and a preset. `kind` is
+ * `'local'` today; the remote tier adds `'remote'`/`'cloudflare-sandbox'`
+ * without a model change. Distinct from the diff endpoint (`workspaces`), which
+ * is the "where code state lives" half; a `target_sessions` row binds the two.
+ * Derived from `(provider, preset)` for now (model null = "harness default"),
+ * so the id is deterministic: `ch:<provider>:<model>:<preset>`. */
+export interface ChannelRow {
+  readonly id: string
+  readonly kind: string
+  readonly provider: string
+  readonly model: string | null
+  readonly preset: string | null
+  readonly createdAt: string
+  readonly lastUsedAt: string
+}
+
+/** One row per interactive PTY target session, keyed `(chatId, provider)` — the
+ * worker, i.e. the bound pair of a comm endpoint (`channelId` → `channels`) and
+ * a diff endpoint (`workspaceId` → `workspaces`). `provider`/`preset`/`cwd` are
+ * the pre-split inlined values, kept dual-written until the launch path reads
+ * the refs; `channelId`/`workspaceId` are null only for backfill orphans. */
 export interface TargetSessionRow {
   readonly id: string
   readonly chatId: string
   readonly provider: string
   readonly preset: string | null
   readonly cwd: string
+  /** comm endpoint: the `channels` row this worker talks through */
+  readonly channelId: string | null
+  /** diff endpoint: the `workspaces` row this worker writes into */
+  readonly workspaceId: string | null
   /** discovered after launch via the SessionStart hook; null until bound */
   readonly nativeSessionId: string | null
   readonly nativeTranscriptPath: string | null
@@ -698,5 +723,42 @@ export const arcMigrations: Migrations = {
     `ALTER TABLE workspaces ADD COLUMN git_branch TEXT`,
     `ALTER TABLE workspaces ADD COLUMN git_head_sha TEXT`,
     `CREATE INDEX IF NOT EXISTS workspaces_repository ON workspaces(repository_id)`,
+  ),
+  // Unweld the worker into its two transports (work_01kvnz9h). A target session
+  // had welded the comm endpoint (harness `provider`/`preset`) and the diff
+  // endpoint (`cwd`) into one row, so neither could be selected independently.
+  // Split them: `channels` is the comm endpoint (the only new table); the diff
+  // endpoint is the existing `workspaces`. `target_sessions` gains `channel_id`
+  // + `workspace_id` refs alongside the still-inlined `provider`/`preset`/`cwd`,
+  // which stay dual-written until the launch path reads the refs (a later
+  // slice). Backfill is behavior-preserving: one local channel per distinct
+  // `(provider, preset)` in use (model null = "harness default"), and each
+  // session points at the workspace whose path equals its cwd. A cwd with no
+  // matching workspace row leaves `workspace_id` null and falls back to the
+  // retained `cwd` column — no orphan exists under today's launch (cwd = the
+  // chat workspace path), the null branch is defensive.
+  "0007_worker_comm_diff_endpoints": sqlMigration(
+    `CREATE TABLE channels (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT,
+    preset TEXT,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT NOT NULL
+  )`,
+    `ALTER TABLE target_sessions ADD COLUMN channel_id TEXT REFERENCES channels(id)`,
+    `ALTER TABLE target_sessions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id)`,
+    `INSERT OR IGNORE INTO channels (id, kind, provider, model, preset, created_at, last_used_at)
+   SELECT 'ch:' || provider || '::' || COALESCE(preset, ''), 'local', provider, NULL, preset,
+          MIN(started_at), MAX(started_at)
+   FROM target_sessions
+   GROUP BY provider, preset`,
+    `UPDATE target_sessions
+     SET channel_id = 'ch:' || provider || '::' || COALESCE(preset, '')`,
+    `UPDATE target_sessions
+     SET workspace_id = (SELECT id FROM workspaces WHERE workspaces.path = target_sessions.cwd)`,
+    `CREATE INDEX IF NOT EXISTS target_sessions_channel ON target_sessions(channel_id)`,
+    `CREATE INDEX IF NOT EXISTS target_sessions_workspace ON target_sessions(workspace_id)`,
   ),
 }

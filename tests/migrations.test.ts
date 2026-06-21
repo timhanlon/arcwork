@@ -130,6 +130,95 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
     expect(result.afterSecond).toBe(result.afterFirst)
   })
 
+  it("0007 unwelds the worker: backfills one channel per (provider, preset) and points each session at the workspace whose path equals its cwd", async () => {
+    // Stage the pre-split schema, seed legacy target_sessions the way today's
+    // launch writes them (cwd = the chat's workspace path), then let 0007 run as
+    // a pending migration — exactly the upgrade path a live DB takes.
+    const { ["0007_worker_comm_diff_endpoints"]: _held, ...preSplit } = arcMigrations
+
+    const result = await run(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient
+        yield* runMigrations("arc_migrations", preSplit)
+
+        yield* sql.unsafe(`INSERT INTO workspaces (id, path, name, created_at, last_opened_at)
+          VALUES ('ws_main', '/repo/main', 'main', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                 ('ws_feat', '/repo/feat', 'feat', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+        // target_sessions is keyed UNIQUE(chat_id, provider), so the two
+        // claude sessions live on different chats.
+        yield* sql.unsafe(`INSERT INTO chats (id, workspace_id, title, created_at)
+          VALUES ('chat_a', 'ws_main', 'a', '2026-01-01T00:00:00Z'),
+                 ('chat_b', 'ws_feat', 'b', '2026-01-01T00:00:00Z'),
+                 ('chat_c', 'ws_main', 'c', '2026-01-01T00:00:00Z')`)
+        // Two claude/null sessions on different cwds (→ one shared channel, two
+        // distinct workspaces), one codex/preset session, one orphan cwd.
+        yield* sql.unsafe(`INSERT INTO target_sessions
+          (id, chat_id, provider, preset, cwd, native_session_id, native_transcript_path, state, started_at)
+          VALUES
+          ('s1', 'chat_a', 'claude', NULL, '/repo/main', NULL, NULL, 'exited', '2026-01-02T00:00:00Z'),
+          ('s2', 'chat_a', 'codex', 'gpt-5', '/repo/main', NULL, NULL, 'exited', '2026-01-03T00:00:00Z'),
+          ('s3', 'chat_b', 'claude', NULL, '/repo/feat', NULL, NULL, 'exited', '2026-01-04T00:00:00Z'),
+          ('s4', 'chat_c', 'claude', NULL, '/gone', NULL, NULL, 'exited', '2026-01-05T00:00:00Z')`)
+
+        const cwdBefore = Object.fromEntries(
+          (yield* sql.unsafe<{ id: string; cwd: string }>(`SELECT id, cwd FROM target_sessions`)).map(
+            (r) => [r.id, r.cwd] as const,
+          ),
+        )
+
+        yield* runMigrations("arc_migrations", arcMigrations)
+
+        const channels = yield* sql.unsafe<{
+          provider: string
+          preset: string | null
+          kind: string
+          model: string | null
+        }>(`SELECT provider, preset, kind, model FROM channels ORDER BY provider, preset`)
+
+        const sessions = yield* sql.unsafe<{
+          id: string
+          provider: string
+          cwd: string
+          channelId: string | null
+          workspaceId: string | null
+          wsPath: string | null
+          chProvider: string | null
+        }>(`SELECT ts.id, ts.provider, ts.cwd, ts.channel_id AS "channelId", ts.workspace_id AS "workspaceId",
+                   w.path AS "wsPath", c.provider AS "chProvider"
+            FROM target_sessions ts
+            LEFT JOIN workspaces w ON w.id = ts.workspace_id
+            LEFT JOIN channels c ON c.id = ts.channel_id
+            ORDER BY ts.id`)
+
+        return { cwdBefore, channels, sessions }
+      }),
+    )
+
+    // One local channel per distinct (provider, preset); model null = harness default.
+    expect(result.channels).toEqual([
+      { provider: "claude", preset: null, kind: "local", model: null },
+      { provider: "codex", preset: "gpt-5", kind: "local", model: null },
+    ])
+
+    const byId = Object.fromEntries(result.sessions.map((s) => [s.id, s] as const))
+    // Comm endpoint: every session resolves to a channel matching its own provider;
+    // the two claude/null sessions share one channel id.
+    for (const s of result.sessions) {
+      expect(s.channelId).not.toBeNull()
+      expect(s.chProvider).toBe(s.provider)
+    }
+    expect(byId["s1"]!.channelId).toBe(byId["s3"]!.channelId)
+    expect(byId["s1"]!.channelId).not.toBe(byId["s2"]!.channelId)
+
+    // Diff endpoint invariant: resolved workspace path equals the original cwd.
+    for (const s of result.sessions.filter((s) => s.workspaceId !== null)) {
+      expect(s.wsPath).toBe(result.cwdBefore[s.id])
+    }
+    // Orphan cwd (no workspace row) → null ref, cwd column retained as fallback.
+    expect(byId["s4"]!.workspaceId).toBeNull()
+    expect(byId["s4"]!.cwd).toBe("/gone")
+  })
+
   it("runs future migrations after the current baseline", async () => {
     // Exercises the forward path: a base table, then an ALTER added as a later
     // id. A DB that has already run 0001 picks up 0002 on the next run, and the

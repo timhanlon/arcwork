@@ -47,7 +47,9 @@ export class ArcStore extends Context.Service<
       targetSessionId: string,
     ) => Effect.Effect<string | null, SqlError>
     readonly loadTargetSessions: Effect.Effect<ReadonlyArray<TargetSessionRow>, SqlError>
-    readonly upsertTargetSession: (s: TargetSessionRow) => Effect.Effect<void, SqlError>
+    readonly upsertTargetSession: (
+      s: Omit<TargetSessionRow, "channelId" | "workspaceId">,
+    ) => Effect.Effect<void, SqlError>
     readonly setNativeSessionId: (
       id: string,
       nativeSessionId: string,
@@ -355,24 +357,51 @@ export const ArcStoreLive = Layer.effect(
     const loadTargetSessions =
       sql<TargetSessionRow>`SELECT * FROM target_sessions ORDER BY started_at, id`
 
-    const upsertTargetSession = (s: TargetSessionRow) =>
-      sql`INSERT INTO target_sessions ${sql.insert({
-        id: s.id,
-        chatId: s.chatId,
-        provider: s.provider,
-        preset: s.preset,
-        cwd: s.cwd,
-        nativeSessionId: s.nativeSessionId,
-        nativeTranscriptPath: s.nativeTranscriptPath,
-        state: s.state,
-        startedAt: s.startedAt,
-      })} ON CONFLICT(id) DO UPDATE SET
+    // A target session is the bound pair of a comm endpoint (`channels`) and a
+    // diff endpoint (`workspaces`). The two refs are derived here — the single
+    // place sessions are persisted — so the launch path stays unchanged until a
+    // later slice reads them: the comm endpoint is the `(provider, preset)`
+    // channel (created on demand, model null = "harness default"), the diff
+    // endpoint is the workspace whose path equals the cwd (null for an orphan
+    // cwd, which then falls back to the still-written `cwd` column). The id
+    // scheme matches migration 0007's backfill: `ch:<provider>:<model>:<preset>`.
+    const upsertTargetSession = (s: Omit<TargetSessionRow, "channelId" | "workspaceId">) =>
+      Effect.gen(function* () {
+        const channelId = `ch:${s.provider}::${s.preset ?? ""}`
+        yield* sql`INSERT INTO channels ${sql.insert({
+          id: channelId,
+          kind: "local",
+          provider: s.provider,
+          model: null,
+          preset: s.preset,
+          createdAt: s.startedAt,
+          lastUsedAt: s.startedAt,
+        })} ON CONFLICT(id) DO UPDATE SET last_used_at = excluded.last_used_at`
+        const workspaceRows = yield* sql<{ id: string }>`
+          SELECT id FROM workspaces WHERE path = ${s.cwd} LIMIT 1`
+        const workspaceId = workspaceRows[0]?.id ?? null
+        yield* sql`INSERT INTO target_sessions ${sql.insert({
+          id: s.id,
+          chatId: s.chatId,
+          provider: s.provider,
+          preset: s.preset,
+          cwd: s.cwd,
+          channelId,
+          workspaceId,
+          nativeSessionId: s.nativeSessionId,
+          nativeTranscriptPath: s.nativeTranscriptPath,
+          state: s.state,
+          startedAt: s.startedAt,
+        })} ON CONFLICT(id) DO UPDATE SET
         preset = excluded.preset,
         cwd = excluded.cwd,
+        channel_id = excluded.channel_id,
+        workspace_id = excluded.workspace_id,
         native_session_id = excluded.native_session_id,
         native_transcript_path = excluded.native_transcript_path,
         state = excluded.state,
-        started_at = excluded.started_at`.pipe(Effect.asVoid)
+        started_at = excluded.started_at`
+      }).pipe(Effect.asVoid)
 
     const setNativeSessionId = (
       id: string,
