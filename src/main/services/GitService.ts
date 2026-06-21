@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Stream } from "effect"
+import { Context, Duration, Effect, Fiber, Layer, PubSub, Stream } from "effect"
 import { execFile } from "node:child_process"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
@@ -47,8 +47,28 @@ export class GitService extends Context.Service<
     readonly gitContext: (
       workspaceId: string,
     ) => Effect.Effect<WorkspaceGitContext, ArcRequestError>
+    /** Live "the git read model changed for this workspace" stream — the
+     * renderer re-pulls `gitContext` on each tick. Backed by a PubSub the hook
+     * refresh paths below publish onto. */
+    readonly changes: Stream.Stream<GitChange>
+    /** A `post-checkout` hook fired (branch switch / `git worktree add`) at this
+     * cwd: re-detect every workspace under that worktree root so its cached
+     * branch/head — the branch→PR map — is fresh, then notify the renderer.
+     * Best-effort: a non-repo cwd or any failure is logged, never raised. */
+    readonly notifyCheckout: (cwd: string) => Effect.Effect<void>
+    /** A `pre-push` hook fired at this cwd. Because pre-push runs before the
+     * network round-trip, GitHub PR state is still stale, so this schedules a
+     * DEBOUNCED PR sync (per workspace, latest push wins) rather than syncing
+     * now. Best-effort. */
+    readonly notifyPrePush: (cwd: string) => Effect.Effect<void>
   }
 >()("GitService") {}
+
+/** A tiny git-read-model change descriptor: which workspace's repo/PR state
+ * moved. Carries no data — the renderer re-pulls `gitContext` for that id. */
+export interface GitChange {
+  readonly workspaceId: string
+}
 
 /** The `gh pr list --json` fields we request, shaped loosely — gh emits
  * uppercase enums and may omit/blank some fields, normalized in {@link mapGhPullRequest}. */
@@ -491,6 +511,16 @@ export const GitServiceLive = Layer.effect(
     const workspaces = yield* WorkspaceService
     const store = yield* ArcStore
 
+    // Invalidation bus for the renderer's git context. Unbounded so a publish
+    // (from the hook refresh paths below) never blocks the refreshing fiber.
+    const updates = yield* PubSub.unbounded<GitChange>()
+    const changes = Stream.fromPubSub(updates)
+    const publishChange = (workspaceId: string) => PubSub.publish(updates, { workspaceId })
+    // The layer's own scope — debounced pre-push syncs fork into it (not the
+    // caller's), so a delayed sync outlives the hook signal that scheduled it
+    // and is interrupted only on app shutdown.
+    const scope = yield* Effect.scope
+
     const detectRepository = (
       workspaceId: string,
     ): Effect.Effect<RepositoryRow | null, ArcRequestError> =>
@@ -757,11 +787,68 @@ export const GitServiceLive = Layer.effect(
           }
         })
 
+    // A git hook runs with cwd = the worktree root. Refresh every workspace that
+    // sits in that worktree — its own cwd is the root or a subdirectory of it.
+    const workspacesUnderCwd = (
+      list: ReadonlyArray<Workspace>,
+      cwd: string,
+    ): ReadonlyArray<Workspace> => {
+      const root = cwd.endsWith(path.sep) ? cwd.slice(0, -1) : cwd
+      return list.filter((w) => w.path === root || w.path.startsWith(root + path.sep))
+    }
+
+    const notifyCheckout = (cwd: string): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const targets = workspacesUnderCwd(yield* workspaces.list, cwd)
+        yield* Effect.forEach(
+          targets,
+          (w) =>
+            detectRepository(w.id).pipe(
+              Effect.flatMap(() => publishChange(w.id)),
+              Effect.catch((e) => Effect.logWarning(`git checkout refresh failed for ${w.path}: ${e}`)),
+            ),
+          { concurrency: 4, discard: true },
+        )
+      }).pipe(Effect.withSpan("arc.git.notify_checkout", { attributes: { "arc.cwd": cwd } }))
+
+    // Per-workspace pending PR sync. A push fires `pre-push` before the network
+    // round-trip, so GitHub is stale now; we wait, then sync. A second push for
+    // the same workspace interrupts the prior pending sync (debounce, latest
+    // wins). Entries are overwritten in place — a finished fiber left in the map
+    // is inert, so no cleanup pass is needed.
+    const pendingSync = new Map<string, Fiber.Fiber<void, never>>()
+    const PUSH_SYNC_DELAY = Duration.seconds(4)
+
+    const notifyPrePush = (cwd: string): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const targets = workspacesUnderCwd(yield* workspaces.list, cwd)
+        yield* Effect.forEach(
+          targets,
+          (w) =>
+            Effect.gen(function* () {
+              const existing = pendingSync.get(w.id)
+              if (existing) yield* Fiber.interrupt(existing)
+              const fiber = yield* Effect.sleep(PUSH_SYNC_DELAY).pipe(
+                Effect.flatMap(() => syncPullRequests(w.id)),
+                Effect.flatMap(() => publishChange(w.id)),
+                Effect.asVoid,
+                Effect.catch((e) => Effect.logWarning(`git push PR sync failed for ${w.path}: ${e}`)),
+                Effect.forkIn(scope),
+              )
+              pendingSync.set(w.id, fiber)
+            }),
+          { discard: true },
+        )
+      }).pipe(Effect.withSpan("arc.git.notify_pre_push", { attributes: { "arc.cwd": cwd } }))
+
     return GitService.of({
       status,
       detectRepository,
       syncPullRequests,
       gitContext,
+      changes,
+      notifyCheckout,
+      notifyPrePush,
       diff: (workspaceId, filePath) =>
         Effect.gen(function* () {
           const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)

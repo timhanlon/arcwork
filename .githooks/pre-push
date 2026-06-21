@@ -1,0 +1,24 @@
+#!/bin/sh
+# arc-electron · pre-push: a push is about to go out — schedule a delayed PR sync.
+#
+# pre-push is the only client-side push hook (there is no post-push), and it runs
+# BEFORE the network round-trip, so GitHub's PR/CI state isn't updated yet. This
+# hook therefore only *signals intent*: arc schedules a debounced PR sync a few
+# seconds later, once the push has plausibly landed. Same best-effort socket
+# transport as post-commit; in a plain terminal it is a no-op.
+#
+# It must never block or fail the push — the signal is fire-and-forget and the
+# gate below exits 0 cleanly when not in an arc-launched shell.
+[ -n "$ARC_HOOK_SOCK" ] && [ -n "$ARC_HOOK_HELPER" ] || exit 0
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+# pre-push args: $1 = remote name, $2 = remote URL. The pushed refs arrive on
+# stdin as `<local ref> <local sha> <remote ref> <remote sha>` lines — stdin is
+# single-use, so capture it once here and hand it to the payload builder.
+refs=$(cat)
+payload=$(printf '%s' "$refs" | ARC_REMOTE_NAME="$1" ARC_REMOTE_URL="$2" node "$root/.githooks/arc-push-payload.mjs" 2>/dev/null)
+[ -n "$payload" ] || exit 0 # payload builder failed → nothing to ship
+
+printf '%s' "$payload" | node "$ARC_HOOK_HELPER" git pre-push >/dev/null 2>&1 || true
+exit 0

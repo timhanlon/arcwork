@@ -106,6 +106,7 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     WatchChatMessageChanges: () => Stream.unwrap(Effect.map(ChatMessageService, (_) => _.changes)),
     WatchChatActivityChanges: () => Stream.unwrap(Effect.map(ActivityEventService, (_) => _.changes)),
     WatchWorkChanges: () => Stream.unwrap(Effect.map(WorkService, (_) => _.changes)),
+    WatchGitChanges: () => Stream.unwrap(Effect.map(GitService, (_) => _.changes)),
     ListChats: () => rpcEffect("ListChats", Effect.flatMap(ChatService, (_) => _.list)),
     TestLocalModel: () => rpcEffect("TestLocalModel", Effect.flatMap(LocalModelService, (_) => _.status)),
     ListPendingRequests: () =>

@@ -113,6 +113,7 @@ const IngestKinds = Schema.Literals(["all", "claude", "codex", "cursor"])
  */
 const ChatChange = Schema.Struct({ chatId: Schema.String })
 const WorkChangeWire = Schema.Struct({ refId: Schema.String, chatId: Schema.NullOr(Schema.String) })
+const GitChange = Schema.Struct({ workspaceId: Schema.String })
 
 /**
  * The contract. Each `Rpc.make` carries its own payload + success + error, so
@@ -238,6 +239,9 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("WatchChatMessageChanges", { success: ChatChange, error: RpcError, stream: true }),
   Rpc.make("WatchChatActivityChanges", { success: ChatChange, error: RpcError, stream: true }),
   Rpc.make("WatchWorkChanges", { success: WorkChangeWire, error: RpcError, stream: true }),
+  /** Git read-model invalidation: a hook-driven branch remap or PR sync touched
+   * a workspace's repo/PR state — the Git pane re-pulls `GetWorkspaceGitContext`. */
+  Rpc.make("WatchGitChanges", { success: GitChange, error: RpcError, stream: true }),
   Rpc.make("ReprojectChatMessages", {
     payload: { chatId: Schema.String },
     success: ReprojectResult,

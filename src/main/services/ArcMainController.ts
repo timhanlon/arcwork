@@ -12,6 +12,8 @@ import { RawHookSignalService } from "./RawHookSignalService.js"
 import { ArtifactIngestService } from "./ArtifactIngestService.js"
 import { ingestHookSignal } from "./HookSignalIngestion.js"
 import { WorkService } from "../work/service.js"
+import { GitService } from "./GitService.js"
+import { isCheckoutSignal, isPushSignal } from "../hooks/git-events.js"
 import {
   commitCitationNote,
   commitFromSignal,
@@ -165,6 +167,7 @@ export const launchArcMainController = (
   | LiveTargetStateService
   | ArtifactIngestService
   | WorkService
+  | GitService
 > =>
   Effect.gen(function* () {
     const sessions = yield* TargetSessionManager
@@ -175,6 +178,7 @@ export const launchArcMainController = (
     const liveStates = yield* LiveTargetStateService
     const artifactIngest = yield* ArtifactIngestService
     const work = yield* WorkService
+    const git = yield* GitService
 
     // Per-target artifact pollers. A FiberMap is a scoped resource: each poller
     // is keyed by target session id, replacing or removing one interrupts its
@@ -462,6 +466,18 @@ export const launchArcMainController = (
           // resolve to a typed citation on the chat's work and then stop here.
           if (isCommitSignal(signal)) {
             yield* stampCommitCitation(signal)
+            return
+          }
+          // Git checkout/push signals are opportunistic read-model refresh
+          // triggers, not chat/turn events: a branch switch remaps branch→PR
+          // immediately; a pre-push schedules a debounced GitHub PR sync. Both
+          // are best-effort and keyed by the worktree cwd the hook ran in.
+          if (signal.cwd && isCheckoutSignal(signal)) {
+            yield* git.notifyCheckout(signal.cwd)
+            return
+          }
+          if (signal.cwd && isPushSignal(signal)) {
+            yield* git.notifyPrePush(signal.cwd)
             return
           }
           // Drive the live "generating" activity: a prompt submit opens the

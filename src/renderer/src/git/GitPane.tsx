@@ -1,7 +1,10 @@
 import { PatchDiff } from "@pierre/diffs/react"
+import { useAtomValue } from "@effect/atom-react"
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import { type JSX, useEffect, useMemo, useState } from "react"
 import type { GitChangeStatus, GitFileChange, GitStatus, WorkspaceGitContext } from "../../../shared/git.js"
 import type { Workspace } from "../../../shared/workspace.js"
+import { gitChangesSignalAtom } from "../atoms.js"
 import { Button } from "../ui/Button.js"
 import { Row } from "../ui/Row.js"
 import { rpc } from "../rpc-client.js"
@@ -80,6 +83,11 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
   const [gitContext, setGitContext] = useState<WorkspaceGitContext | undefined>(undefined)
   const [syncing, setSyncing] = useState(false)
 
+  // Hook-driven refresh: a `post-checkout` branch remap or `pre-push` PR sync
+  // ticks this counter for the open workspace (empty key when none, never ticks).
+  const gitSignalResult = useAtomValue(gitChangesSignalAtom(workspace?.id ?? ""))
+  const gitSignal = AsyncResult.isSuccess(gitSignalResult) ? gitSignalResult.value : 0
+
   const grouped = useMemo(() => {
     const map = new Map<GitChangeStatus, ReadonlyArray<GitFileChange>>()
     for (const status of STATUS_ORDER) map.set(status, [])
@@ -143,8 +151,22 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
     setGitContext(undefined)
     reload()
     loadContext()
+    // Auto-sync PRs on workspace open (a refresh trigger the design calls for):
+    // loadContext paints the persisted read model instantly, then this pulls
+    // fresh PRs from GitHub in the background so the current-branch PR appears
+    // without a manual Sync click. Cheap/no-op for non-GitHub repos.
+    syncPullRequests()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace?.id])
+
+  // Re-pull status + context when a git hook signals a change for this
+  // workspace. Skips the seed tick (`0`), so it never doubles the mount pull.
+  useEffect(() => {
+    if (gitSignal === 0) return
+    reload()
+    loadContext()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gitSignal])
 
   if (!workspace) {
     return (

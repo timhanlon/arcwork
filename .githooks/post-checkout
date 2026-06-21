@@ -1,0 +1,28 @@
+#!/bin/sh
+# arc-electron · post-checkout: a branch switch (or `git worktree add`) moved HEAD
+# — tell arc so it remaps the workspace's current branch to its open PR.
+#
+# Same best-effort contract and transport as `post-commit`: when the checkout
+# happens in an arc-launched (env-stamped) shell, this hook inherits
+# ARC_HOOK_SOCK + ARC_HOOK_HELPER and ships a small payload over the same socket
+# the provider hooks use. arc re-detects the repo for the affected workspace
+# (refreshing the cached branch/head, which is the branch→PR map) — no agent,
+# no network here; the durable PR sync is GitHub-backed and triggered elsewhere.
+#
+# In a plain terminal (neither var set) this is a no-op. It must never block or
+# fail the checkout. Bypass with `git checkout --no-verify` is not a thing, but
+# the gate below makes a non-arc checkout a clean exit 0 regardless.
+[ -n "$ARC_HOOK_SOCK" ] && [ -n "$ARC_HOOK_HELPER" ] || exit 0
+
+# post-checkout args: $1 = ref of the previous HEAD, $2 = ref of the new HEAD,
+# $3 = checkout-type flag (1 = branch checkout / `git worktree add`; 0 = file
+# checkout like `git checkout -- path`). Only a branch checkout moves the branch,
+# so a file checkout never needs a PR remap.
+[ "$3" = "1" ] || exit 0
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+payload=$(ARC_PREV_HEAD="$1" ARC_NEW_HEAD="$2" node "$root/.githooks/arc-checkout-payload.mjs" 2>/dev/null)
+[ -n "$payload" ] || exit 0 # payload builder failed → nothing to ship
+
+printf '%s' "$payload" | node "$ARC_HOOK_HELPER" git post-checkout >/dev/null 2>&1 || true
+exit 0

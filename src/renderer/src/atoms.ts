@@ -125,6 +125,28 @@ const chatActivitySignalAtom = Atom.family((chatId: string) =>
 )
 
 /**
+ * Per-workspace git read-model refresh signal. `WatchGitChanges` ticks whenever
+ * a hook-driven branch remap (`post-checkout`) or PR sync (`pre-push`) touched
+ * that workspace's repo/PR state; the Git pane re-pulls its context on each
+ * increment. Seed `0` matches `initialValue` so the pane's own first pull on
+ * mount isn't doubled by a boot tick.
+ */
+export const gitChangesSignalAtom = Atom.family((workspaceId: string) =>
+  ArcRpcAtomClient.runtime.atom(
+    Stream.unwrap(
+      ArcRpcAtomClient.use((client) =>
+        Effect.succeed(
+          signalCount(
+            client("WatchGitChanges", undefined).pipe(Stream.filter((c) => c.workspaceId === workspaceId)),
+          ),
+        ),
+      ),
+    ),
+    { initialValue: 0 },
+  )
+)
+
+/**
  * The work navigator/comments refresh signal. Work has two change sources folded
  * here: the in-app `WatchWorkChanges` stream (every real mutation, RPC or MCP,
  * runs through the same in-process `WorkService`), plus the chat activity/message
