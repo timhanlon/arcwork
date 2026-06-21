@@ -11,6 +11,8 @@ Arc Work is my exploration of a unified development environment, where conversat
 
 It’s built primarily for myself, but I’m putting it out into the world to see if it resonates.
 
+![Arc Work screenshot](docs/screenshot.png)
+
 > **Status:** early, macOS-only, distributed source-only —
 > run it with `pnpm dev` (see below). No packaged build yet.
 
