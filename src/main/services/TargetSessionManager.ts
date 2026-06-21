@@ -39,6 +39,10 @@ import { tracePtyChunk } from "./pty-trace.js"
 export interface LaunchRequest {
   readonly provider: string
   readonly chatId: string
+  /** Diff endpoint to run in; defaults to the chat's own workspace. Letting it
+   * differ is what makes the comm/diff cross-product expressible — a worker can
+   * talk via one provider while writing into a workspace other than the chat's. */
+  readonly workspaceId?: string
   readonly preset?: string
   readonly prompt?: string
   /**
@@ -457,10 +461,11 @@ export const TargetSessionManagerLive = Layer.effect(
           return yield* Effect.fail(arcRequestError(`Unknown chat "${req.chatId}"`))
         }
         const wsList = yield* workspaces.list
-        const ws = wsList.find((w) => w.id === chat.workspaceId)
+        const wsId = req.workspaceId ?? chat.workspaceId
+        const ws = wsList.find((w) => w.id === wsId)
         if (!ws) {
           return yield* Effect.fail(
-            arcRequestError(`Unknown workspace "${chat.workspaceId}" for chat "${req.chatId}"`),
+            arcRequestError(`Unknown workspace "${wsId}" for chat "${req.chatId}"`),
           )
         }
         const cwd = ws.path

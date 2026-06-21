@@ -315,6 +315,9 @@ export const ArcRpcs = RpcGroup.make(
     payload: {
       provider: Schema.String,
       chatId: Schema.String,
+      /** Diff endpoint to run in — the worker writes here and hooks/file refs
+       * resolve against it. Omit to use the chat's own workspace. */
+      workspaceId: Schema.optional(Schema.String),
       /** draft prompt to seed the session (prefill flag / env / stdin per provider) */
       prompt: Schema.optional(Schema.String),
       preset: Schema.optional(Schema.String),
