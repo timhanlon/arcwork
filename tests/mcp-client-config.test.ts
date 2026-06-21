@@ -9,42 +9,51 @@ import {
   providerServerEntry,
 } from "../src/main/mcp/client-config.js"
 
+// Stable profile's persistent port; the rendered config is keyed off the profile
+// passed to each helper, so dev would render :7794 instead (asserted separately).
 const URL = "http://127.0.0.1:7793/mcp"
+const DEV_URL = "http://127.0.0.1:7794/mcp"
 
 describe("MCP client config (per-provider, HTTP bearer)", () => {
   it("declares an HTTP bearer server for claude/cursor", () => {
     // claude needs an explicit transport tag and expands ${VAR} in headers.
-    expect(providerServerEntry("claude")).toEqual({
+    expect(providerServerEntry("claude", "stable")).toEqual({
       type: "http",
       url: URL,
       headers: { Authorization: "Bearer ${ARC_MCP_TOKEN}" },
     })
     // cursor infers HTTP from `url` and expands ${env:VAR} in headers.
-    expect(providerServerEntry("cursor")).toEqual({
+    expect(providerServerEntry("cursor", "stable")).toEqual({
       url: URL,
       headers: { Authorization: "Bearer ${env:ARC_MCP_TOKEN}" },
     })
   })
 
+  it("targets the given profile's persistent port (dev → :7794)", () => {
+    expect(providerServerEntry("claude", "dev")).toMatchObject({ url: DEV_URL })
+    expect(providerClientConfig("codex", "/c", "/h", "dev").render()).toContain(`url = "${DEV_URL}"`)
+    expect(providerMcpLaunchArgs("codex", "dev")).toContain(`mcp_servers.arc.url="${DEV_URL}"`)
+  })
+
   it("scopes config files: claude/cursor project-local, codex user-level", () => {
     const cwd = "/work/repo"
     const home = "/home/dev"
-    expect(providerClientConfig("claude", cwd, home)).toMatchObject({
+    expect(providerClientConfig("claude", cwd, home, "stable")).toMatchObject({
       file: join(cwd, ".mcp.json"),
       writable: true,
     })
-    expect(providerClientConfig("cursor", cwd, home)).toMatchObject({
+    expect(providerClientConfig("cursor", cwd, home, "stable")).toMatchObject({
       file: join(cwd, ".cursor", "mcp.json"),
       writable: true,
     })
-    expect(providerClientConfig("codex", cwd, home)).toMatchObject({
+    expect(providerClientConfig("codex", cwd, home, "stable")).toMatchObject({
       file: join(home, ".codex", "config.toml"),
       writable: true,
     })
   })
 
   it("renders claude config as valid JSON carrying the HTTP bearer server", () => {
-    const doc = providerClientConfig("claude", "/c", "/h").render()
+    const doc = providerClientConfig("claude", "/c", "/h", "stable").render()
     expect(JSON.parse(doc)).toEqual({
       mcpServers: {
         arc: {
@@ -57,7 +66,7 @@ describe("MCP client config (per-provider, HTTP bearer)", () => {
   })
 
   it("renders codex config as a streamable-HTTP bearer TOML block", () => {
-    const doc = providerClientConfig("codex", "/c", "/h").render()
+    const doc = providerClientConfig("codex", "/c", "/h", "stable").render()
     expect(doc).toContain("[mcp_servers.arc]")
     expect(doc).toContain(`url = "${URL}"`)
     expect(doc).toContain('bearer_token_env_var = "ARC_MCP_TOKEN"')
@@ -70,7 +79,7 @@ describe("MCP client config (per-provider, HTTP bearer)", () => {
       $schema: "https://example/schema.json",
       mcpServers: { other: { command: "foo", args: ["bar"] } },
     }
-    const merged = mergeArcServer(existing, "cursor")
+    const merged = mergeArcServer(existing, "cursor", "stable")
     expect(merged).toEqual({
       $schema: "https://example/schema.json",
       mcpServers: {
@@ -86,7 +95,7 @@ describe("MCP client config (per-provider, HTTP bearer)", () => {
     const stale = {
       mcpServers: { arc: { type: "stdio", command: "arc-work", args: ["mcp-proxy"] } },
     }
-    const merged = mergeArcServer(stale, "claude")
+    const merged = mergeArcServer(stale, "claude", "stable")
     expect(merged.mcpServers).toEqual({
       arc: { type: "http", url: URL, headers: { Authorization: "Bearer ${ARC_MCP_TOKEN}" } },
     })
@@ -100,7 +109,7 @@ describe("MCP client config (per-provider, HTTP bearer)", () => {
 
 describe("repo-clean MCP launch args", () => {
   it("claude declares the arc server inline as a --mcp-config JSON string", () => {
-    const args = providerMcpLaunchArgs("claude")
+    const args = providerMcpLaunchArgs("claude", "stable")
     expect(args[0]).toBe("--mcp-config")
     expect(JSON.parse(args[1]!)).toEqual({
       mcpServers: {
@@ -112,7 +121,7 @@ describe("repo-clean MCP launch args", () => {
   })
 
   it("codex overrides nested config inline with -c (no file touched)", () => {
-    expect(providerMcpLaunchArgs("codex")).toEqual([
+    expect(providerMcpLaunchArgs("codex", "stable")).toEqual([
       "-c",
       `mcp_servers.arc.url="${URL}"`,
       "-c",
@@ -121,6 +130,6 @@ describe("repo-clean MCP launch args", () => {
   })
 
   it("cursor only needs --approve-mcps (server lives in the plugin's mcp.json)", () => {
-    expect(providerMcpLaunchArgs("cursor")).toEqual(["--approve-mcps"])
+    expect(providerMcpLaunchArgs("cursor", "stable")).toEqual(["--approve-mcps"])
   })
 })

@@ -1,59 +1,67 @@
 import { createServer } from "node:net"
 import { afterAll, describe, expect, it } from "vitest"
 import {
+  ARC_MCP_DEV_PORT,
   ARC_MCP_STABLE_PORT,
+  arcMcpPort,
   arcMcpUrl,
   chooseMcpPort,
   defaultArcMcpUrl,
-  isStableMcpUrl,
+  isPersistentMcpUrl,
 } from "../src/main/mcp/endpoint.js"
 import { isEndpointReachable } from "../src/main/mcp/reachability.js"
 
 /**
- * Two units behind "make the app-owned HTTP MCP endpoint stable for installed
- * clients" (work_01ktx78crkfqbskfxqf77jgkjh):
- *  - `chooseMcpPort` must default to the stable port and *never* silently fall
- *    back to ephemeral when it's busy — only on an explicit opt-in.
+ * Units behind the app-owned HTTP MCP endpoint:
+ *  - `chooseMcpPort` must default to the profile's persistent port and *never*
+ *    silently fall back to ephemeral when it's busy — only on an explicit opt-in.
+ *  - The persistent port is per-profile (stable→7793, dev→7794) so the two apps
+ *    never fight over one endpoint.
  *  - `isEndpointReachable` must tell a live endpoint from a dead one, so
  *    `arc-mcp` can refuse to emit a stale URL as usable config.
+ *
+ * `chooseMcpPort` takes the resolved persistent port as an argument, so these
+ * cases stay hermetic regardless of the ambient ARC_PROFILE.
  */
 
-describe("chooseMcpPort — stable by default, no silent ephemeral fallback", () => {
-  it("binds the stable port when it is free and nothing overrides", () => {
-    expect(chooseMcpPort({}, true)).toEqual({
+const PORT = ARC_MCP_STABLE_PORT
+
+describe("chooseMcpPort — persistent-port by default, no silent ephemeral fallback", () => {
+  it("binds the persistent port when it is free and nothing overrides", () => {
+    expect(chooseMcpPort({}, PORT, true)).toEqual({
       _tag: "Bind",
-      port: ARC_MCP_STABLE_PORT,
+      port: PORT,
       ephemeral: false,
     })
   })
 
-  it("skips (loud, no fallback) when the stable port is busy and ephemeral isn't opted into", () => {
-    const decision = chooseMcpPort({}, false)
+  it("skips (loud, no fallback) when the persistent port is busy and ephemeral isn't opted into", () => {
+    const decision = chooseMcpPort({}, PORT, false)
     expect(decision._tag).toBe("Skip")
     if (decision._tag === "Skip") {
-      expect(decision.reason).toContain(String(ARC_MCP_STABLE_PORT))
+      expect(decision.reason).toContain(String(PORT))
       expect(decision.reason).toContain("ARC_MCP_ALLOW_EPHEMERAL")
     }
   })
 
   it("falls back to an ephemeral port only when ARC_MCP_ALLOW_EPHEMERAL=1", () => {
-    expect(chooseMcpPort({ allowEphemeral: "1" }, false)).toEqual({
+    expect(chooseMcpPort({ allowEphemeral: "1" }, PORT, false)).toEqual({
       _tag: "Bind",
       port: 0,
       ephemeral: true,
     })
     // Any other value is not an opt-in.
-    expect(chooseMcpPort({ allowEphemeral: "true" }, false)._tag).toBe("Skip")
+    expect(chooseMcpPort({ allowEphemeral: "true" }, PORT, false)._tag).toBe("Skip")
   })
 
-  it("honours an explicit ARC_MCP_PORT even when the stable port is busy", () => {
-    expect(chooseMcpPort({ port: "9123" }, false)).toEqual({
+  it("honours an explicit ARC_MCP_PORT even when the persistent port is busy", () => {
+    expect(chooseMcpPort({ port: "9123" }, PORT, false)).toEqual({
       _tag: "Bind",
       port: 9123,
       ephemeral: false,
     })
-    // An explicit override wins over a free stable port too.
-    expect(chooseMcpPort({ port: "9123" }, true)).toEqual({
+    // An explicit override wins over a free persistent port too.
+    expect(chooseMcpPort({ port: "9123" }, PORT, true)).toEqual({
       _tag: "Bind",
       port: 9123,
       ephemeral: false,
@@ -61,37 +69,59 @@ describe("chooseMcpPort — stable by default, no silent ephemeral fallback", ()
   })
 
   it("treats ARC_MCP_PORT=0 as an explicit ephemeral request", () => {
-    expect(chooseMcpPort({ port: "0" }, true)).toEqual({ _tag: "Bind", port: 0, ephemeral: true })
+    expect(chooseMcpPort({ port: "0" }, PORT, true)).toEqual({ _tag: "Bind", port: 0, ephemeral: true })
   })
 
-  it("ignores a non-numeric ARC_MCP_PORT and uses the stable-port rules", () => {
-    expect(chooseMcpPort({ port: "nope" }, true)).toEqual({
+  it("ignores a non-numeric ARC_MCP_PORT and uses the persistent-port rules", () => {
+    expect(chooseMcpPort({ port: "nope" }, PORT, true)).toEqual({
       _tag: "Bind",
-      port: ARC_MCP_STABLE_PORT,
+      port: PORT,
       ephemeral: false,
     })
-    expect(chooseMcpPort({ port: "nope" }, false)._tag).toBe("Skip")
+    expect(chooseMcpPort({ port: "nope" }, PORT, false)._tag).toBe("Skip")
   })
 
-  it("defaultArcMcpUrl is the stable loopback URL", () => {
-    expect(defaultArcMcpUrl()).toBe(`http://127.0.0.1:${ARC_MCP_STABLE_PORT}/mcp`)
+  it("binds whichever profile's port the caller resolved", () => {
+    expect(chooseMcpPort({}, ARC_MCP_DEV_PORT, true)).toEqual({
+      _tag: "Bind",
+      port: ARC_MCP_DEV_PORT,
+      ephemeral: false,
+    })
+  })
+})
+
+describe("arcMcpPort / defaultArcMcpUrl — per-profile so stable and dev never collide", () => {
+  it("maps each profile to its own persistent port", () => {
+    expect(arcMcpPort("stable")).toBe(ARC_MCP_STABLE_PORT)
+    expect(arcMcpPort("dev")).toBe(ARC_MCP_DEV_PORT)
+    expect(ARC_MCP_STABLE_PORT).not.toBe(ARC_MCP_DEV_PORT)
+  })
+
+  it("renders the persistent loopback URL for the given profile", () => {
+    expect(defaultArcMcpUrl("stable")).toBe(arcMcpUrl(ARC_MCP_STABLE_PORT))
+    expect(defaultArcMcpUrl("dev")).toBe(arcMcpUrl(ARC_MCP_DEV_PORT))
     expect(arcMcpUrl(0)).toBe("http://127.0.0.1:0/mcp")
   })
 })
 
-describe("isStableMcpUrl — only the stable port is safe to bake into installed config", () => {
-  it("accepts the stable-port URL", () => {
-    expect(isStableMcpUrl(defaultArcMcpUrl())).toBe(true)
-    expect(isStableMcpUrl(arcMcpUrl(ARC_MCP_STABLE_PORT))).toBe(true)
+describe("isPersistentMcpUrl — only the profile's persistent port is safe to bake into installed config", () => {
+  it("accepts the persistent-port URL for the given profile", () => {
+    expect(isPersistentMcpUrl(arcMcpUrl(ARC_MCP_STABLE_PORT), "stable")).toBe(true)
+    expect(isPersistentMcpUrl(arcMcpUrl(ARC_MCP_DEV_PORT), "dev")).toBe(true)
   })
 
-  it("rejects an ephemeral/non-stable port (reachable now, gone after restart)", () => {
-    expect(isStableMcpUrl(arcMcpUrl(56386))).toBe(false)
-    expect(isStableMcpUrl(arcMcpUrl(9000))).toBe(false)
+  it("rejects the other profile's port (right app, wrong profile's endpoint)", () => {
+    expect(isPersistentMcpUrl(arcMcpUrl(ARC_MCP_DEV_PORT), "stable")).toBe(false)
+    expect(isPersistentMcpUrl(arcMcpUrl(ARC_MCP_STABLE_PORT), "dev")).toBe(false)
+  })
+
+  it("rejects an ephemeral/non-persistent port (reachable now, gone after restart)", () => {
+    expect(isPersistentMcpUrl(arcMcpUrl(56386), "stable")).toBe(false)
+    expect(isPersistentMcpUrl(arcMcpUrl(9000), "stable")).toBe(false)
   })
 
   it("rejects a malformed url", () => {
-    expect(isStableMcpUrl("not a url")).toBe(false)
+    expect(isPersistentMcpUrl("not a url", "stable")).toBe(false)
   })
 })
 
@@ -104,10 +134,14 @@ describe("isEndpointReachable — live vs dead endpoint", () => {
     )
   })
 
+  // Reject on bind error (e.g. a sandbox that denies loopback bind with EPERM)
+  // rather than leaving the promise pending until the test times out — a clear
+  // failure beats a 30s hang with an unhandled error.
   const listen = (): Promise<number> =>
-    new Promise((resolve) => {
+    new Promise((resolve, reject) => {
       const server = createServer()
       servers.push(server)
+      server.once("error", reject)
       server.listen(0, "127.0.0.1", () => {
         const addr = server.address()
         resolve(typeof addr === "object" && addr ? addr.port : 0)

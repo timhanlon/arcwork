@@ -82,6 +82,7 @@ describe("Codex MCP TOML merge", () => {
     const { mergeCodexMcpToml } = await import("../src/main/mcp/install.js")
     const merged = mergeCodexMcpToml(
       "model = \"gpt-5\"\n\n[mcp_servers.arc]\nurl = \"http://127.0.0.1:1/mcp\"\n",
+      "stable",
     )
     expect(merged).toContain('model = "gpt-5"')
     expect(merged).toContain("[mcp_servers.arc]")
@@ -94,6 +95,7 @@ describe("Codex MCP TOML merge", () => {
     const { mergeCodexMcpToml } = await import("../src/main/mcp/install.js")
     const merged = mergeCodexMcpToml(
       "experimental_use_rmcp_client = true\n\n[mcp_servers.arc]\ncommand = \"arc-work\"\nargs = [\"mcp-proxy\"]\n",
+      "stable",
     )
     expect(merged).not.toContain("experimental_use_rmcp_client")
     expect(merged).not.toContain("mcp-proxy")

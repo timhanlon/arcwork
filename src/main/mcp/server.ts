@@ -30,7 +30,7 @@ import { ReadService } from "../read/service.js"
 import { resolveArcDb } from "../db/paths.js"
 import {
   ARC_MCP_PATH,
-  ARC_MCP_STABLE_PORT,
+  arcMcpPort,
   arcMcpUrl,
   chooseMcpPort,
 } from "./endpoint.js"
@@ -282,30 +282,36 @@ const announce = Layer.effectDiscard(
   }),
 )
 
-/** Can we bind the stable port on loopback right now? Probe with a throwaway
- * server so the decision (bind stable / skip / ephemeral) is made *before* the
- * real bind, yielding a clean diagnostic instead of a raw EADDRINUSE. */
-const stablePortIsFree = Effect.callback<boolean>((resume) => {
+/** This profile's persistent MCP port (stable→7793, dev→7794). Resolved from the
+ * same profile the discovery file and DB use, so a dev app never probes or binds
+ * the stable app's port. */
+const persistentPort = arcMcpPort(resolveArcDb().profile)
+
+/** Can we bind this profile's persistent port on loopback right now? Probe with a
+ * throwaway server so the decision (bind persistent / skip / ephemeral) is made
+ * *before* the real bind, yielding a clean diagnostic instead of a raw EADDRINUSE. */
+const persistentPortIsFree = Effect.callback<boolean>((resume) => {
   const probe = createNetServer()
   probe.once("error", () => {
     probe.close()
     resume(Effect.succeed(false))
   })
-  probe.listen(ARC_MCP_STABLE_PORT, "127.0.0.1", () => probe.close(() => resume(Effect.succeed(true))))
+  probe.listen(persistentPort, "127.0.0.1", () => probe.close(() => resume(Effect.succeed(true))))
 })
 
-/** Resolve what the server should do: bind the stable port (the default that
- * keeps installed configs valid across restarts), bind an explicit/ephemeral port
- * when the user opts in, or skip — refusing to *silently* bind an ephemeral port
- * when the stable one is taken, which would leave installed configs pointed at a
- * dead URL (`work_01ktx78crkfqbskfxqf77jgkjh`). The pure decision lives in
+/** Resolve what the server should do: bind this profile's persistent port (the
+ * default that keeps installed configs valid across restarts), bind an
+ * explicit/ephemeral port when the user opts in, or skip — refusing to *silently*
+ * bind an ephemeral port when the persistent one is taken, which would leave
+ * installed configs pointed at a dead URL. The pure decision lives in
  * `./endpoint.ts`; here we feed it the probe result. */
-const decidePort = Effect.map(stablePortIsFree, (free) =>
+const decidePort = Effect.map(persistentPortIsFree, (free) =>
   chooseMcpPort(
     {
       port: process.env["ARC_MCP_PORT"],
       allowEphemeral: process.env["ARC_MCP_ALLOW_EPHEMERAL"],
     },
+    persistentPort,
     free,
   ),
 )

@@ -19,7 +19,7 @@ import { WorkspaceService } from "./WorkspaceService.js"
 import { ChatService } from "./ChatService.js"
 import { ArcStore } from "../db/store.js"
 import { withSqlOperation } from "../db/sql-operation.js"
-import { resolveArcDb } from "../db/paths.js"
+import { resolveArcDb, resolveProfile } from "../db/paths.js"
 import type { TargetSessionRow } from "../db/schema.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { newArcId } from "../../shared/ids.js"
@@ -332,15 +332,19 @@ export const TargetSessionManagerLive = Layer.effect(
     // and falls through to no extra args rather than blocking the spawn.
     const buildProviderArgs = (provider: string): Effect.Effect<Array<string>> =>
       Effect.gen(function* () {
+        // Resolve the profile once here (the main process has ARC_PROFILE pinned at
+        // boot) and thread it into the MCP config so a dev-launched session targets
+        // :7794 and a stable one :7793 — its writes land in the launching app's DB.
+        const profile = resolveProfile()
         if (provider === "cursor") {
           const plugin = installCursorPlugin()
           if (!plugin.installed) {
             yield* Effect.logWarning(`cursor plugin install failed: ${plugin.reason ?? "unknown error"}`)
             return []
           }
-          return [...cursorPluginLaunchArgs(plugin.dir)]
+          return [...cursorPluginLaunchArgs(plugin.dir, profile)]
         }
-        return isMcpProvider(provider) ? [...providerMcpLaunchArgs(provider)] : []
+        return isMcpProvider(provider) ? [...providerMcpLaunchArgs(provider, profile)] : []
       })
 
     const resumeArgs = (provider: string, nativeSessionId: string | undefined): Array<string> | null => {

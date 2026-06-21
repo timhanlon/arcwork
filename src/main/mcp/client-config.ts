@@ -1,4 +1,5 @@
 import * as path from "node:path"
+import type { ArcProfile } from "../db/paths.js"
 import { defaultArcMcpUrl } from "./endpoint.js"
 
 /**
@@ -17,9 +18,10 @@ import { defaultArcMcpUrl } from "./endpoint.js"
  * per-session stdio proxy (`work_01kv79rzmhfan89d0sh7zcc0wj`).
  *
  * This module is pure (no IO, no `process`): it maps a provider to the config
- * entry and the file it belongs in. The CLI does the reading/writing and
- * printing around it; keeping the shapes here makes them unit-testable without
- * executing the CLI's `main`.
+ * entry and the file it belongs in. The endpoint URL is per-profile (dev→:7794,
+ * stable→:7793), so the resolved `ArcProfile` is threaded in by the caller rather
+ * than read from ambient env — keeping rendering deterministic and the shapes
+ * unit-testable without executing the CLI's `main`.
  */
 
 export const MCP_PROVIDERS = ["claude", "cursor", "codex"] as const
@@ -38,9 +40,13 @@ const bearerAuthHeaders = (provider: McpProvider): Record<string, string> => ({
 
 /** The MCP client entry for the `arc` server under one provider. claude/cursor use a
  * direct HTTP transport carrying the `ARC_MCP_TOKEN` bearer header (claude needs an
- * explicit `type: "http"`; cursor infers it from `url`). */
-export const providerServerEntry = (provider: McpProvider): Record<string, unknown> => {
-  const http = { url: defaultArcMcpUrl(), headers: bearerAuthHeaders(provider) }
+ * explicit `type: "http"`; cursor infers it from `url`). The URL targets the given
+ * profile's persistent port. */
+export const providerServerEntry = (
+  provider: McpProvider,
+  profile: ArcProfile,
+): Record<string, unknown> => {
+  const http = { url: defaultArcMcpUrl(profile), headers: bearerAuthHeaders(provider) }
   return provider === "claude" ? { type: "http", ...http } : http
 }
 
@@ -62,14 +68,20 @@ export const providerServerEntry = (provider: McpProvider): Record<string, unkno
  * resolve from the session's injected env at connect time, exactly as the file
  * forms do.
  */
-export const providerMcpLaunchArgs = (provider: McpProvider): ReadonlyArray<string> => {
+export const providerMcpLaunchArgs = (
+  provider: McpProvider,
+  profile: ArcProfile,
+): ReadonlyArray<string> => {
   switch (provider) {
     case "claude":
-      return ["--mcp-config", JSON.stringify({ mcpServers: { arc: providerServerEntry("claude") } })]
+      return [
+        "--mcp-config",
+        JSON.stringify({ mcpServers: { arc: providerServerEntry("claude", profile) } }),
+      ]
     case "codex":
       return [
         "-c",
-        `mcp_servers.arc.url="${defaultArcMcpUrl()}"`,
+        `mcp_servers.arc.url="${defaultArcMcpUrl(profile)}"`,
         "-c",
         `mcp_servers.arc.bearer_token_env_var="ARC_MCP_TOKEN"`,
       ]
@@ -100,9 +112,10 @@ export const providerClientConfig = (
   provider: McpProvider,
   cwd: string,
   home: string,
+  profile: ArcProfile,
 ): ProviderClientConfig => {
   const jsonDoc = () =>
-    `${JSON.stringify({ mcpServers: { arc: providerServerEntry(provider) } }, null, 2)}\n`
+    `${JSON.stringify({ mcpServers: { arc: providerServerEntry(provider, profile) } }, null, 2)}\n`
   switch (provider) {
     case "claude":
       return { file: path.join(cwd, ".mcp.json"), writable: true, render: jsonDoc }
@@ -113,7 +126,7 @@ export const providerClientConfig = (
         file: path.join(home, ".codex", "config.toml"),
         writable: true,
         render: () =>
-          `[mcp_servers.arc]\nurl = "${defaultArcMcpUrl()}"\nbearer_token_env_var = "ARC_MCP_TOKEN"\n`,
+          `[mcp_servers.arc]\nurl = "${defaultArcMcpUrl(profile)}"\nbearer_token_env_var = "ARC_MCP_TOKEN"\n`,
       }
   }
 }
@@ -123,12 +136,13 @@ export const providerClientConfig = (
 export const mergeArcServer = (
   root: Record<string, unknown>,
   provider: McpProvider,
+  profile: ArcProfile,
 ): Record<string, unknown> => {
   const servers =
     root["mcpServers"] && typeof root["mcpServers"] === "object"
       ? { ...(root["mcpServers"] as Record<string, unknown>) }
       : {}
-  servers["arc"] = providerServerEntry(provider)
+  servers["arc"] = providerServerEntry(provider, profile)
   return { ...root, mcpServers: servers }
 }
 

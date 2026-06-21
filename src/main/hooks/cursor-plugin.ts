@@ -1,6 +1,6 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
-import { arcWorkRuntimeDir, resolveProfile } from "../db/paths.js"
+import { type ArcProfile, arcWorkRuntimeDir, resolveProfile } from "../db/paths.js"
 import { providerMcpLaunchArgs, providerServerEntry } from "../mcp/client-config.js"
 import { CURSOR_EVENTS, ensureArcOwnedHelper } from "./install.js"
 
@@ -43,7 +43,10 @@ const hookCommand = (helperPath: string, event: string): string =>
  * the `hooks`/`mcpServers` paths even though Cursor auto-detects both, so a
  * future layout change can't silently drop a component.
  */
-export const buildCursorPluginFiles = (helperPath: string): Record<string, string> => {
+export const buildCursorPluginFiles = (
+  helperPath: string,
+  profile: ArcProfile,
+): Record<string, string> => {
   const manifest = {
     name: CURSOR_PLUGIN_NAME,
     version: "0.0.1",
@@ -56,7 +59,7 @@ export const buildCursorPluginFiles = (helperPath: string): Record<string, strin
       CURSOR_EVENTS.map((event) => [event, [{ command: hookCommand(helperPath, event) }]]),
     ),
   }
-  const mcp = { mcpServers: { arc: providerServerEntry("cursor") } }
+  const mcp = { mcpServers: { arc: providerServerEntry("cursor", profile) } }
   return {
     ".cursor-plugin/plugin.json": json(manifest),
     "hooks/hooks.json": json(hooks),
@@ -76,7 +79,8 @@ export const installCursorPlugin = (env: NodeJS.ProcessEnv = process.env): Curso
   const dir = cursorPluginDir(env)
   try {
     const helperPath = ensureArcOwnedHelper(env)
-    for (const [rel, content] of Object.entries(buildCursorPluginFiles(helperPath))) {
+    const profile = resolveProfile(env)
+    for (const [rel, content] of Object.entries(buildCursorPluginFiles(helperPath, profile))) {
       const abs = path.join(dir, rel)
       fs.mkdirSync(path.dirname(abs), { recursive: true })
       fs.writeFileSync(abs, content)
@@ -88,8 +92,8 @@ export const installCursorPlugin = (env: NodeJS.ProcessEnv = process.env): Curso
 }
 
 /** Launch argv to load the plugin and auto-approve its MCP server. */
-export const cursorPluginLaunchArgs = (dir: string): ReadonlyArray<string> => [
+export const cursorPluginLaunchArgs = (dir: string, profile: ArcProfile): ReadonlyArray<string> => [
   "--plugin-dir",
   dir,
-  ...providerMcpLaunchArgs("cursor"),
+  ...providerMcpLaunchArgs("cursor", profile),
 ]

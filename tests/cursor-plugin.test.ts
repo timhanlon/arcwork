@@ -7,7 +7,8 @@ import { buildCursorPluginFiles, cursorPluginLaunchArgs } from "../src/main/hook
 // server, so one dir declares everything and nothing lands in the workspace.
 
 const HELPER = "/Users/dev/.arcwork/dev/runtime/arc-hook-signal.mjs"
-const files = buildCursorPluginFiles(HELPER)
+// Built for the dev profile, so the MCP server URL targets dev's port (:7794).
+const files = buildCursorPluginFiles(HELPER, "dev")
 const parse = (rel: string) => JSON.parse(files[rel]!) as Record<string, unknown>
 
 describe("buildCursorPluginFiles", () => {
@@ -22,9 +23,9 @@ describe("buildCursorPluginFiles", () => {
     expect(m["mcpServers"]).toBe("mcp.json")
   })
 
-  it("declares the arc HTTP+bearer MCP server (cursor's ${env:VAR} form)", () => {
+  it("declares the arc HTTP+bearer MCP server on the dev profile's port (cursor's ${env:VAR} form)", () => {
     expect(parse("mcp.json")["mcpServers"]).toEqual({
-      arc: { url: "http://127.0.0.1:7793/mcp", headers: { Authorization: "Bearer ${env:ARC_MCP_TOKEN}" } },
+      arc: { url: "http://127.0.0.1:7794/mcp", headers: { Authorization: "Bearer ${env:ARC_MCP_TOKEN}" } },
     })
   })
 
@@ -40,7 +41,7 @@ describe("buildCursorPluginFiles", () => {
 
 describe("cursorPluginLaunchArgs", () => {
   it("loads the plugin dir and auto-approves its MCP server", () => {
-    expect(cursorPluginLaunchArgs("/arc/arc-work")).toEqual([
+    expect(cursorPluginLaunchArgs("/arc/arc-work", "dev")).toEqual([
       "--plugin-dir",
       "/arc/arc-work",
       "--approve-mcps",

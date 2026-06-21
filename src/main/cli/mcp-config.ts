@@ -27,9 +27,9 @@ import {
   providerClientConfig,
 } from "../mcp/client-config.js"
 import { isEndpointReachable } from "../mcp/reachability.js"
-import { ARC_MCP_STABLE_PORT, isStableMcpUrl } from "../mcp/endpoint.js"
+import { arcMcpPort, isPersistentMcpUrl } from "../mcp/endpoint.js"
 import { installUserMcpConfig } from "../mcp/install.js"
-import { resolveArcDb } from "../db/paths.js"
+import { type ArcProfile, type ResolvedDbPath, resolveArcDb } from "../db/paths.js"
 
 const USAGE = `arc-mcp — print or install arc's MCP client config for an agent CLI
 
@@ -131,7 +131,7 @@ const readMcpEndpoint = (dbPath: string): McpEndpoint => {
 
 /** Merge `arc` into a provider's JSON MCP config without disturbing other
  * servers/keys; create the file (and parent dir) if absent. */
-const writeJsonMcpConfig = (file: string, provider: McpProvider): void => {
+const writeJsonMcpConfig = (file: string, provider: McpProvider, profile: ArcProfile): void => {
   let root: Record<string, unknown> = {}
   if (fs.existsSync(file)) {
     try {
@@ -142,37 +142,38 @@ const writeJsonMcpConfig = (file: string, provider: McpProvider): void => {
     }
   }
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, `${JSON.stringify(mergeArcServer(root, provider), null, 2)}\n`)
+  fs.writeFileSync(file, `${JSON.stringify(mergeArcServer(root, provider, profile), null, 2)}\n`)
 }
 
-const runMcpConfig = async (parsed: Parsed, dbPath: string): Promise<void> => {
-  const endpoint = readMcpEndpoint(dbPath)
+const runMcpConfig = async (parsed: Parsed, db: ResolvedDbPath): Promise<void> => {
+  const endpoint = readMcpEndpoint(db.dbPath)
   // The discovery file can outlive the process that wrote it (an old app exited,
-  // or the stable port fell to another instance), leaving a URL that points at a
-  // dead port — the exact failure that bit Codex. Verify the endpoint actually
-  // accepts a connection before we emit it as usable client config, so a stale
-  // discovery file fails loudly here instead of silently producing a broken
-  // config the client only chokes on at startup (work_01ktx78crkfqbskfxqf77jgkjh).
-  const discoveryFile = path.join(path.dirname(dbPath), "arc-mcp.json")
+  // or the persistent port fell to another instance), leaving a URL that points
+  // at a dead port — the exact failure that bit Codex. Verify the endpoint
+  // actually accepts a connection before we emit it as usable client config, so a
+  // stale discovery file fails loudly here instead of silently producing a broken
+  // config the client only chokes on at startup.
+  const discoveryFile = path.join(path.dirname(db.dbPath), "arc-mcp.json")
   const reachable = await isEndpointReachable(endpoint.url)
   if (!reachable) {
     fail(
       `arc MCP endpoint ${endpoint.url} (from ${discoveryFile}) is not reachable — nothing is listening there. ` +
-        `The arc app may not be running, or it could not bind the stable MCP port. Start/restart the arc app, then re-run.`,
+        `The arc app may not be running, or it could not bind its MCP port. Start/restart the arc app, then re-run.`,
     )
   }
-  // Reachable now ≠ stable across restarts. If the app bound an ephemeral/non-stable
-  // port (ARC_MCP_PORT=0 / ARC_MCP_ALLOW_EPHEMERAL=1), this URL is live during
+  // Reachable now ≠ persistent across restarts. If the app bound an ephemeral port
+  // (ARC_MCP_PORT=0 / ARC_MCP_ALLOW_EPHEMERAL=1), this URL is live during
   // generation but its port won't persist. The rendered config always targets the
-  // stable port (by design, so installed clients survive a restart), so emitting it
-  // against an ephemeral run would just point clients at a port nothing is on —
-  // refuse, and say how to get a stable endpoint.
-  if (!isStableMcpUrl(endpoint.url)) {
+  // profile's persistent port (by design, so installed clients survive a restart),
+  // so emitting it against an ephemeral run would just point clients at a port
+  // nothing is on — refuse, and say how to get a persistent endpoint.
+  const persistentPort = arcMcpPort(db.profile)
+  if (!isPersistentMcpUrl(endpoint.url, db.profile)) {
     fail(
-      `arc MCP endpoint ${endpoint.url} (from ${discoveryFile}) is reachable but not on the stable port ` +
-        `${ARC_MCP_STABLE_PORT} — it looks ephemeral and won't survive an app restart, and arc-mcp only emits ` +
-        `stable-port config. Restart the arc app on the stable port (unset ARC_MCP_PORT / ARC_MCP_ALLOW_EPHEMERAL), ` +
-        `then re-run.`,
+      `arc MCP endpoint ${endpoint.url} (from ${discoveryFile}) is reachable but not on the ${db.profile} ` +
+        `profile's persistent port ${persistentPort} — it looks ephemeral and won't survive an app restart, and ` +
+        `arc-mcp only emits persistent-port config. Restart the arc app on its persistent port (unset ` +
+        `ARC_MCP_PORT / ARC_MCP_ALLOW_EPHEMERAL), then re-run.`,
     )
   }
   const cwd = process.cwd()
@@ -186,7 +187,7 @@ const runMcpConfig = async (parsed: Parsed, dbPath: string): Promise<void> => {
   if (parsed.json) {
     const configs = Object.fromEntries(
       providers.map((p) => {
-        const cfg = providerClientConfig(p, cwd, home)
+        const cfg = providerClientConfig(p, cwd, home, db.profile)
         return [p, { file: cfg.file, writable: cfg.writable, config: cfg.render() }]
       }),
     )
@@ -198,14 +199,14 @@ const runMcpConfig = async (parsed: Parsed, dbPath: string): Promise<void> => {
     if (!requested) {
       fail(`--write needs a provider: arc-mcp <${MCP_PROVIDERS.join("|")}> --write`)
     }
-    const cfg = providerClientConfig(requested, cwd, home)
+    const cfg = providerClientConfig(requested, cwd, home, db.profile)
     if (cfg.writable && (requested === "claude" || requested === "cursor")) {
-      writeJsonMcpConfig(cfg.file, requested)
+      writeJsonMcpConfig(cfg.file, requested, db.profile)
       process.stdout.write(`wrote arc MCP config (→ ${endpoint.url}) to ${cfg.file}\n`)
       return
     }
     if (cfg.writable && requested === "codex") {
-      const result = installUserMcpConfig(requested, home)
+      const result = installUserMcpConfig(requested, db.profile, home)
       if (!result.installed) {
         fail(`failed to write ${cfg.file}: ${result.reason ?? "unknown error"}`)
       }
@@ -222,7 +223,7 @@ const runMcpConfig = async (parsed: Parsed, dbPath: string): Promise<void> => {
     `arc MCP endpoint: ${endpoint.url} (claude/cursor/codex connect directly with an ARC_MCP_TOKEN bearer)\n`,
   )
   for (const provider of providers) {
-    const cfg = providerClientConfig(provider, cwd, home)
+    const cfg = providerClientConfig(provider, cwd, home, db.profile)
     const hint = cfg.writable ? `arc-mcp ${provider} --write` : "paste manually"
     process.stdout.write(`\n# ${provider} — ${cfg.file}  (${hint})\n`)
     process.stdout.write(cfg.render())
@@ -243,7 +244,7 @@ const main = async () => {
   if (process.env["ARC_DEBUG"]) {
     process.stderr.write(`arc-mcp: profile=${db.profile} db=${db.dbPath} (source=${db.source})\n`)
   }
-  await runMcpConfig(parsed, db.dbPath)
+  await runMcpConfig(parsed, db)
 }
 
 void main()

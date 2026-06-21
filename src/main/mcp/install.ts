@@ -1,6 +1,7 @@
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
+import type { ArcProfile } from "../db/paths.js"
 import {
   type McpProvider,
   mergeArcServer,
@@ -22,6 +23,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 export const installRepoMcpConfig = (
   repoRoot: string,
   provider: McpProvider,
+  profile: ArcProfile,
 ): InstallResult => {
   const file = repoMcpConfigFile(provider, repoRoot)
   if (!file) return { installed: true, scope: "none" }
@@ -34,7 +36,7 @@ export const installRepoMcpConfig = (
       else throw new Error(`existing ${file} is not a JSON object`)
     }
     fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(file, `${JSON.stringify(mergeArcServer(root, provider), null, 2)}\n`)
+    fs.writeFileSync(file, `${JSON.stringify(mergeArcServer(root, provider, profile), null, 2)}\n`)
     return { installed: true, scope: "repo" }
   } catch (e) {
     return {
@@ -49,8 +51,8 @@ const CODEX_ARC_SECTION = /\[mcp_servers\.arc\][\s\S]*?(?=\n\[|\n*$)/
 const RMCP_CLIENT_FLAG = /^\s*experimental_use_rmcp_client\s*=.*$/gm
 
 /** Replace or append the arc MCP block in a Codex config.toml. */
-export const mergeCodexMcpToml = (content: string): string => {
-  const block = `[mcp_servers.arc]\nurl = "${defaultArcMcpUrl()}"\nbearer_token_env_var = "ARC_MCP_TOKEN"\n`
+export const mergeCodexMcpToml = (content: string, profile: ArcProfile): string => {
+  const block = `[mcp_servers.arc]\nurl = "${defaultArcMcpUrl(profile)}"\nbearer_token_env_var = "ARC_MCP_TOKEN"\n`
   const stripped = content
     .replace(CODEX_ARC_SECTION, "")
     .replace(RMCP_CLIENT_FLAG, "")
@@ -62,6 +64,7 @@ export const mergeCodexMcpToml = (content: string): string => {
 /** Merge the arc HTTP+bearer server into a user-scoped MCP config (codex TOML). */
 export const installUserMcpConfig = (
   provider: McpProvider,
+  profile: ArcProfile,
   home: string = os.homedir(),
 ): InstallResult => {
   const file = userMcpConfigFile(provider, home)
@@ -71,7 +74,7 @@ export const installUserMcpConfig = (
     fs.mkdirSync(path.dirname(file), { recursive: true })
     if (provider === "codex") {
       const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : ""
-      fs.writeFileSync(file, mergeCodexMcpToml(existing))
+      fs.writeFileSync(file, mergeCodexMcpToml(existing, profile))
       return { installed: true, scope: "user" }
     }
     return { installed: true, scope: "none" }

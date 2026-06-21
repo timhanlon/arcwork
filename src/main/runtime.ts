@@ -136,8 +136,9 @@ const RpcServerLive = ArcRpcServerLive.pipe(Layer.provide(AppLive))
  * verbs and the handoff verb — run against the same live service instances as the
  * UI and RPC handlers: one DB connection, one TargetSessionManager. Building the
  * runtime brings up the HTTP listener and writes the discovery file; dispose
- * tears it down. Binds the stable port (7793) by default so installed client
- * configs stay valid across restarts; if it's busy it skips (no silent ephemeral
+ * tears it down. Binds this profile's persistent port (stable→7793, dev→7794) by
+ * default so installed client configs stay valid across restarts and the two
+ * profiles never fight over one port; if it's busy it skips (no silent ephemeral
  * fallback) — override with ARC_MCP_PORT, or ARC_MCP_ALLOW_EPHEMERAL=1.
  */
 const McpServerLive = ArcMcpServerLive.pipe(Layer.provide(AppLive))
