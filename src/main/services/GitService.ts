@@ -137,6 +137,8 @@ export interface GhPullRequest {
   readonly author?: { readonly login?: string | null } | null
   readonly headRefName?: string | null
   readonly headRefOid?: string | null
+  readonly headRepositoryOwner?: { readonly login?: string | null } | null
+  readonly headRepository?: { readonly name?: string | null } | null
   readonly baseRefName?: string | null
   readonly reviewDecision?: string | null
   readonly mergeable?: string | null
@@ -157,6 +159,8 @@ const GH_PR_FIELDS = [
   "author",
   "headRefName",
   "headRefOid",
+  "headRepositoryOwner",
+  "headRepository",
   "baseRefName",
   "reviewDecision",
   "mergeable",
@@ -545,6 +549,8 @@ export const mapGhPullRequest = (
   author: raw.author?.login ?? null,
   headRef: raw.headRefName ?? "",
   headSha: raw.headRefOid ?? null,
+  headRepositoryOwner: raw.headRepositoryOwner?.login ?? null,
+  headRepositoryName: raw.headRepository?.name ?? null,
   baseRef: raw.baseRefName ?? "",
   reviewState: lowerOrNull(raw.reviewDecision),
   checksState: summarizeChecks(raw.statusCheckRollup),

@@ -71,6 +71,8 @@ describe("mapGhPullRequest", () => {
       author: "octocat",
       headRef: "feature/worktrees",
       headSha: "abc123",
+      headRepositoryOwner: null,
+      headRepositoryName: null,
       baseRef: "main",
       reviewState: "approved",
       checksState: "passing",

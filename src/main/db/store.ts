@@ -159,9 +159,11 @@ export class ArcStore extends Context.Service<
     readonly loadPullRequestsForRepository: (
       repositoryId: string,
     ) => Effect.Effect<ReadonlyArray<PullRequestRow>, SqlError>
-    /** Every open PR across all repositories — the source for the sidebar's
-     * per-workspace branch→PR chip, joined in one read rather than per row. */
-    readonly loadOpenPullRequests: Effect.Effect<ReadonlyArray<PullRequestRow>, SqlError>
+    /** Every open or merged PR across all repositories — the source for the
+     * sidebar's per-workspace branch→PR chip, joined in one read rather than per
+     * row. Open PRs sort first so a branch with both shows the open one (drafts
+     * are open, so they ride along here). */
+    readonly loadSidebarPullRequests: Effect.Effect<ReadonlyArray<PullRequestRow>, SqlError>
     /** Upsert a PR keyed `(repositoryId, number)`; returns the canonical row. */
     readonly upsertPullRequest: (row: PullRequestRow) => Effect.Effect<PullRequestRow, SqlError>
     /** The branch→PR map: the open PR whose head ref matches `headRef` in the
@@ -1007,9 +1009,9 @@ export const ArcStoreLive = Layer.effect(
         WHERE repository_id = ${repositoryId}
         ORDER BY number DESC`
 
-    const loadOpenPullRequests = sql<PullRequestRow>`SELECT * FROM pull_requests
-      WHERE state = 'open'
-      ORDER BY number DESC`
+    const loadSidebarPullRequests = sql<PullRequestRow>`SELECT * FROM pull_requests
+      WHERE state IN ('open', 'merged')
+      ORDER BY (state = 'open') DESC, number DESC`
 
     const upsertPullRequest = (row: PullRequestRow) =>
       Effect.gen(function* () {
@@ -1025,6 +1027,8 @@ export const ArcStoreLive = Layer.effect(
           author: row.author,
           headRef: row.headRef,
           headSha: row.headSha,
+          headRepositoryOwner: row.headRepositoryOwner,
+          headRepositoryName: row.headRepositoryName,
           baseRef: row.baseRef,
           reviewState: row.reviewState,
           checksState: row.checksState,
@@ -1043,6 +1047,8 @@ export const ArcStoreLive = Layer.effect(
           author = excluded.author,
           head_ref = excluded.head_ref,
           head_sha = excluded.head_sha,
+          head_repository_owner = excluded.head_repository_owner,
+          head_repository_name = excluded.head_repository_name,
           base_ref = excluded.base_ref,
           review_state = excluded.review_state,
           checks_state = excluded.checks_state,
@@ -1065,11 +1071,19 @@ export const ArcStoreLive = Layer.effect(
 
     // Prefer an open PR; among same state, the most recently synced. `state` is
     // GitHub's literal ('open'|'closed'|'merged'), so ordering open first is an
-    // explicit predicate rather than a lexical sort.
+    // explicit predicate rather than a lexical sort. The head must live in the
+    // repository itself, not a fork: `head_ref` is only a branch name and a
+    // fork's branch can reuse it, so we require the PR head's repo owner/name to
+    // equal the repository's own GitHub identity. A row with no captured head
+    // repo (NULL — synced before the column existed) fails the join, which is
+    // the safe default: surface no PR rather than a possible fork's.
     const pullRequestForBranch = (repositoryId: string, headRef: string) =>
-      sql<PullRequestRow>`SELECT * FROM pull_requests
-        WHERE repository_id = ${repositoryId} AND head_ref = ${headRef}
-        ORDER BY (state = 'open') DESC, last_synced_at DESC, number DESC
+      sql<PullRequestRow>`SELECT pr.* FROM pull_requests pr
+        JOIN repositories r ON r.id = pr.repository_id
+        WHERE pr.repository_id = ${repositoryId} AND pr.head_ref = ${headRef}
+          AND pr.head_repository_owner = r.github_owner
+          AND pr.head_repository_name = r.github_repo
+        ORDER BY (pr.state = 'open') DESC, pr.last_synced_at DESC, pr.number DESC
         LIMIT 1`.pipe(Effect.map((rows) => rows[0] ?? null))
 
     const setWorkspaceGit = (
@@ -1135,7 +1149,7 @@ export const ArcStoreLive = Layer.effect(
       upsertWorktree,
       deleteWorktreeByPath,
       loadPullRequestsForRepository,
-      loadOpenPullRequests,
+      loadSidebarPullRequests,
       upsertPullRequest,
       pullRequestForBranch,
       setWorkspaceGit,

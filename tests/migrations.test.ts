@@ -133,8 +133,12 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
   it("0007 unwelds the worker: backfills one channel per (provider, preset) and points each session at the workspace whose path equals its cwd", async () => {
     // Stage the pre-split schema, seed legacy target_sessions the way today's
     // launch writes them (cwd = the chat's workspace path), then let 0007 run as
-    // a pending migration — exactly the upgrade path a live DB takes.
-    const { ["0007_worker_comm_diff_endpoints"]: _held, ...preSplit } = arcMigrations
+    // a pending migration — exactly the upgrade path a live DB takes. Hold back
+    // 0007 AND every migration after it: the ledger only runs ids past its
+    // high-water mark, so a later migration applied here would skip 0007.
+    const preSplit = Object.fromEntries(
+      Object.entries(arcMigrations).filter(([id]) => id < "0007_worker_comm_diff_endpoints"),
+    )
 
     const result = await run(
       Effect.gen(function* () {

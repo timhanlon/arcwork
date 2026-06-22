@@ -103,6 +103,11 @@ export interface PullRequestRow {
   readonly author: string | null
   readonly headRef: string
   readonly headSha: string | null
+  /** The PR head's repository identity (GitHub owner/name). Needed because
+   * `headRef` is just a branch name and a fork can reuse it — see the
+   * branch→PR mapping in store.ts. Null for rows synced before this column. */
+  readonly headRepositoryOwner: string | null
+  readonly headRepositoryName: string | null
   readonly baseRef: string
   readonly reviewState: string | null
   readonly checksState: string | null
@@ -792,4 +797,14 @@ export const arcMigrations: Migrations = {
     yield* sql.unsafe(`CREATE INDEX target_sessions_channel ON target_sessions(channel_id)`)
     yield* sql.unsafe(`CREATE INDEX target_sessions_workspace ON target_sessions(workspace_id)`)
   }),
+  // Fork-safe branch→PR mapping. `head_ref` alone collides across forks — a
+  // fork's `feature/foo` and a local `feature/foo` share a branch name — so a
+  // local branch could resolve to someone else's fork PR. Capture the PR head's
+  // repo identity (owner/name) so the branch→PR lookup can require the head to
+  // live in the repository itself, not a fork. Nullable + default NULL so
+  // existing rows stay valid; they backfill on the next `gh pr list` sync.
+  "0008_pr_head_repository": sqlMigration(
+    `ALTER TABLE pull_requests ADD COLUMN head_repository_owner TEXT`,
+    `ALTER TABLE pull_requests ADD COLUMN head_repository_name TEXT`,
+  ),
 }

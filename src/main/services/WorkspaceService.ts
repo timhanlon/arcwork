@@ -83,11 +83,12 @@ export const WorkspaceServiceLive = Layer.effect(
       Effect.map((repos) => new Map(repos.map((repo) => [repo.id, repo] as const))),
     )
 
-    const loadPrMap = db.loadOpenPullRequests.pipe(
+    const loadPrMap = db.loadSidebarPullRequests.pipe(
       Effect.orElseSucceed(() => [] as ReadonlyArray<PullRequestRow>),
       Effect.map((rows) => {
-        // Keyed `(repositoryId, headRef)`; rows arrive newest-number first, so the
-        // first seen for a branch wins and later (older) PRs don't clobber it.
+        // Keyed `(repositoryId, headRef)`; rows arrive open-first then by descending
+        // number, so the first seen for a branch wins — an open PR over a merged
+        // one, the newest among ties.
         const map = new Map<string, WorkspacePullRequest>()
         for (const row of rows) {
           const key = prKey(row.repositoryId, row.headRef)

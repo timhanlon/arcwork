@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import { GitService, GitServiceLive } from "../src/main/services/GitService.js"
 import { WorkspaceService } from "../src/main/services/WorkspaceService.js"
 import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
@@ -18,11 +18,13 @@ import type { Workspace } from "../src/shared/workspace.js"
 const git = (cwd: string, ...args: ReadonlyArray<string>) =>
   execFileSync("git", ["-C", cwd, ...args], { stdio: "pipe" }).toString()
 
-let repoDir: string
-let workspace: Workspace
+interface RepoFixture {
+  readonly workspace: Workspace
+  readonly cleanup: () => void
+}
 
-beforeAll(() => {
-  repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "arc-git-detect-"))
+const createRepoFixture = (): RepoFixture => {
+  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "arc-git-detect-"))
   git(repoDir, "-c", "init.defaultBranch=main", "init")
   git(repoDir, "config", "user.email", "test@arc.test")
   git(repoDir, "config", "user.name", "Arc Test")
@@ -30,24 +32,26 @@ beforeAll(() => {
   fs.writeFileSync(path.join(repoDir, "README.md"), "# widgets\n")
   git(repoDir, "add", "README.md")
   git(repoDir, "commit", "-m", "initial")
-  workspace = {
-    id: "workspace_test",
-    path: fs.realpathSync(repoDir),
-    name: "widgets",
-    repositoryId: null,
-    repoLabel: null,
-    defaultBranch: null,
-    branch: null,
-    isWorktree: false,
-    pullRequest: null,
+  return {
+    workspace: {
+      id: "workspace_test",
+      path: fs.realpathSync(repoDir),
+      name: "widgets",
+      repositoryId: null,
+      repoLabel: null,
+      defaultBranch: null,
+      branch: null,
+      isWorktree: false,
+      pullRequest: null,
+    },
+    cleanup: () => fs.rmSync(repoDir, { recursive: true, force: true }),
   }
-})
+}
 
-afterAll(() => {
-  fs.rmSync(repoDir, { recursive: true, force: true })
-})
-
-const run = async <A, E>(program: Effect.Effect<A, E, GitService | ArcStore>): Promise<A> => {
+const run = async <A, E>(
+  workspace: Workspace,
+  program: Effect.Effect<A, E, GitService | ArcStore>,
+): Promise<A> => {
   const WorkspaceStub = Layer.succeed(
     WorkspaceService,
     WorkspaceService.of({
@@ -68,24 +72,54 @@ const run = async <A, E>(program: Effect.Effect<A, E, GitService | ArcStore>): P
   }
 }
 
+const withRepo = async <A>(f: (fixture: RepoFixture) => Promise<A>): Promise<A> => {
+  const fixture = createRepoFixture()
+  try {
+    return await f(fixture)
+  } finally {
+    fixture.cleanup()
+  }
+}
+
+const withWorktreesRoot = async <A>(f: (root: string) => Promise<A>): Promise<A> => {
+  const oldRoot = process.env["ARC_WORKTREES_DIR"]
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "arc-git-worktrees-"))
+  process.env["ARC_WORKTREES_DIR"] = root
+  try {
+    return await f(root)
+  } finally {
+    if (oldRoot === undefined) delete process.env["ARC_WORKTREES_DIR"]
+    else process.env["ARC_WORKTREES_DIR"] = oldRoot
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+}
+
+const seedWorkspace = (workspace: Workspace) =>
+  Effect.flatMap(ArcStore, (store) =>
+    store.upsertWorkspace({
+      id: workspace.id,
+      path: workspace.path,
+      name: workspace.name,
+      createdAt: "2026-06-19T00:00:00.000Z",
+      lastOpenedAt: "2026-06-19T00:00:00.000Z",
+    }),
+  )
+
 describe("git repository detection", () => {
   it("persists repo identity, worktrees, and the workspace binding from a real repo", async () => {
-    const result = await run(
-      Effect.gen(function* () {
-        const store = yield* ArcStore
-        yield* store.upsertWorkspace({
-          id: workspace.id,
-          path: workspace.path,
-          name: workspace.name,
-          createdAt: "2026-06-19T00:00:00.000Z",
-          lastOpenedAt: "2026-06-19T00:00:00.000Z",
-        })
-        const service = yield* GitService
-        const repo = yield* service.detectRepository(workspace.id)
-        const worktrees = repo ? yield* store.loadWorktreesForRepository(repo.id) : []
-        const boundWorkspace = (yield* store.loadWorkspaces).find((w) => w.id === workspace.id)
-        return { repo, worktrees, boundWorkspace }
-      }),
+    const result = await withRepo(({ workspace }) =>
+      run(
+        workspace,
+        Effect.gen(function* () {
+          const store = yield* ArcStore
+          yield* seedWorkspace(workspace)
+          const service = yield* GitService
+          const repo = yield* service.detectRepository(workspace.id)
+          const worktrees = repo ? yield* store.loadWorktreesForRepository(repo.id) : []
+          const boundWorkspace = (yield* store.loadWorkspaces).find((w) => w.id === workspace.id)
+          return { repo, worktrees, boundWorkspace }
+        }),
+      ),
     )
 
     // GitHub identity resolved from the SCP-style remote.
@@ -108,43 +142,42 @@ describe("git repository detection", () => {
   })
 
   it("gitContext maps the current branch to a persisted PR", async () => {
-    const context = await run(
-      Effect.gen(function* () {
-        const store = yield* ArcStore
-        yield* store.upsertWorkspace({
-          id: workspace.id,
-          path: workspace.path,
-          name: workspace.name,
-          createdAt: "2026-06-19T00:00:00.000Z",
-          lastOpenedAt: "2026-06-19T00:00:00.000Z",
-        })
-        const service = yield* GitService
-        const repo = yield* service.detectRepository(workspace.id)
-        // Seed a PR whose head ref is the workspace's branch (main).
-        yield* store.upsertPullRequest({
-          id: "pr_seed",
-          repositoryId: repo!.id,
-          number: 99,
-          githubNodeId: null,
-          title: "the open PR",
-          body: "",
-          state: "open",
-          isDraft: 0,
-          author: "octocat",
-          headRef: "main",
-          headSha: null,
-          baseRef: "main",
-          reviewState: null,
-          checksState: "passing",
-          mergeable: null,
-          mergeStateStatus: null,
-          url: null,
-          lastSyncedAt: "2026-06-19T00:00:00.000Z",
-          createdAt: "2026-06-19T00:00:00.000Z",
-          updatedAt: "2026-06-19T00:00:00.000Z",
-        })
-        return yield* service.gitContext(workspace.id)
-      }),
+    const context = await withRepo(({ workspace }) =>
+      run(
+        workspace,
+        Effect.gen(function* () {
+          const store = yield* ArcStore
+          yield* seedWorkspace(workspace)
+          const service = yield* GitService
+          const repo = yield* service.detectRepository(workspace.id)
+          // Seed a PR whose head ref is the workspace's branch (main).
+          yield* store.upsertPullRequest({
+            id: "pr_seed",
+            repositoryId: repo!.id,
+            number: 99,
+            githubNodeId: null,
+            title: "the open PR",
+            body: "",
+            state: "open",
+            isDraft: 0,
+            author: "octocat",
+            headRef: "main",
+            headSha: null,
+            headRepositoryOwner: "acme",
+            headRepositoryName: "widgets",
+            baseRef: "main",
+            reviewState: null,
+            checksState: "passing",
+            mergeable: null,
+            mergeStateStatus: null,
+            url: null,
+            lastSyncedAt: "2026-06-19T00:00:00.000Z",
+            createdAt: "2026-06-19T00:00:00.000Z",
+            updatedAt: "2026-06-19T00:00:00.000Z",
+          })
+          return yield* service.gitContext(workspace.id)
+        }),
+      ),
     )
 
     expect(context.branch).toBe("main")
@@ -157,52 +190,28 @@ describe("git repository detection", () => {
 })
 
 describe("git worktree lifecycle", () => {
-  // arc-managed worktrees land under `~/.arcwork/<profile>/worktrees`; pin that
-  // root at a throwaway dir via the ARC_WORKTREES_DIR escape hatch (surgical —
-  // unlike redirecting HOME, it touches nothing else). Set before any run()
-  // builds the layer, which resolves the managed root at build time.
-  let worktreesRoot: string
-  let oldRoot: string | undefined
-
-  beforeAll(() => {
-    oldRoot = process.env["ARC_WORKTREES_DIR"]
-    worktreesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "arc-git-worktrees-"))
-    process.env["ARC_WORKTREES_DIR"] = worktreesRoot
-  })
-
-  afterAll(() => {
-    if (oldRoot === undefined) delete process.env["ARC_WORKTREES_DIR"]
-    else process.env["ARC_WORKTREES_DIR"] = oldRoot
-    fs.rmSync(worktreesRoot, { recursive: true, force: true })
-  })
-
-  const seedWorkspace = Effect.flatMap(ArcStore, (store) =>
-    store.upsertWorkspace({
-      id: workspace.id,
-      path: workspace.path,
-      name: workspace.name,
-      createdAt: "2026-06-19T00:00:00.000Z",
-      lastOpenedAt: "2026-06-19T00:00:00.000Z",
-    }),
-  )
-
   it("creates an arc-managed worktree and removes it", async () => {
-    const out = await run(
-      Effect.gen(function* () {
-        const store = yield* ArcStore
-        yield* seedWorkspace
-        const service = yield* GitService
-        yield* service.detectRepository(workspace.id)
+    const out = await withWorktreesRoot(() =>
+      withRepo(({ workspace }) =>
+        run(
+          workspace,
+          Effect.gen(function* () {
+            const store = yield* ArcStore
+            yield* seedWorkspace(workspace)
+            const service = yield* GitService
+            yield* service.detectRepository(workspace.id)
 
-        const wt = yield* service.createWorktree(workspace.id, { branch: "feature-x", createBranch: true })
-        const existsOnDisk = yield* Effect.sync(() => fs.existsSync(wt.path))
-        const afterCreate = yield* store.loadWorktreesForRepository(wt.repositoryId)
+            const wt = yield* service.createWorktree(workspace.id, { branch: "feature-x", createBranch: true })
+            const existsOnDisk = yield* Effect.sync(() => fs.existsSync(wt.path))
+            const afterCreate = yield* store.loadWorktreesForRepository(wt.repositoryId)
 
-        yield* service.removeWorktree(workspace.id, wt.path)
-        const goneOnDisk = yield* Effect.sync(() => fs.existsSync(wt.path))
-        const afterRemove = yield* store.loadWorktreesForRepository(wt.repositoryId)
-        return { wt, existsOnDisk, afterCreate, goneOnDisk, afterRemove }
-      }),
+            yield* service.removeWorktree(workspace.id, wt.path)
+            const goneOnDisk = yield* Effect.sync(() => fs.existsSync(wt.path))
+            const afterRemove = yield* store.loadWorktreesForRepository(wt.repositoryId)
+            return { wt, existsOnDisk, afterCreate, goneOnDisk, afterRemove }
+          }),
+        ),
+      ),
     )
 
     expect(out.wt.branch).toBe("feature-x")
@@ -216,42 +225,52 @@ describe("git worktree lifecycle", () => {
   })
 
   it("auto-prunes a clean managed worktree whose PR has merged", async () => {
-    const out = await run(
-      Effect.gen(function* () {
-        const store = yield* ArcStore
-        yield* seedWorkspace
-        const service = yield* GitService
-        const repo = yield* service.detectRepository(workspace.id)
-        const wt = yield* service.createWorktree(workspace.id, { branch: "merged-feature", createBranch: true })
-        // A merged PR for that branch is the signal that makes the tree prunable.
-        yield* store.upsertPullRequest({
-          id: "pr_merged",
-          repositoryId: repo!.id,
-          number: 7,
-          githubNodeId: null,
-          title: "done",
-          body: "",
-          state: "merged",
-          isDraft: 0,
-          author: "octocat",
-          headRef: "merged-feature",
-          headSha: null,
-          baseRef: "main",
-          reviewState: null,
-          checksState: null,
-          mergeable: null,
-          mergeStateStatus: null,
-          url: null,
-          lastSyncedAt: "2026-06-19T00:00:00.000Z",
-          createdAt: "2026-06-19T00:00:00.000Z",
-          updatedAt: "2026-06-19T00:00:00.000Z",
-        })
+    const out = await withWorktreesRoot(() =>
+      withRepo(({ workspace }) =>
+        run(
+          workspace,
+          Effect.gen(function* () {
+            const store = yield* ArcStore
+            yield* seedWorkspace(workspace)
+            const service = yield* GitService
+            const repo = yield* service.detectRepository(workspace.id)
+            const wt = yield* service.createWorktree(workspace.id, {
+              branch: "merged-feature",
+              createBranch: true,
+            })
+            // A merged PR for that branch is the signal that makes the tree prunable.
+            yield* store.upsertPullRequest({
+              id: "pr_merged",
+              repositoryId: repo!.id,
+              number: 7,
+              githubNodeId: null,
+              title: "done",
+              body: "",
+              state: "merged",
+              isDraft: 0,
+              author: "octocat",
+              headRef: "merged-feature",
+              headSha: null,
+              headRepositoryOwner: "acme",
+              headRepositoryName: "widgets",
+              baseRef: "main",
+              reviewState: null,
+              checksState: null,
+              mergeable: null,
+              mergeStateStatus: null,
+              url: null,
+              lastSyncedAt: "2026-06-19T00:00:00.000Z",
+              createdAt: "2026-06-19T00:00:00.000Z",
+              updatedAt: "2026-06-19T00:00:00.000Z",
+            })
 
-        const pruned = yield* service.pruneMergedWorktrees(workspace.id)
-        const goneOnDisk = yield* Effect.sync(() => fs.existsSync(wt.path))
-        const remaining = yield* store.loadWorktreesForRepository(repo!.id)
-        return { wt, pruned, goneOnDisk, remaining }
-      }),
+            const pruned = yield* service.pruneMergedWorktrees(workspace.id)
+            const goneOnDisk = yield* Effect.sync(() => fs.existsSync(wt.path))
+            const remaining = yield* store.loadWorktreesForRepository(repo!.id)
+            return { wt, pruned, goneOnDisk, remaining }
+          }),
+        ),
+      ),
     )
 
     expect(out.pruned).toContain(out.wt.path)
