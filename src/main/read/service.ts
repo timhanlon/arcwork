@@ -193,8 +193,17 @@ export const ReadServiceLive = Layer.effect(
       if (args.kinds.length === 0) return Effect.succeed([] as ReadonlyArray<SearchDocumentRow>)
       where.push(`d.kind IN (${args.kinds.map(() => "?").join(", ")})`)
       values.push(...args.kinds)
-      where.push("d.workspace_id = ?")
-      values.push(args.workspaceId)
+      // Scope to the whole project, not the one workspace: a repository's main
+      // checkout and its worktrees are distinct workspaces but share their work
+      // and chats, so anchor by repository when the workspace has one. A plain
+      // (non-git) folder has no repository and stays scoped to just itself.
+      where.push(`d.workspace_id IN (
+        SELECT w.id FROM workspaces w
+        WHERE w.id = ?
+           OR (w.repository_id IS NOT NULL
+               AND w.repository_id = (SELECT repository_id FROM workspaces WHERE id = ?))
+      )`)
+      values.push(args.workspaceId, args.workspaceId)
 
       if (args.terms.length > 0) {
         where.push("search_document_fts MATCH ?")
