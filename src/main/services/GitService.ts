@@ -541,13 +541,24 @@ export const GitServiceLive = Layer.effect(
     const managedWorktreesRoot = arcWorkWorktreesDir(profile)
 
     const requireRepository = (workspaceId: WorkspaceId): Effect.Effect<RepositoryRow, ArcRequestError> =>
-      detectRepository(workspaceId).pipe(
-        Effect.flatMap((repo) =>
-          repo
-            ? Effect.succeed(repo)
-            : Effect.fail(arcRequestError(`Workspace ${workspaceId} is not in a git repository`)),
-        ),
-      )
+      Effect.gen(function* () {
+        // Fast path: an already-bound workspace reads its persisted repository row
+        // rather than re-running full detection (which shells out and re-upserts
+        // on every lifecycle op). Detection is the fallback for a workspace not
+        // yet bound — the boot scan / post-checkout hook bind it first in practice.
+        const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
+        if (workspace?.repositoryId) {
+          const persisted = yield* store
+            .repositoryById(workspace.repositoryId)
+            .pipe(Effect.mapError((e) => arcRequestError(`repository load failed: ${e}`)))
+          if (persisted) return persisted
+        }
+        const detected = yield* detectRepository(workspaceId)
+        if (!detected) {
+          return yield* Effect.fail(arcRequestError(`Workspace ${workspaceId} is not in a git repository`))
+        }
+        return detected
+      })
 
     // The slug arc files a managed worktree under: the GitHub repo name when we
     // have one, else the clone's directory name.
@@ -565,6 +576,26 @@ export const GitServiceLive = Layer.effect(
     }
     const isManaged = (worktreePath: string): boolean =>
       canonical(worktreePath).startsWith(canonical(managedWorktreesRoot) + path.sep)
+
+    // Run `git worktree remove` then drop the persisted row. Returns the git
+    // failure text rather than raising — callers differ on whether a failed
+    // remove is fatal (explicit remove) or skippable (auto-prune).
+    const removeManagedTree = (
+      repo: RepositoryRow,
+      worktreePath: string,
+      options?: { readonly force?: boolean },
+    ): Effect.Effect<{ readonly ok: true } | { readonly ok: false; readonly error: string }, ArcRequestError> =>
+      Effect.gen(function* () {
+        const args = ["worktree", "remove", ...(options?.force ? ["--force"] : []), worktreePath]
+        const result = yield* Effect.promise(() => runGitCapture(repo.rootPath, args))
+        if (result.exitCode !== 0) {
+          return { ok: false, error: result.stderr.trim() || `exit ${result.exitCode}` }
+        }
+        yield* store
+          .deleteWorktreeByPath(worktreePath)
+          .pipe(Effect.mapError((e) => arcRequestError(`worktree row delete failed: ${e}`)))
+        return { ok: true }
+      })
 
     const createWorktree = (
       workspaceId: WorkspaceId,
@@ -622,16 +653,10 @@ export const GitServiceLive = Layer.effect(
         if (path.resolve(worktreePath) === path.resolve(repo.rootPath)) {
           return yield* Effect.fail(arcRequestError("Refusing to remove the main worktree"))
         }
-        const args = ["worktree", "remove", ...(options?.force ? ["--force"] : []), worktreePath]
-        const result = yield* Effect.promise(() => runGitCapture(repo.rootPath, args))
-        if (result.exitCode !== 0) {
-          return yield* Effect.fail(
-            arcRequestError(`git worktree remove failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`),
-          )
+        const outcome = yield* removeManagedTree(repo, worktreePath, options)
+        if (!outcome.ok) {
+          return yield* Effect.fail(arcRequestError(`git worktree remove failed: ${outcome.error}`))
         }
-        yield* store
-          .deleteWorktreeByPath(worktreePath)
-          .pipe(Effect.mapError((e) => arcRequestError(`worktree row delete failed: ${e}`)))
         yield* publishChange(workspaceId)
       }).pipe(Effect.withSpan("arc.git.remove_worktree", { attributes: { "arc.workspace_id": workspaceId } }))
 
@@ -692,16 +717,11 @@ export const GitServiceLive = Layer.effect(
             yield* Effect.logInfo(`auto-prune skip (uncommitted changes): ${wt.path}`)
             continue
           }
-          const result = yield* Effect.promise(() =>
-            runGitCapture(repo.rootPath, ["worktree", "remove", wt.path]),
-          )
-          if (result.exitCode !== 0) {
-            yield* Effect.logWarning(`auto-prune failed for ${wt.path}: ${result.stderr.trim() || `exit ${result.exitCode}`}`)
+          const outcome = yield* removeManagedTree(repo, wt.path)
+          if (!outcome.ok) {
+            yield* Effect.logWarning(`auto-prune failed for ${wt.path}: ${outcome.error}`)
             continue
           }
-          yield* store
-            .deleteWorktreeByPath(wt.path)
-            .pipe(Effect.mapError((e) => arcRequestError(`worktree row delete failed: ${e}`)))
           yield* Effect.logInfo(`auto-pruned merged worktree: ${wt.path}`)
           pruned.push(wt.path)
         }
