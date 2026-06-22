@@ -13,7 +13,6 @@ import { ArtifactIngestService } from "./ArtifactIngestService.js"
 import { ingestHookSignal } from "./HookSignalIngestion.js"
 import { WorkService } from "../work/service.js"
 import { GitService } from "./GitService.js"
-import { isCheckoutSignal, isPushSignal } from "../hooks/git-events.js"
 import {
   commitCitationNote,
   commitFromSignal,
@@ -445,6 +444,25 @@ export const launchArcMainController = (
         Effect.ignore,
       )
 
+    // Git-provider hook events are opportunistic read-model refresh triggers,
+    // not chat/turn events — each terminates the signal handler. Returns null
+    // when the signal isn't a handled git event, so it falls through to the
+    // chat/turn projection. post-checkout/pre-push are keyed by the worktree cwd
+    // the hook ran in; commit citation carries its sha in the hook input.
+    const gitHookEffect = (signal: HookSignal): Effect.Effect<void> | null => {
+      if (signal.provider !== "git") return null
+      if (isCommitSignal(signal)) return stampCommitCitation(signal)
+      if (!signal.cwd) return null
+      switch (signal.declaredEvent) {
+        case "post-checkout":
+          return git.notifyCheckout(signal.cwd)
+        case "pre-push":
+          return git.notifyPrePush(signal.cwd)
+        default:
+          return null
+      }
+    }
+
     // Persist/project each signal, then drive artifact polling: providers that
     // can't backfill on Stop (cursor) get polled while a turn is open; a
     // terminal event backfills once and stops that target's poller.
@@ -462,22 +480,12 @@ export const launchArcMainController = (
             { raw: rawHookSignals, activity: activityEvents, chat: chatMessages },
             signal,
           )
-          // Commit signals don't drive the chat/turn projections below; they
-          // resolve to a typed citation on the chat's work and then stop here.
-          if (isCommitSignal(signal)) {
-            yield* stampCommitCitation(signal)
-            return
-          }
-          // Git checkout/push signals are opportunistic read-model refresh
-          // triggers, not chat/turn events: a branch switch remaps branch→PR
-          // immediately; a pre-push schedules a debounced GitHub PR sync. Both
-          // are best-effort and keyed by the worktree cwd the hook ran in.
-          if (signal.cwd && isCheckoutSignal(signal)) {
-            yield* git.notifyCheckout(signal.cwd)
-            return
-          }
-          if (signal.cwd && isPushSignal(signal)) {
-            yield* git.notifyPrePush(signal.cwd)
+          // Git-provider events (commit citation, branch remap, debounced PR
+          // sync) resolve to a read-model refresh and stop here; everything else
+          // falls through to the chat/turn projection below.
+          const gitEffect = gitHookEffect(signal)
+          if (gitEffect) {
+            yield* gitEffect
             return
           }
           // Drive the live "generating" activity: a prompt submit opens the
