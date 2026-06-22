@@ -1,7 +1,7 @@
 import { type JSX, useEffect, useState } from "react"
 import { useAtomRefresh } from "@effect/atom-react"
 import type { WorkspaceId } from "../../../shared/ids.js"
-import { gitContextAtom } from "../atoms.js"
+import { gitCommitsAtom, gitContextAtom } from "../atoms.js"
 import { rpc } from "../rpc-client.js"
 import { useWorkspaceGit } from "./useWorkspaceGit.js"
 
@@ -37,6 +37,7 @@ export function GitPrefetch({ workspaceId }: { readonly workspaceId: WorkspaceId
 function GitWarm({ workspaceId }: { readonly workspaceId: WorkspaceId }): null {
   useWorkspaceGit(workspaceId)
   const refreshContext = useAtomRefresh(gitContextAtom(workspaceId))
+  const refreshCommits = useAtomRefresh(gitCommitsAtom(workspaceId))
 
   useEffect(() => {
     if (syncedThisSession.has(workspaceId)) return
@@ -44,7 +45,14 @@ function GitWarm({ workspaceId }: { readonly workspaceId: WorkspaceId }): null {
     let cancelled = false
     rpc("SyncWorkspacePullRequests", { workspaceId })
       .then(() => {
-        if (!cancelled) refreshContext()
+        if (cancelled) return
+        // Sync runs detectRepository, which populates the workspace's branch and
+        // default branch. The commits atom scopes its `base..HEAD` range by those,
+        // so if it first loaded before detection it's stuck on full history —
+        // re-pull it (detection refreshes the workspace list but emits no git
+        // change signal, by design, so the atom won't refresh on its own).
+        refreshContext()
+        refreshCommits()
       })
       .catch(() => {
         syncedThisSession.delete(workspaceId)
@@ -52,7 +60,7 @@ function GitWarm({ workspaceId }: { readonly workspaceId: WorkspaceId }): null {
     return () => {
       cancelled = true
     }
-  }, [workspaceId, refreshContext])
+  }, [workspaceId, refreshContext, refreshCommits])
 
   return null
 }
