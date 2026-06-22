@@ -1,20 +1,11 @@
 import { PatchDiff } from "@pierre/diffs/react"
-import { useAtomValue } from "@effect/atom-react"
-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import { type JSX, useEffect, useMemo, useState } from "react"
-import type {
-  GitChangeStatus,
-  GitCommit,
-  GitFileChange,
-  GitStatus,
-  WorkspaceGitContext,
-} from "../../../shared/git.js"
+import type { GitChangeStatus, GitCommit, GitFileChange } from "../../../shared/git.js"
 import type { Workspace } from "../../../shared/workspace.js"
-import { gitChangesSignalAtom } from "../atoms.js"
-import { Button } from "../ui/Button.js"
 import { Row } from "../ui/Row.js"
 import { rpc } from "../rpc-client.js"
 import { RepoContextBar } from "./RepoContextBar.js"
+import { useWorkspaceGit } from "./useWorkspaceGit.js"
 
 export interface GitPaneProps {
   readonly workspace?: Workspace
@@ -70,8 +61,6 @@ const STATUS_COLOR: Record<GitChangeStatus, string> = {
   unknown: "text-fg-dim",
 }
 
-const HEADER = "flex flex-none items-center justify-between gap-2 border-b border-border px-4 pb-3 pt-[14px]"
-const PANE_TITLE = "m-0 font-sans text-[15px] font-medium"
 const ERROR_BANNER =
   "mx-4 mt-2.5 flex-none rounded-[var(--radius)] border border-danger px-2 py-1.5 text-[12px] text-danger"
 
@@ -83,24 +72,42 @@ interface GitFileDiffProps {
 }
 
 export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps): JSX.Element {
-  const [status, setStatus] = useState<GitStatus | undefined>(undefined)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | undefined>(undefined)
-  const [gitContext, setGitContext] = useState<WorkspaceGitContext | undefined>(undefined)
-  const [syncing, setSyncing] = useState(false)
-  const [commits, setCommits] = useState<ReadonlyArray<GitCommit>>([])
+  if (!workspace) {
+    return (
+      <section className="flex min-h-0 min-w-0 flex-col bg-background">
+        <EmptyState label="Open a workspace to view git changes" />
+      </section>
+    )
+  }
+  // Keyed on the workspace so switching workspaces remounts the body — its
+  // auto-select effect re-runs against the new workspace's change set.
+  return (
+    <GitPaneBody
+      key={workspace.id}
+      workspace={workspace}
+      selectedPath={selectedPath}
+      onSelectPath={onSelectPath}
+    />
+  )
+}
 
-  // Hook-driven refresh: a `post-checkout` branch remap or `pre-push` PR sync
-  // ticks this counter for the open workspace (empty key when none, never ticks).
-  const gitSignalResult = useAtomValue(gitChangesSignalAtom(workspace?.id ?? ""))
-  const gitSignal = AsyncResult.isSuccess(gitSignalResult) ? gitSignalResult.value : 0
+/** The Git pane for a known workspace. Reads the shared git atoms (warmed by the
+ * prefetch, so usually no load flash) rather than fetching into local state. */
+function GitPaneBody({
+  workspace,
+  selectedPath,
+  onSelectPath,
+}: {
+  readonly workspace: Workspace
+  readonly selectedPath?: string
+  readonly onSelectPath: (path: string) => void
+}): JSX.Element {
+  const { status, context, commits, loading, commitsLoading, error } = useWorkspaceGit(workspace.id)
 
   const grouped = useMemo(() => {
     const map = new Map<GitChangeStatus, ReadonlyArray<GitFileChange>>()
-    for (const status of STATUS_ORDER) map.set(status, [])
     for (const change of status?.changes ?? []) {
-      const existing = map.get(change.status) ?? []
-      map.set(change.status, [...existing, change])
+      map.set(change.status, [...(map.get(change.status) ?? []), change])
     }
     return STATUS_ORDER.map((key) => ({ status: key, files: map.get(key) ?? [] })).filter(
       (group) => group.files.length > 0,
@@ -115,111 +122,19 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
     [selectedPath, status?.changes],
   )
 
-  const reload = (): void => {
-    if (!workspace) return
-    setLoading(true)
-    setError(undefined)
-    rpc("GetWorkspaceGitStatus", { workspaceId: workspace.id })
-      .then((next) => {
-        setStatus(next)
-        const stillSelected = selectedPath && next.changes.some((change) => change.path === selectedPath)
-        const nextPath = stillSelected ? selectedPath : next.changes[0]?.path
-        if (nextPath && nextPath !== selectedPath) onSelectPath(nextPath)
-      })
-      .catch((e) => {
-        setError(errorMessage(e))
-        setStatus(undefined)
-      })
-      .finally(() => setLoading(false))
-  }
-
-  // The repo/PR context is a separate, local read (no network): detect the repo
-  // and map the current branch to its PR off the persisted read model.
-  const loadContext = (): void => {
-    if (!workspace) return
-    rpc("GetWorkspaceGitContext", { workspaceId: workspace.id })
-      .then(setGitContext)
-      .catch(() => setGitContext(undefined))
-  }
-
-  // The branch's recent history, a local read alongside the status pull. Empty on
-  // any failure (non-repo, unborn branch) — the commits section just stays empty.
-  const loadCommits = (): void => {
-    if (!workspace) return
-    rpc("GetWorkspaceGitCommits", { workspaceId: workspace.id })
-      .then(setCommits)
-      .catch(() => setCommits([]))
-  }
-
-  // The one network refresh: pull PRs from GitHub via gh, then re-read context
-  // so the current-branch PR reflects the sync.
-  const syncPullRequests = (): void => {
-    if (!workspace || syncing) return
-    setSyncing(true)
-    rpc("SyncWorkspacePullRequests", { workspaceId: workspace.id })
-      .then(loadContext)
-      .catch((e) => setError(errorMessage(e)))
-      .finally(() => setSyncing(false))
-  }
-
+  // Auto-select the first changed file once status lands, unless the current
+  // selection is still in the change set.
   useEffect(() => {
-    setStatus(undefined)
-    setGitContext(undefined)
-    setCommits([])
-    reload()
-    loadContext()
-    loadCommits()
-    // Auto-sync PRs on workspace open (a refresh trigger the design calls for):
-    // loadContext paints the persisted read model instantly, then this pulls
-    // fresh PRs from GitHub in the background so the current-branch PR appears
-    // without a manual Sync click. Cheap/no-op for non-GitHub repos.
-    syncPullRequests()
+    if (!status) return
+    const stillSelected = selectedPath && status.changes.some((change) => change.path === selectedPath)
+    const nextPath = stillSelected ? selectedPath : status.changes[0]?.path
+    if (nextPath && nextPath !== selectedPath) onSelectPath(nextPath)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace?.id])
-
-  // Re-pull status + context when a git hook signals a change for this
-  // workspace. Skips the seed tick (`0`), so it never doubles the mount pull.
-  useEffect(() => {
-    if (gitSignal === 0) return
-    reload()
-    loadContext()
-    loadCommits()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gitSignal])
-
-  if (!workspace) {
-    return (
-      <section className="flex min-h-0 min-w-0 flex-col bg-background">
-        <div className={HEADER}>
-          <h2 className={PANE_TITLE}>Git</h2>
-        </div>
-        <EmptyState label="Open a workspace to view git changes" />
-      </section>
-    )
-  }
+  }, [status])
 
   return (
     <section className="flex min-h-0 min-w-0 flex-col bg-background">
-      <div className={HEADER}>
-        <div className="min-w-0">
-          <h2 className={PANE_TITLE}>Git</h2>
-          <div className="truncate font-mono text-[11px] text-fg-dim">
-            {status?.branch ?? status?.head?.slice(0, 7) ?? workspace.name}
-          </div>
-        </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={loading}
-          onClick={() => {
-            reload()
-            loadCommits()
-          }}
-        >
-          Refresh
-        </Button>
-      </div>
-      <RepoContextBar context={gitContext} syncing={syncing} onSync={syncPullRequests} />
+      <RepoContextBar context={context} />
       {error && <div className={ERROR_BANNER}>{error}</div>}
       {!loading && status?.isRepo === false ? (
         <EmptyState label="This workspace is not a git repository" />
@@ -231,7 +146,7 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="max-h-[35%] flex-none overflow-y-auto border-b border-border">
             {!loading && grouped.length === 0 ? (
-              <div className="px-3 py-2 text-[12px] text-fg-dim">No changes</div>
+              <ListNote label="No changes" />
             ) : (
               <ChangedFilesList
                 loading={loading}
@@ -241,7 +156,7 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
               />
             )}
           </div>
-          <CommitsList commits={commits} expanded={!effectiveSelectedPath} />
+          <CommitsList commits={commits} loading={commitsLoading} expanded={!effectiveSelectedPath} />
           {effectiveSelectedPath && <GitFileDiff workspace={workspace} selectedPath={effectiveSelectedPath} />}
         </div>
       )}
@@ -290,6 +205,12 @@ function EmptyState({ label }: { readonly label: string }): JSX.Element {
   )
 }
 
+/** A top-aligned note inside a list box. Shares the list rows' horizontal padding
+ * so a placeholder → list transition doesn't shift the content (the load jank). */
+function ListNote({ label }: { readonly label: string }): JSX.Element {
+  return <div className="px-3 py-2 text-[12px] text-fg-dim">{label}</div>
+}
+
 function ChangedFilesList({
   loading,
   grouped,
@@ -301,7 +222,7 @@ function ChangedFilesList({
   readonly selectedPath?: string
   readonly onSelect: (path: string) => void
 }): JSX.Element {
-  if (loading) return <EmptyState label="Loading changes" />
+  if (loading) return <ListNote label="Loading changes" />
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto py-2">
@@ -329,9 +250,11 @@ function ChangedFilesList({
  * diff is showing, otherwise it's a capped band above the diff. */
 function CommitsList({
   commits,
+  loading,
   expanded,
 }: {
   readonly commits: ReadonlyArray<GitCommit>
+  readonly loading: boolean
   readonly expanded: boolean
 }): JSX.Element {
   return (
@@ -342,7 +265,10 @@ function CommitsList({
         Commits
       </div>
       {commits.length === 0 ? (
-        <div className="px-3 pb-2 text-[12px] text-fg-dim">No commits on this branch</div>
+        // Same padding for loading and empty so the box doesn't reflow on load.
+        <div className="px-3 pb-2 text-[12px] text-fg-dim">
+          {loading ? "Loading commits" : "No commits on this branch"}
+        </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto pb-2">
           {commits.map((commit) => (

@@ -1,13 +1,10 @@
 import type { JSX } from "react"
 import { CheckIcon, DotFillIcon, XIcon, type Icon } from "@primer/octicons-react"
 import type { PullRequest, WorkspaceGitContext } from "../../../shared/git.js"
-import { Button } from "../ui/Button.js"
 import { PrStateIcon, prStateColor, toPrState } from "./PrStateIcon.js"
 
 export interface RepoContextBarProps {
   readonly context?: WorkspaceGitContext
-  readonly syncing: boolean
-  readonly onSync: () => void
 }
 
 const BAR = "flex flex-none items-center gap-2 border-b border-border px-4 py-2 text-[12px]"
@@ -20,11 +17,11 @@ const CHECKS: Record<string, { readonly Icon: Icon; readonly color: string }> = 
   pending: { Icon: DotFillIcon, color: "text-request" },
 }
 
-/** The git context strip above the changed-file list: the current branch and
- * the PR that branch maps to (number, title, state, checks, review), with a
- * button to refresh PRs from GitHub. Renders nothing when the workspace isn't a
- * git repository. Purely presentational — the GitPane owns the fetch. */
-export function RepoContextBar({ context, syncing, onSync }: RepoContextBarProps): JSX.Element | null {
+/** The git context strip at the top of the pane: the current branch and the PR
+ * that branch maps to (number, title, state, checks, review). Renders nothing
+ * when the workspace isn't a git repository. Purely presentational — the GitPane
+ * owns the fetch and auto-syncs PRs on open. */
+export function RepoContextBar({ context }: RepoContextBarProps): JSX.Element | null {
   if (!context?.repository) return null
   const { branch, currentPullRequest: pr } = context
 
@@ -36,9 +33,6 @@ export function RepoContextBar({ context, syncing, onSync }: RepoContextBarProps
         )}
         {pr ? <PullRequestSummary pr={pr} /> : <span className="text-fg-faint">No PR for this branch</span>}
       </div>
-      <Button size="sm" variant="ghost" disabled={syncing} onClick={onSync}>
-        {syncing ? "Syncing…" : "Sync PRs"}
-      </Button>
     </div>
   )
 }

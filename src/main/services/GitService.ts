@@ -791,34 +791,34 @@ export const GitServiceLive = Layer.effect(
         return rows
       }).pipe(Effect.withSpan("arc.git.sync_pull_requests", { attributes: { "arc.workspace_id": workspaceId } }))
 
-    const mapError = (label: string) => (e: unknown) => arcRequestError(`${label}: ${e}`)
-
+    // A pure read of the persisted git read model — no git plumbing. Repository
+    // identity, worktrees, and the cached branch are populated by detection
+    // (boot pass, post-checkout hook, worktree mutations) and PRs by the sync;
+    // this just joins those stored rows, so it's cheap to call on every workspace
+    // switch and never competes with the switch's own DB reads.
     const gitContext = (
       workspaceId: string,
     ): Effect.Effect<WorkspaceGitContext, ArcRequestError> =>
       Effect.gen(function* () {
-        const repository = yield* detectRepository(workspaceId)
-        if (!repository) {
-          return {
-            workspaceId,
-            branch: null,
-            repository: null,
-            worktrees: [],
-            currentPullRequest: null,
-          }
-        }
-        // detectRepository just refreshed the workspace's cached branch, so read
-        // it back to map branch→PR off the persisted read model.
-        const workspaceRow = (yield* store.loadWorkspaces.pipe(Effect.mapError(mapError("workspace load failed"))))
-          .find((w) => w.id === workspaceId)
+        const workspaceRow = (yield* store.loadWorkspaces.pipe(
+          Effect.mapError((e) => arcRequestError(`workspace load failed: ${e}`)),
+        )).find((w) => w.id === workspaceId)
         const branch = workspaceRow?.gitBranch ?? null
+        const repository = workspaceRow?.repositoryId
+          ? yield* store
+              .repositoryById(workspaceRow.repositoryId)
+              .pipe(Effect.mapError((e) => arcRequestError(`repository load failed: ${e}`)))
+          : null
+        if (!repository) {
+          return { workspaceId, branch, repository: null, worktrees: [], currentPullRequest: null }
+        }
         const worktrees = yield* store
           .loadWorktreesForRepository(repository.id)
-          .pipe(Effect.mapError(mapError("worktree load failed")))
+          .pipe(Effect.mapError((e) => arcRequestError(`worktree load failed: ${e}`)))
         const currentPr = branch
           ? yield* store
               .pullRequestForBranch(repository.id, branch)
-              .pipe(Effect.mapError(mapError("PR lookup failed")))
+              .pipe(Effect.mapError((e) => arcRequestError(`PR lookup failed: ${e}`)))
           : null
         return {
           workspaceId,
@@ -916,12 +916,12 @@ export const GitServiceLive = Layer.effect(
         // Scope the log to this branch's own commits — everything reachable from
         // HEAD but not from the repo's default branch (`base..HEAD`). On the default
         // branch itself, or when the base ref can't be resolved, fall back to full
-        // history so the pane is never mysteriously empty.
-        const repo = yield* detectRepository(workspaceId).pipe(Effect.orElseSucceed(() => null))
-        const branch = trimmedOrUndefined(
-          (yield* Effect.promise(() => runGit(workspace.path, ["branch", "--show-current"]))).stdout,
+        // history so the pane is never mysteriously empty. Branch + default branch
+        // come from the cached workspace DTO (populated by repo detection elsewhere),
+        // so the history read costs one `git log` and never triggers detection.
+        const range = yield* Effect.promise(() =>
+          resolveBranchRange(workspace.path, workspace.branch ?? undefined, workspace.defaultBranch),
         )
-        const range = yield* Effect.promise(() => resolveBranchRange(workspace.path, branch, repo?.defaultBranch ?? null))
 
         // One commit per line; fields split by US (0x1f), which never appears in a
         // subject. `--no-show-signature` keeps GPG output off the stream.

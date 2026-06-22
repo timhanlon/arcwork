@@ -147,6 +147,41 @@ export const gitChangesSignalAtom = Atom.family((workspaceId: string) =>
 )
 
 /**
+ * The per-workspace git read model as shared, signal-refreshed atoms: working-tree
+ * status, the repo/branch→PR context, and the branch's commits. Hoisting these out
+ * of the Git pane's local state lets the data survive the pane's mount/unmount and
+ * be warmed before the pane opens (a subscriber keeps the active workspace's atoms
+ * live). Each refreshes on {@link gitChangesSignalAtom} and retains its prior value
+ * while re-pulling, so a refresh never flashes the pane empty.
+ *
+ * The idle TTL keeps a workspace's value (and its live signal refresh) for a window
+ * after you switch away, so switching back is instant instead of a cold re-pull —
+ * while still releasing workspaces you haven't touched in a while.
+ */
+const GIT_ATOM_TTL = Duration.minutes(5)
+
+export const gitStatusAtom = Atom.family((workspaceId: string) =>
+  ArcRpcAtomClient.query("GetWorkspaceGitStatus", { workspaceId }).pipe(
+    Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.setIdleTTL(GIT_ATOM_TTL),
+  )
+)
+
+export const gitContextAtom = Atom.family((workspaceId: string) =>
+  ArcRpcAtomClient.query("GetWorkspaceGitContext", { workspaceId }).pipe(
+    Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.setIdleTTL(GIT_ATOM_TTL),
+  )
+)
+
+export const gitCommitsAtom = Atom.family((workspaceId: string) =>
+  ArcRpcAtomClient.query("GetWorkspaceGitCommits", { workspaceId }).pipe(
+    Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.setIdleTTL(GIT_ATOM_TTL),
+  )
+)
+
+/**
  * The work navigator/comments refresh signal. Work has two change sources folded
  * here: the in-app `WatchWorkChanges` stream (every real mutation, RPC or MCP,
  * runs through the same in-process `WorkService`), plus the chat activity/message

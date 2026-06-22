@@ -26,6 +26,7 @@ import { sync as syncTerminals } from "./terminal/terminalRegistry.js"
 import { UnifiedChatPane, type ChatPaneHandle } from "./chat/UnifiedChatPane.js"
 import { WorkPane, type WorkPaneHandle } from "./work/WorkPane.js"
 import { GitPane } from "./git/GitPane.js"
+import { GitPrefetch } from "./git/GitPrefetch.js"
 import { NavBar } from "./shell/NavBar.js"
 import { ArcSearchPanel } from "./search/ArcSearchPanel.js"
 import { CommandPalette } from "./shell/CommandPalette.js"
@@ -430,6 +431,7 @@ export function App(): JSX.Element {
 
   return (
     <ShellActionsProvider value={shell.actions}>
+    {vm.workspace ? <GitPrefetch workspaceId={vm.workspace.id} /> : null}
     <div className="grid h-full grid-rows-[auto_1fr]">
       {searchOpen ? (
         <ArcSearchPanel

@@ -39,8 +39,6 @@ const context = (overrides: Partial<WorkspaceGitContext>): WorkspaceGitContext =
   ...overrides,
 })
 
-const noop = () => {}
-
 const Frame = ({ children }: { children: React.ReactNode }) => (
   <div style={{ width: 520, background: "var(--background)" }}>{children}</div>
 )
@@ -50,8 +48,6 @@ export const OpenApprovedPassing = () => (
   <Frame>
     <RepoContextBar
       context={context({ currentPullRequest: pr({ checksState: "passing", reviewState: "approved" }) })}
-      syncing={false}
-      onSync={noop}
     />
   </Frame>
 )
@@ -63,8 +59,6 @@ export const FailingChangesRequested = () => (
       context={context({
         currentPullRequest: pr({ checksState: "failing", reviewState: "changes_requested" }),
       })}
-      syncing={false}
-      onSync={noop}
     />
   </Frame>
 )
@@ -72,29 +66,14 @@ export const FailingChangesRequested = () => (
 /** Draft PR with checks still running. */
 export const DraftPending = () => (
   <Frame>
-    <RepoContextBar
-      context={context({ currentPullRequest: pr({ isDraft: true, checksState: "pending" }) })}
-      syncing={false}
-      onSync={noop}
-    />
+    <RepoContextBar context={context({ currentPullRequest: pr({ isDraft: true, checksState: "pending" }) })} />
   </Frame>
 )
 
 /** On a branch with no PR yet. */
 export const NoPullRequest = () => (
   <Frame>
-    <RepoContextBar context={context({ currentPullRequest: null })} syncing={false} onSync={noop} />
-  </Frame>
-)
-
-/** Mid-sync (button disabled). */
-export const Syncing = () => (
-  <Frame>
-    <RepoContextBar
-      context={context({ currentPullRequest: pr({ checksState: "passing" }) })}
-      syncing
-      onSync={noop}
-    />
+    <RepoContextBar context={context({ currentPullRequest: null })} />
   </Frame>
 )
 
@@ -103,8 +82,6 @@ export const NoGitHubRemote = () => (
   <Frame>
     <RepoContextBar
       context={context({ repository: { ...repository, githubOwner: null, githubRepo: null } })}
-      syncing={false}
-      onSync={noop}
     />
   </Frame>
 )
@@ -112,6 +89,6 @@ export const NoGitHubRemote = () => (
 /** Not a git repository — renders nothing. */
 export const NotARepo = () => (
   <Frame>
-    <RepoContextBar context={context({ repository: null })} syncing={false} onSync={noop} />
+    <RepoContextBar context={context({ repository: null })} />
   </Frame>
 )
