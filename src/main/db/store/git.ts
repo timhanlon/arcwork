@@ -20,9 +20,11 @@ export interface GitStore {
   /** Upsert a worktree keyed by its path; returns the canonical row. */
   readonly upsertWorktree: (row: WorktreeRow) => Effect.Effect<WorktreeRow, SqlError>
   readonly deleteWorktreeByPath: (path: string) => Effect.Effect<boolean, SqlError>
-  readonly loadPullRequestsForRepository: (
+  /** Head-ref names of merged PRs whose head lives in this repository (fork-safe;
+   * see {@link headInRepository}) — the input to auto-pruning a merged worktree. */
+  readonly mergedBranchesForRepository: (
     repositoryId: string,
-  ) => Effect.Effect<ReadonlyArray<PullRequestRow>, SqlError>
+  ) => Effect.Effect<ReadonlyArray<string>, SqlError>
   /** Every open or merged PR across all repositories — the source for the
    * sidebar's per-workspace branch→PR chip, joined in one read rather than per
    * row. Open PRs sort first so a branch with both shows the open one (drafts
@@ -144,20 +146,25 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
       }),
     )
 
-  const loadPullRequestsForRepository = (repositoryId: string) =>
-    sql<PullRequestRow>`SELECT * FROM pull_requests
-      WHERE repository_id = ${repositoryId}
-      ORDER BY number DESC`
+  // The branch→PR invariant, in one place. A PR maps onto a local branch only
+  // when its head lives in the repository itself, not a fork that reused the
+  // branch name — `head_ref` is just a branch name. The owner/name equality also
+  // drops rows with a NULL head repo (synced before the column existed), whose
+  // safe default is to surface no PR rather than a possible fork's. Every query
+  // that joins a PR to a local branch composes this fragment over `pr`/`r`.
+  const headInRepository = sql`pr.head_repository_owner = r.github_owner
+    AND pr.head_repository_name = r.github_repo`
 
-  // Same fork-safety as pullRequestForBranch: a PR only maps onto a local
-  // workspace row when its head lives in the repository itself, not a fork that
-  // reused the branch name. The owner/name join also drops rows with a NULL head
-  // repo (synced before the column existed) — surface no PR over a fork's.
+  const mergedBranchesForRepository = (repositoryId: string) =>
+    sql<{ headRef: string }>`SELECT DISTINCT pr.head_ref FROM pull_requests pr
+      JOIN repositories r ON r.id = pr.repository_id
+      WHERE pr.repository_id = ${repositoryId} AND pr.state = 'merged'
+        AND ${headInRepository}`.pipe(Effect.map((rows) => rows.map((row) => row.headRef)))
+
+  // Open PRs sort first so a branch with both shows the open one.
   const loadSidebarPullRequests = sql<PullRequestRow>`SELECT pr.* FROM pull_requests pr
     JOIN repositories r ON r.id = pr.repository_id
-    WHERE pr.state IN ('open', 'merged')
-      AND pr.head_repository_owner = r.github_owner
-      AND pr.head_repository_name = r.github_repo
+    WHERE pr.state IN ('open', 'merged') AND ${headInRepository}
     ORDER BY (pr.state = 'open') DESC, pr.number DESC`
 
   const upsertPullRequest = (row: PullRequestRow) =>
@@ -216,18 +223,12 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
 
   // Prefer an open PR; among same state, the most recently synced. `state` is
   // GitHub's literal ('open'|'closed'|'merged'), so ordering open first is an
-  // explicit predicate rather than a lexical sort. The head must live in the
-  // repository itself, not a fork: `head_ref` is only a branch name and a
-  // fork's branch can reuse it, so we require the PR head's repo owner/name to
-  // equal the repository's own GitHub identity. A row with no captured head
-  // repo (NULL — synced before the column existed) fails the join, which is
-  // the safe default: surface no PR rather than a possible fork's.
+  // explicit predicate rather than a lexical sort. Fork-safe via headInRepository.
   const pullRequestForBranch = (repositoryId: string, headRef: string) =>
     sql<PullRequestRow>`SELECT pr.* FROM pull_requests pr
       JOIN repositories r ON r.id = pr.repository_id
       WHERE pr.repository_id = ${repositoryId} AND pr.head_ref = ${headRef}
-        AND pr.head_repository_owner = r.github_owner
-        AND pr.head_repository_name = r.github_repo
+        AND ${headInRepository}
       ORDER BY (pr.state = 'open') DESC, pr.last_synced_at DESC, pr.number DESC
       LIMIT 1`.pipe(Effect.map((rows) => rows[0] ?? null))
 
@@ -260,7 +261,7 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
     loadWorktreesForRepository,
     upsertWorktree,
     deleteWorktreeByPath,
-    loadPullRequestsForRepository,
+    mergedBranchesForRepository,
     loadSidebarPullRequests,
     upsertPullRequest,
     pullRequestForBranch,

@@ -42,23 +42,28 @@ const pr = (over: Partial<PullRequestRow> & Pick<PullRequestRow, "id" | "number"
   ...over,
 })
 
+const upsertWidgetsRepo = Effect.gen(function* () {
+  const db = yield* ArcStore
+  yield* db.upsertRepository({
+    id: repoId,
+    commonGitDir: "/tmp/widgets/.git",
+    rootPath: "/tmp/widgets",
+    defaultBranch: "main",
+    remotesJson: "[]",
+    githubOwner: "acme",
+    githubRepo: "widgets",
+    githubNodeId: null,
+    createdAt: "2026-06-08T00:00:00.000Z",
+    lastSeenAt: "2026-06-08T00:00:00.000Z",
+  })
+})
+
 describe("loadSidebarPullRequests fork safety", () => {
   it("excludes a fork PR that reused a local branch name", async () => {
     const numbers = await run(
       Effect.gen(function* () {
         const db = yield* ArcStore
-        yield* db.upsertRepository({
-          id: repoId,
-          commonGitDir: "/tmp/widgets/.git",
-          rootPath: "/tmp/widgets",
-          defaultBranch: "main",
-          remotesJson: "[]",
-          githubOwner: "acme",
-          githubRepo: "widgets",
-          githubNodeId: null,
-          createdAt: "2026-06-08T00:00:00.000Z",
-          lastSeenAt: "2026-06-08T00:00:00.000Z",
-        })
+        yield* upsertWidgetsRepo
         // Same branch name "feat" from the repo itself vs. a fork; only the
         // repo's own head should map onto the sidebar.
         yield* db.upsertPullRequest(pr({ id: arcId("pr", "pr_local"), number: 1 }))
@@ -75,5 +80,32 @@ describe("loadSidebarPullRequests fork safety", () => {
       }),
     )
     expect(numbers).toEqual([1])
+  })
+})
+
+describe("mergedBranchesForRepository fork safety", () => {
+  it("omits a fork's merged branch so auto-prune never deletes a same-named tree", async () => {
+    const branches = await run(
+      Effect.gen(function* () {
+        const db = yield* ArcStore
+        yield* upsertWidgetsRepo
+        // The repo's own merged PR on "feat" is prunable; a fork's merged PR that
+        // reused "rogue" must not be, or it would delete a local "rogue" worktree.
+        yield* db.upsertPullRequest(pr({ id: arcId("pr", "pr_local"), number: 1, state: "merged" }))
+        yield* db.upsertPullRequest(
+          pr({
+            id: arcId("pr", "pr_fork"),
+            number: 2,
+            state: "merged",
+            headRef: "rogue",
+            headRepositoryOwner: "forkuser",
+          }),
+        )
+        // An open PR on a third branch is not merged, so it isn't prunable either.
+        yield* db.upsertPullRequest(pr({ id: arcId("pr", "pr_open"), number: 3, headRef: "wip" }))
+        return yield* db.mergedBranchesForRepository(repoId)
+      }),
+    )
+    expect(branches).toEqual(["feat"])
   })
 })

@@ -698,10 +698,14 @@ export const GitServiceLive = Layer.effect(
         const worktrees = yield* store
           .loadWorktreesForRepository(repo.id)
           .pipe(Effect.mapError((e) => arcRequestError(`worktree load failed: ${e}`)))
-        const prs = yield* store
-          .loadPullRequestsForRepository(repo.id)
-          .pipe(Effect.mapError((e) => arcRequestError(`PR load failed: ${e}`)))
-        const mergedBranches = new Set(prs.filter((pr) => pr.state === "merged").map((pr) => pr.headRef))
+        // Fork-safe by construction (see store's headInRepository): a fork's
+        // merged PR that reused a branch name never lands here, so it can't
+        // trigger deletion of a same-named local worktree.
+        const mergedBranches = new Set(
+          yield* store
+            .mergedBranchesForRepository(repo.id)
+            .pipe(Effect.mapError((e) => arcRequestError(`PR load failed: ${e}`))),
+        )
 
         const pruned: Array<string> = []
         for (const wt of worktrees) {
