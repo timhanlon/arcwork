@@ -58,7 +58,7 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
 
   const upsertRepository = (row: RepositoryRow) =>
     Effect.gen(function* () {
-      yield* sql`INSERT INTO repositories ${sql.insert({
+      const rows = yield* sql<RepositoryRow>`INSERT INTO repositories ${sql.insert({
         id: row.id,
         commonGitDir: row.commonGitDir,
         rootPath: row.rootPath,
@@ -76,9 +76,8 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
         github_owner = excluded.github_owner,
         github_repo = excluded.github_repo,
         github_node_id = excluded.github_node_id,
-        last_seen_at = excluded.last_seen_at`
-      const rows = yield* sql<RepositoryRow>`
-        SELECT * FROM repositories WHERE common_git_dir = ${row.commonGitDir} LIMIT 1`
+        last_seen_at = excluded.last_seen_at
+        RETURNING *`
       const canonical = rows[0]
       if (!canonical) {
         return yield* Effect.die(new Error(`repository upsert left no row for ${row.commonGitDir}`))
@@ -103,7 +102,7 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
 
   const upsertWorktree = (row: WorktreeRow) =>
     Effect.gen(function* () {
-      yield* sql`INSERT INTO worktrees ${sql.insert({
+      const rows = yield* sql<WorktreeRow>`INSERT INTO worktrees ${sql.insert({
         id: row.id,
         repositoryId: row.repositoryId,
         path: row.path,
@@ -127,8 +126,8 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
         locked_reason = excluded.locked_reason,
         is_prunable = excluded.is_prunable,
         prunable_reason = excluded.prunable_reason,
-        last_seen_at = excluded.last_seen_at`
-      const rows = yield* sql<WorktreeRow>`SELECT * FROM worktrees WHERE path = ${row.path} LIMIT 1`
+        last_seen_at = excluded.last_seen_at
+        RETURNING *`
       const canonical = rows[0]
       if (!canonical) {
         return yield* Effect.die(new Error(`worktree upsert left no row for ${row.path}`))
@@ -156,7 +155,7 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
 
   const upsertPullRequest = (row: PullRequestRow) =>
     Effect.gen(function* () {
-      yield* sql`INSERT INTO pull_requests ${sql.insert({
+      const rows = yield* sql<PullRequestRow>`INSERT INTO pull_requests ${sql.insert({
         id: row.id,
         repositoryId: row.repositoryId,
         number: row.number,
@@ -197,10 +196,8 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
         merge_state_status = excluded.merge_state_status,
         url = excluded.url,
         last_synced_at = excluded.last_synced_at,
-        updated_at = excluded.updated_at`
-      const rows = yield* sql<PullRequestRow>`
-        SELECT * FROM pull_requests
-        WHERE repository_id = ${row.repositoryId} AND number = ${row.number} LIMIT 1`
+        updated_at = excluded.updated_at
+        RETURNING *`
       const canonical = rows[0]
       if (!canonical) {
         return yield* Effect.die(

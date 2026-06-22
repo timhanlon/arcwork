@@ -246,15 +246,15 @@ export const ArcStoreLive = Layer.effect(
       row: Pick<WorkspaceRow, "id" | "path" | "name" | "createdAt" | "lastOpenedAt">,
     ) =>
       Effect.gen(function* () {
-        yield* sql`INSERT INTO workspaces ${sql.insert({
+        const rows = yield* sql<WorkspaceRow>`INSERT INTO workspaces ${sql.insert({
           id: row.id,
           path: row.path,
           name: row.name,
           createdAt: row.createdAt,
           lastOpenedAt: row.lastOpenedAt,
         })} ON CONFLICT(path) DO UPDATE SET
-          last_opened_at = excluded.last_opened_at`
-        const rows = yield* sql<WorkspaceRow>`SELECT * FROM workspaces WHERE path = ${row.path} LIMIT 1`
+          last_opened_at = excluded.last_opened_at
+          RETURNING *`
         const canonical = rows[0]
         if (!canonical) {
           return yield* Effect.die(new Error(`workspace upsert left no row for ${row.path}`))
