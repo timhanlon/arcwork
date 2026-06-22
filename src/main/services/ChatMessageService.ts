@@ -13,7 +13,7 @@ import type { ExtractedRows } from "../ingest/db/schema.js"
 import { IngestStore } from "../ingest/db/store.js"
 import type { ChatMessage } from "../../shared/chat-message.js"
 import type { PendingRequest } from "../../shared/chat-request.js"
-import { newArcId } from "../../shared/ids.js"
+import { type ChatId, newArcId, type TargetId } from "../../shared/ids.js"
 import { TargetSessionManager } from "./TargetSessionManager.js"
 import { ChatService } from "./ChatService.js"
 import { LocalModelService } from "./LocalModelService.js"
@@ -51,16 +51,16 @@ export class ChatMessageService extends Context.Service<
     readonly getById: (id: string) => Effect.Effect<ChatMessage | null, SqlError>
     /** every still-pending target-originated request, across all chats */
     readonly listPending: Effect.Effect<ReadonlyArray<PendingRequest>, SqlError>
-    readonly changes: Stream.Stream<{ readonly chatId: string }>
+    readonly changes: Stream.Stream<{ readonly chatId: ChatId }>
     readonly ingestSignal: (signal: HookSignal) => Effect.Effect<number, never>
     readonly ingestArtifactSession: (rows: ExtractedRows) => Effect.Effect<number, never>
     /** Mark a detached target's still-pending requests superseded, and publish a
      * change so the sidebar's pending flag clears. Best-effort; never fails. */
-    readonly supersedePendingForTarget: (targetSessionId: string) => Effect.Effect<number, never>
-    readonly reprojectChat: (chatId: string) => Effect.Effect<{ readonly deleted: number; readonly inserted: number }, never>
+    readonly supersedePendingForTarget: (targetSessionId: TargetId) => Effect.Effect<number, never>
+    readonly reprojectChat: (chatId: ChatId) => Effect.Effect<{ readonly deleted: number; readonly inserted: number }, never>
     readonly sendPrompt: (req: {
-      readonly chatId: string
-      readonly targetSessionId: string
+      readonly chatId: ChatId
+      readonly targetSessionId: TargetId
       readonly text: string
     }) => Effect.Effect<ChatMessage, ArcRequestError | SqlError>
   }
@@ -81,8 +81,8 @@ export const ChatMessageServiceLive = Layer.effect(
     const chats = yield* ChatService
     const localModel = yield* LocalModelService
     const activity = yield* ActivityEventService
-    const updates = yield* PubSub.unbounded<{ readonly chatId: string }>()
-    const livePendingPermissions = new Map<string, PendingRequest>()
+    const updates = yield* PubSub.unbounded<{ readonly chatId: ChatId }>()
+    const livePendingPermissions = new Map<TargetId, PendingRequest>()
 
     const recordPendingEvent = (
       kind: string,
@@ -159,7 +159,7 @@ export const ChatMessageServiceLive = Layer.effect(
 
     const persistSignalDrafts = (
       signal: HookSignal,
-      chatId: string,
+      chatId: ChatId,
       roleFilter?: ChatMessageRow["role"],
     ) =>
       Effect.gen(function* () {
@@ -276,7 +276,7 @@ export const ChatMessageServiceLive = Layer.effect(
 
     const projectArtifactSession = (
       rows: ExtractedRows,
-      target: { readonly id: string; readonly chatId: string },
+      target: { readonly id: TargetId; readonly chatId: ChatId },
     ) =>
       Effect.gen(function* () {
         let changed = 0
@@ -335,7 +335,7 @@ export const ChatMessageServiceLive = Layer.effect(
       targets: ReadonlyArray<TargetSessionRow>,
       provider: string,
       nativeSessionId: string,
-    ): { readonly id: string; readonly chatId: string } | null => {
+    ): { readonly id: TargetId; readonly chatId: ChatId } | null => {
       const exact = targets.find((target) =>
         target.provider === provider && target.nativeSessionId === nativeSessionId
       )
@@ -349,7 +349,7 @@ export const ChatMessageServiceLive = Layer.effect(
       return unbound.length === 1 ? { id: unbound[0]!.id, chatId: unbound[0]!.chatId } : null
     }
 
-    const reprojectChat = (chatId: string) =>
+    const reprojectChat = (chatId: ChatId) =>
       Effect.gen(function* () {
         const targets = yield* db.targetSessionsForChat(chatId)
         const deleted = yield* db.deleteRequestMessagesForChat(chatId)
@@ -380,8 +380,8 @@ export const ChatMessageServiceLive = Layer.effect(
       }).pipe(bestEffort(`chat reproject failed (${chatId})`, { deleted: 0, inserted: 0 }))
 
     const sendPrompt = (req: {
-      readonly chatId: string
-      readonly targetSessionId: string
+      readonly chatId: ChatId
+      readonly targetSessionId: TargetId
       readonly text: string
     }) =>
       Effect.gen(function* () {
@@ -488,7 +488,7 @@ export const ChatMessageServiceLive = Layer.effect(
         return rowToChatMessage(row)
       })
 
-    const supersedePendingForTarget = (targetSessionId: string) =>
+    const supersedePendingForTarget = (targetSessionId: TargetId) =>
       Effect.gen(function* () {
         const clearedLive = livePendingPermissions.delete(targetSessionId) ? 1 : 0
         const superseded = yield* db.supersedePendingRequestsForTarget(targetSessionId)

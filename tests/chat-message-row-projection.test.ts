@@ -8,11 +8,12 @@ import {
   titleSeedFromMessages,
 } from "../src/main/services/chat-message/row-projection.js"
 import type { ChatMessageRow } from "../src/main/db/schema.js"
+import { arcId } from "../src/shared/ids.js"
 
 const row = (over: Partial<ChatMessageRow>): ChatMessageRow => ({
-  id: "message_01",
-  chatId: "chat_01",
-  targetSessionId: "target_01",
+  id: arcId("message", "message_01"),
+  chatId: arcId("chat", "chat_01"),
+  targetSessionId: arcId("target", "target_01"),
   role: "assistant",
   turnId: null,
   messageId: null,
@@ -84,10 +85,10 @@ describe("chat-message row projection", () => {
   it("seeds the title from the earliest final user prompts, oldest first", () => {
     const seed = titleSeedFromMessages(
       [
-        row({ id: "b", role: "user", body: "second", occurredAt: "2026-06-11T00:00:02.000Z" }),
-        row({ id: "a", role: "user", body: "first", occurredAt: "2026-06-11T00:00:01.000Z" }),
-        row({ id: "c", role: "assistant", body: "ignored", occurredAt: "2026-06-11T00:00:03.000Z" }),
-        row({ id: "d", role: "user", status: "pending", body: "not-final", occurredAt: "2026-06-11T00:00:00.500Z" }),
+        row({ id: arcId("message", "b"), role: "user", body: "second", occurredAt: "2026-06-11T00:00:02.000Z" }),
+        row({ id: arcId("message", "a"), role: "user", body: "first", occurredAt: "2026-06-11T00:00:01.000Z" }),
+        row({ id: arcId("message", "c"), role: "assistant", body: "ignored", occurredAt: "2026-06-11T00:00:03.000Z" }),
+        row({ id: arcId("message", "d"), role: "user", status: "pending", body: "not-final", occurredAt: "2026-06-11T00:00:00.500Z" }),
       ],
       "fallback",
     )

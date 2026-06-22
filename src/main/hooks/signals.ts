@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import * as os from "node:os"
 import * as path from "node:path"
+import { arcIdOrNull, type ChatId, type TargetId } from "../../shared/ids.js"
 import { arcWorkRuntimeDir, resolveProfile } from "../db/paths.js"
 
 /**
@@ -70,8 +71,8 @@ export interface HookSignalNative {
 }
 
 export interface HookSignalArc {
-  readonly chatId: string | null
-  readonly targetSessionId: string | null
+  readonly chatId: ChatId | null
+  readonly targetSessionId: TargetId | null
   readonly targetProvider: string | null
   readonly hookSockPresent: boolean
 }
@@ -108,7 +109,7 @@ export interface HookSignalWire {
 export interface HookBinding {
   readonly provider: string
   readonly event: string
-  readonly targetSessionId: string
+  readonly targetSessionId: TargetId
   readonly nativeSessionId: string
   readonly transcriptPath: string | null
 }
@@ -132,8 +133,8 @@ export interface HookSignal {
   /** Same as `declaredEvent` for binding compatibility. */
   readonly event: string
   readonly sessionId: string | null
-  readonly arcTargetSessionId: string | null
-  readonly arcChatSessionId: string | null
+  readonly arcTargetSessionId: TargetId | null
+  readonly arcChatSessionId: ChatId | null
   readonly arcTargetProvider: string | null
 }
 
@@ -251,8 +252,11 @@ const nativeFrom = (
 const arcFrom = (parsed: Record<string, unknown>): HookSignalArc => {
   const wireArc = isRecord(parsed["arc"]) ? parsed["arc"] : null
   return {
-    chatId: str(wireArc?.["chatId"]) ?? str(parsed["arcChatSessionId"]),
-    targetSessionId: str(wireArc?.["targetSessionId"]) ?? str(parsed["arcTargetSessionId"]),
+    chatId: arcIdOrNull("chat", str(wireArc?.["chatId"]) ?? str(parsed["arcChatSessionId"])),
+    targetSessionId: arcIdOrNull(
+      "target",
+      str(wireArc?.["targetSessionId"]) ?? str(parsed["arcTargetSessionId"]),
+    ),
     targetProvider: str(wireArc?.["targetProvider"]) ?? str(parsed["arcTargetProvider"]),
     hookSockPresent: bool(wireArc?.["hookSockPresent"]),
   }

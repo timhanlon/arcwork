@@ -3,6 +3,7 @@ import { execFile } from "node:child_process"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import type { GitChangeStatus, GitFileChange, GitFileDiff, GitStatus } from "../../shared/git.js"
+import type { WorkspaceId } from "../../shared/ids.js"
 import type { Workspace } from "../../shared/workspace.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { WorkspaceService } from "./WorkspaceService.js"
@@ -10,8 +11,8 @@ import { WorkspaceService } from "./WorkspaceService.js"
 export class GitService extends Context.Service<
   GitService,
   {
-    readonly status: (workspaceId: string) => Effect.Effect<GitStatus, ArcRequestError>
-    readonly diff: (workspaceId: string, filePath: string) => Effect.Effect<GitFileDiff, ArcRequestError>
+    readonly status: (workspaceId: WorkspaceId) => Effect.Effect<GitStatus, ArcRequestError>
+    readonly diff: (workspaceId: WorkspaceId, filePath: string) => Effect.Effect<GitFileDiff, ArcRequestError>
   }
 >()("GitService") {}
 
@@ -147,7 +148,7 @@ export const GitServiceLive = Layer.effect(
   Effect.gen(function* () {
     const workspaces = yield* WorkspaceService
 
-    const status = (workspaceId: string): Effect.Effect<GitStatus, ArcRequestError> =>
+    const status = (workspaceId: WorkspaceId): Effect.Effect<GitStatus, ArcRequestError> =>
       Effect.gen(function* () {
           const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
           if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))

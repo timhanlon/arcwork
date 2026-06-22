@@ -24,6 +24,7 @@ import {
   ArcSearchParams,
   ArcSearchResult,
 } from "../../shared/read.js"
+import { arcId, ChatId, WorkId } from "../../shared/ids.js"
 import { WorkService } from "../work/service.js"
 import { arcRequestError } from "../errors.js"
 import { ReadService } from "../read/service.js"
@@ -99,7 +100,7 @@ const WorkCreateTool = Tool.make("arc.work.create", {
     priority: Schema.optional(WorkPriority),
     citations: Schema.optional(Schema.Array(Citation)),
     sessionId: Schema.optional(Schema.String),
-    chatId: Schema.optional(Schema.String),
+    chatId: Schema.optional(ChatId),
   }),
   success: Work,
 })
@@ -108,7 +109,7 @@ const WorkUpdateTool = Tool.make("arc.work.update", {
   description:
     "Mutate an existing unit of work — the one write door for edits, status, priority, and comments. Supply at least one operation; bundle several in a single call and they apply in a deterministic order (content revision → status → priority → comment). `set.title`/`set.body`/`set.labels` revise authored content (a present field replaces, `labels` as a whole set; mints a new revision). `set.status` moves the work between any status, including the terminal `done`/`superseded` — status is an append-only edge, so this records a transition rather than overwriting. `set.priority` ranks the work (p0 highest). `addComment` attaches a comment (`ref: true` anchors it to the work as a whole rather than the current revision). Returns the work in its final state, plus the created comment when `addComment` was supplied. Arc derives workspace scope and the calling session's observed harness/model from the stamped MCP session/chat; `sessionId`/`chatId` params are fallback provenance only.",
   parameters: Schema.Struct({
-    workRefId: Schema.String,
+    workRefId: WorkId,
     set: Schema.optional(
       Schema.Struct({
         title: Schema.optional(Schema.String),
@@ -125,7 +126,7 @@ const WorkUpdateTool = Tool.make("arc.work.update", {
       }),
     ),
     sessionId: Schema.optional(Schema.String),
-    chatId: Schema.optional(Schema.String),
+    chatId: Schema.optional(ChatId),
   }),
   success: WorkUpdateResult,
 })
@@ -162,7 +163,7 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
           const { chatId } = yield* readMcpProvenanceHeaders()
           const scoped =
             chatId && !params.filters?.chatId
-              ? { ...params, filters: { ...params.filters, chatId } }
+              ? { ...params, filters: { ...params.filters, chatId: arcId("chat", chatId) } }
               : params
           return yield* read.search(scoped)
         }).pipe(Effect.orDie),

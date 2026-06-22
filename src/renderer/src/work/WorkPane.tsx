@@ -1,4 +1,5 @@
 import { type JSX, forwardRef, useImperativeHandle, useMemo, useState } from "react"
+import type { ChatId, WorkId } from "../../../shared/ids.js"
 import { useAllWork } from "./useAllWork.js"
 import { useWorkComments } from "./useWorkComments.js"
 import { WorkCreateForm } from "./WorkCreateForm.js"
@@ -28,12 +29,12 @@ export { WorkDetailView } from "./WorkDetailView.js"
 export { WorkListView } from "./WorkListView.js"
 
 export interface WorkPaneProps {
-  readonly chatId?: string
+  readonly chatId?: ChatId
   /** The selected work item — controlled by the shell machine, so the pick
    * survives a surface switch and is shared across the center/right regions. */
   readonly selectedId?: string
   /** Select a work item (`id`) or deselect back to the list (`undefined`). */
-  readonly onSelectWork?: (workId: string | undefined) => void
+  readonly onSelectWork?: (workId: WorkId | undefined) => void
 }
 
 /**

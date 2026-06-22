@@ -1,4 +1,5 @@
 import type { JSX } from "react"
+import type { WorkId } from "../../../../shared/ids.js"
 import type { Provider } from "../../../../shared/provider.js"
 import type { ToolCall as ToolCallData } from "../../../../shared/tool-call.js"
 import { useShellActions } from "../../shell/ShellActionsContext.js"
@@ -30,7 +31,7 @@ export function ToolCall({
   readonly provider?: Provider
 }): JSX.Element {
   const { open } = useShellActions()
-  const openWork = (workId: string): void => open({ kind: "work", workId }, "right")
+  const openWork = (workId: WorkId): void => open({ kind: "work", workId }, "right")
   const flags = flagsFor(tool.args)
   // Arc's own MCP toolkit (`mcp__arc__arc_*`) gets dedicated work/comment/search
   // cards rather than the generic MCP raw-JSON fallback — we know its exact

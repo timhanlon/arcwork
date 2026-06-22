@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import { useState } from "react"
-import type { Work, WorkComment, WorkCommentListing } from "../../../shared/work.js"
+import type { Work, WorkComment, WorkCommentListing, WorkProvenance } from "../../../shared/work.js"
+import { arcId } from "../../../shared/ids.js"
 import { WorkComments, WorkCreateForm, WorkDetailView, WorkListView } from "./WorkPane.js"
 
 export default {
@@ -24,18 +25,33 @@ const Frame = ({ children }: { readonly children: ReactNode }) => (
   </div>
 )
 
-const work = (over: Partial<Work> & Pick<Work, "id" | "title" | "status">): Work => ({
-  _tag: "Work",
-  nodeId: `work_rev_${over.id}`,
-  body: "",
-  labels: [],
-  createdAt: "2026-06-05T10:00:00.000Z",
-  updatedAt: "2026-06-07T09:30:00.000Z",
-  provenance: { source: "cli" },
-  citations: [],
-  ...over,
-  priority: over.priority ?? null,
-})
+const work = (
+  over: Partial<Omit<Work, "id" | "nodeId" | "provenance">> & {
+    readonly id: string
+    readonly title: string
+    readonly status: Work["status"]
+    readonly provenance?: Omit<WorkProvenance, "chatId"> & { readonly chatId?: string }
+  },
+): Work => {
+  const { provenance, ...rest } = over
+  return {
+    _tag: "Work",
+    body: "",
+    labels: [],
+    createdAt: "2026-06-05T10:00:00.000Z",
+    updatedAt: "2026-06-07T09:30:00.000Z",
+    citations: [],
+    ...rest,
+    id: arcId("work", over.id),
+    nodeId: arcId("work_rev", `work_rev_${over.id}`),
+    provenance: {
+      source: provenance?.source ?? "cli",
+      ...provenance,
+      chatId: provenance?.chatId == null ? undefined : arcId("chat", provenance.chatId),
+    },
+    priority: over.priority ?? null,
+  }
+}
 
 const fixtures: ReadonlyArray<Work> = [
   work({
@@ -82,19 +98,39 @@ const noop = (): void => {}
 
 // ── Comment fixtures ─────────────────────────────────────────────────────────
 
-const CURRENT_NODE = "work_rev_current"
+const CURRENT_NODE = arcId("work_rev", "work_rev_current")
 
 const comment = (
-  over: Partial<WorkComment> & Pick<WorkComment, "id" | "body">,
-): WorkComment => ({
-  _tag: "WorkComment",
-  workRefId: "work_01a",
-  subjectKind: "node",
-  subjectId: CURRENT_NODE,
-  createdAt: "2026-06-08T14:20:00.000Z",
-  provenance: { source: "cli", actor: "codex", sessionId: "target_01abc234def" },
-  ...over,
-})
+  over: Partial<Omit<WorkComment, "id" | "workRefId" | "subjectId" | "provenance">> & {
+    readonly id: string
+    readonly body: string
+    readonly workRefId?: string
+    readonly subjectId?: string
+    readonly provenance?: Omit<WorkProvenance, "chatId"> & { readonly chatId?: string }
+  },
+): WorkComment => {
+  const { provenance, ...rest } = over
+  const subjectKind = over.subjectKind ?? "node"
+  return {
+    _tag: "WorkComment",
+    subjectKind,
+    createdAt: "2026-06-08T14:20:00.000Z",
+    ...rest,
+    id: arcId("comment", over.id),
+    workRefId: arcId("work", over.workRefId ?? "work_01a"),
+    subjectId:
+      over.subjectId == null
+        ? CURRENT_NODE
+        : subjectKind === "ref"
+          ? arcId("work", over.subjectId)
+          : arcId("work_rev", over.subjectId),
+    provenance: {
+      source: provenance?.source ?? "cli",
+      ...provenance,
+      chatId: provenance?.chatId == null ? undefined : arcId("chat", provenance.chatId),
+    },
+  }
+}
 
 const currentComments: WorkCommentListing = {
   currentNodeId: CURRENT_NODE,

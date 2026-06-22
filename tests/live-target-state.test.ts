@@ -4,12 +4,13 @@ import { deriveActivity } from "../src/main/services/LiveTargetStateService.js"
 import { isTurnEnd, isTurnStart, turnLifecycle } from "../src/main/hooks/turn-lifecycle.js"
 import { toSignal } from "../src/main/hooks/signals.js"
 import type { HookSignal } from "../src/main/hooks/signals.js"
+import { arcId } from "../src/shared/ids.js"
 
 const session = (over: Partial<TargetSession>): TargetSession => ({
   _tag: "TargetSession",
-  id: "target_1",
+  id: arcId("target", "target_1"),
   provider: "claude",
-  chatId: "chat_1",
+  chatId: arcId("chat", "chat_1"),
   cwd: "/tmp/repo",
   attached: true,
   state: "running",

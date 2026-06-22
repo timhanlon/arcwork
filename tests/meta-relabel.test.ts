@@ -4,6 +4,7 @@ import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
 import { ChatService, ChatServiceLive } from "../src/main/services/ChatService.js"
 import type { ChatMessageRow } from "../src/main/db/schema.js"
+import { arcId } from "../src/shared/ids.js"
 
 const NOW = "2026-06-08T00:00:00.000Z"
 
@@ -26,9 +27,9 @@ const hookUserRow = (
   dedupKey: string,
   targetSessionId = "tgt_1",
 ): ChatMessageRow => ({
-  id: `msg_${dedupKey}`,
-  chatId,
-  targetSessionId,
+  id: arcId("message", `msg_${dedupKey}`),
+  chatId: arcId("chat", chatId),
+  targetSessionId: arcId("target", targetSessionId),
   role: "user",
   turnId: "turn_1",
   messageId: null,
@@ -46,8 +47,8 @@ const setup = (program: (chatId: string) => Effect.Effect<unknown, unknown, Chat
   Effect.gen(function* () {
     const db = yield* ArcStore
     const chats = yield* ChatService
-    yield* db.upsertWorkspace({ id: "ws_1", path: "/tmp/ws", name: "ws", createdAt: NOW, lastOpenedAt: NOW })
-    const chat = yield* chats.create("ws_1")
+    yield* db.upsertWorkspace({ id: arcId("workspace", "ws_1"), path: "/tmp/ws", name: "ws", createdAt: NOW, lastOpenedAt: NOW })
+    const chat = yield* chats.create(arcId("workspace", "ws_1"))
     return yield* program(chat.id)
   })
 

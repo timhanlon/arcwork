@@ -7,6 +7,7 @@ import {
   targetFromSearchHit,
   workspaceIdForSearchTarget,
 } from "../src/renderer/src/search/arcSearchModel.js"
+import { arcId } from "../src/shared/ids.js"
 
 const baseHit = (overrides: Partial<ArcSearchHit>): ArcSearchHit => ({
   ref: "work_1",
@@ -25,7 +26,7 @@ describe("renderer arc search model", () => {
         query: "  auth bug  ",
         kinds: new Set(["work", "chat", "message"]),
         scope: "currentChat",
-        currentChatId: "chat_1",
+        currentChatId: arcId("chat", "chat_1"),
       }),
     ).toEqual({
       query: "auth bug",
@@ -36,7 +37,7 @@ describe("renderer arc search model", () => {
 
     expect(
       buildArcSearchParams(
-        { query: "", kinds: new Set(["work"]), scope: "all", currentChatId: "chat_1" },
+        { query: "", kinds: new Set(["work"]), scope: "all", currentChatId: arcId("chat", "chat_1") },
         "cursor_2",
       ),
     ).toEqual({ kinds: ["work"], limit: 12, cursor: "cursor_2" })
@@ -48,7 +49,7 @@ describe("renderer arc search model", () => {
       kind: "message",
       score: 4,
       message: {
-        chatId: "chat_1",
+        chatId: arcId("chat", "chat_1"),
         role: "assistant",
         rowKind: "tool",
         toolName: "mcp__arc__arc_search",
@@ -97,7 +98,7 @@ describe("renderer arc search model", () => {
       ref: "message_1",
       kind: "message",
       message: {
-        chatId: "chat_1",
+        chatId: arcId("chat", "chat_1"),
         role: "user",
         rowKind: "message",
         ordinal: 0,
@@ -109,7 +110,7 @@ describe("renderer arc search model", () => {
     expect(
       workspaceIdForSearchTarget(
         [{ id: "chat_1", workspaceId: "workspace_1", title: "Chat" } as never],
-        { kind: "message", chatId: "chat_1" },
+        { kind: "message", chatId: arcId("chat", "chat_1") },
       ),
     ).toBe("workspace_1")
   })

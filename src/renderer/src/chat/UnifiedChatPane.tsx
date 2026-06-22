@@ -1,4 +1,5 @@
 import { ArrowDown } from "@phosphor-icons/react"
+import type { ChatId, TargetId } from "../../../shared/ids.js"
 import { forwardRef, type JSX, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react"
 import { useStickToBottom } from "use-stick-to-bottom"
 import type { Chat } from "../../../shared/chat.js"
@@ -28,19 +29,19 @@ export interface UnifiedChatPaneProps {
   readonly sessions: ReadonlyArray<TargetSession>
   /** session id → live activity, from the `arc:live-target-states` projection */
   readonly liveStateById?: LiveStateById
-  readonly activeSessionId?: string
+  readonly activeSessionId?: TargetId
   readonly sessionCount: number
   readonly providers: ReadonlyArray<LaunchableProvider>
-  readonly onLaunch: (provider: string, chatId: string) => void
+  readonly onLaunch: (provider: string, chatId: ChatId) => void
   /** focus the live target session waiting on a pending question */
-  readonly onFocusSession: (sessionId: string) => void
-  readonly onRenameChat: (chatId: string, title: string) => Promise<void>
+  readonly onFocusSession: (sessionId: TargetId) => void
+  readonly onRenameChat: (chatId: ChatId, title: string) => Promise<void>
 }
 
 const addressableTarget = (
-  chatId: string,
+  chatId: ChatId,
   sessions: ReadonlyArray<TargetSession>,
-  activeSessionId?: string,
+  activeSessionId?: TargetId,
 ): TargetSession | undefined => {
   const inChat = sessions.filter((session) => session.chatId === chatId)
   const active =
@@ -156,7 +157,7 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
     workspaceId: workspace?.id,
   })
 
-  const targetLabelFor = (targetSessionId?: string): string | undefined => {
+  const targetLabelFor = (targetSessionId?: TargetId): string | undefined => {
     if (!targetSessionId) return undefined
     const session = sessionsInChat.find((s) => s.id === targetSessionId)
     return session ? formatAddressee(session, sessionsInChat) : undefined

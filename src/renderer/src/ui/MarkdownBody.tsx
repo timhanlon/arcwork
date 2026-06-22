@@ -1,4 +1,5 @@
 import type { JSX, MouseEvent, ReactNode } from "react"
+import { arcId, type WorkId } from "../../../shared/ids.js"
 import remarkGfm from "remark-gfm"
 import { Streamdown } from "streamdown"
 import { code } from "@streamdown/code"
@@ -71,7 +72,7 @@ const remarkWorkLinks = () => {
   return visit
 }
 
-const components = (onOpenWork?: (workId: string) => void) => ({
+const components = (onOpenWork?: (workId: WorkId) => void) => ({
   h1: ({ children }: { readonly children?: ReactNode }) => (
     <h1 className="text-sm font-bold">{children}</h1>
   ),
@@ -89,7 +90,7 @@ const components = (onOpenWork?: (workId: string) => void) => ({
     readonly href?: string
   }) => {
     if (href?.startsWith("arc://work/") && onOpenWork) {
-      const workId = href.slice("arc://work/".length)
+      const workId = arcId("work", href.slice("arc://work/".length))
       return (
         <Button
           variant="link"
@@ -116,7 +117,7 @@ const components = (onOpenWork?: (workId: string) => void) => ({
         <Button
           variant="link"
           className="font-mono underline"
-          onClick={() => onOpenWork(text)}
+          onClick={() => onOpenWork(arcId("work", text))}
         >
           {text}
         </Button>

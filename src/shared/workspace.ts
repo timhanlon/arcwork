@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { WorkspaceId } from "./ids.js"
 
 /**
  * A workspace is the directory used as the cwd for launched target CLIs (and,
@@ -6,7 +7,7 @@ import { Schema } from "effect"
  * Multiple workspaces can be open concurrently; chats are scoped to one.
  */
 export const Workspace = Schema.Struct({
-  id: Schema.String, // TypeID prefix: workspace
+  id: WorkspaceId,
   path: Schema.String,
   name: Schema.String, // basename, for display
 })

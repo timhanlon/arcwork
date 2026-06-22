@@ -8,10 +8,11 @@ import {
   dropHandedOffStreams,
 } from "../src/renderer/src/chat/streaming-message-state.js"
 import type { StreamingBuffer } from "../src/renderer/src/chat/streaming-message-state.js"
+import { arcId } from "../src/shared/ids.js"
 
 const delta = (overrides: Partial<AssistantStreamDelta> = {}): AssistantStreamDelta => ({
-  chatId: "chat_01",
-  targetSessionId: "target_01",
+  chatId: arcId("chat", "chat_01"),
+  targetSessionId: arcId("target", "target_01"),
   messageId: "msg-1",
   delta: "",
   final: false,
@@ -20,7 +21,7 @@ const delta = (overrides: Partial<AssistantStreamDelta> = {}): AssistantStreamDe
 })
 
 const buffer = (overrides: Partial<StreamingBuffer> = {}): StreamingBuffer => ({
-  targetSessionId: "target_01",
+  targetSessionId: arcId("target", "target_01"),
   messageId: "msg-1",
   text: "Let me search",
   ...overrides,
@@ -28,9 +29,9 @@ const buffer = (overrides: Partial<StreamingBuffer> = {}): StreamingBuffer => ({
 
 const message = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
   _tag: "ChatMessage",
-  id: "m1",
-  chatId: "chat_01",
-  targetSessionId: "target_01",
+  id: arcId("message", "m1"),
+  chatId: arcId("chat", "chat_01"),
+  targetSessionId: arcId("target", "target_01"),
   role: "assistant",
   body: "Let me search",
   status: "final",
@@ -71,14 +72,14 @@ describe("applyAssistantStreamDelta", () => {
 
   it("keeps another target streaming when one target finalizes", () => {
     const prev = [
-      buffer({ targetSessionId: "target_01", messageId: "msg-1", text: "first" }),
-      buffer({ targetSessionId: "target_02", messageId: "msg-9", text: "other" }),
+      buffer({ targetSessionId: arcId("target", "target_01"), messageId: "msg-1", text: "first" }),
+      buffer({ targetSessionId: arcId("target", "target_02"), messageId: "msg-9", text: "other" }),
     ]
     const next = applyAssistantStreamDelta(
       prev,
-      delta({ targetSessionId: "target_01", messageId: "msg-1", final: true }),
+      delta({ targetSessionId: arcId("target", "target_01"), messageId: "msg-1", final: true }),
     )
-    expect(next).toEqual([buffer({ targetSessionId: "target_02", messageId: "msg-9", text: "other" })])
+    expect(next).toEqual([buffer({ targetSessionId: arcId("target", "target_02"), messageId: "msg-9", text: "other" })])
   })
 })
 

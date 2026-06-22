@@ -7,6 +7,7 @@ import { ChatMessageService } from "../services/ChatMessageService.js"
 import { ArcStore } from "../db/store.js"
 import type { ArcRequestError } from "../errors.js"
 import type { ChatMessage } from "../../shared/chat-message.js"
+import type { WorkId } from "../../shared/ids.js"
 import type {
   ArcEntity,
   ArcGetParams,
@@ -119,7 +120,7 @@ const hasEveryLabel = (labelsJson: string, expected: ReadonlyArray<string>): boo
 
 /** A work ref is `work_…` but not the substrate's `work_rev_…`/`work_edge_…`
  * (which share the textual prefix and are not independently hydratable). */
-const isWorkRef = (ref: string): boolean =>
+const isWorkRef = (ref: string): ref is WorkId =>
   ref.startsWith("work_") && !ref.startsWith("work_rev_") && !ref.startsWith("work_edge_")
 
 /** A chat-message row ref (`message_…`) — both conversational rows and tool

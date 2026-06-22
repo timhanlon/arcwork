@@ -14,6 +14,7 @@
 
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
+import type { ChatId, CommentId, WorkEdgeId, WorkId, WorkRevId, WorkspaceId } from "../../shared/ids.js"
 import { sqlMigration, type Migrations } from "../db/migrator.js"
 
 const addSearchDocumentWorkspaceColumn = Effect.gen(function* () {
@@ -95,7 +96,7 @@ const backfillWorkWorkspaceFromChat = Effect.gen(function* () {
 
 /** One frozen revision of a unit of work. Addressed by stable id + content hash. */
 export interface WorkNodeRow {
-  readonly id: string
+  readonly id: WorkRevId
   readonly kind: string // 'work'
   readonly contentHash: string
   readonly title: string
@@ -108,8 +109,8 @@ export interface WorkNodeRow {
   readonly status: string
   readonly actor: string | null
   readonly sessionId: string | null
-  readonly chatId: string | null
-  readonly workspaceId: string | null
+  readonly chatId: ChatId | null
+  readonly workspaceId: WorkspaceId | null
   readonly deviceId: string | null
   readonly observedSource: string // 'cli' | 'rpc' | ...
   // Observed execution runtime (harness/model) of the authoring session, as a
@@ -122,13 +123,13 @@ export interface WorkNodeRow {
 
 /** The durable identity of a unit of work; points at its current revision. */
 export interface WorkRefRow {
-  readonly id: string
+  readonly id: WorkId
   readonly kind: string // 'work'
-  readonly currentNodeId: string | null
+  readonly currentNodeId: WorkRevId | null
   readonly displayName: string | null
   readonly location: string | null
   readonly actor: string | null
-  readonly workspaceId: string | null
+  readonly workspaceId: WorkspaceId | null
   readonly createdAt: string
   readonly updatedAt: string
   readonly schemaVersion: number
@@ -136,13 +137,13 @@ export interface WorkRefRow {
 
 /** Append-only log of ref pointer moves — CAS-shaped via `oldNodeId`. */
 export interface WorkRefUpdateRow {
-  readonly id: string
-  readonly refId: string
-  readonly oldNodeId: string | null
-  readonly newNodeId: string
+  readonly id: WorkEdgeId // shares the edge id-space
+  readonly refId: WorkId
+  readonly oldNodeId: WorkRevId | null
+  readonly newNodeId: WorkRevId
   readonly actor: string | null
   readonly sessionId: string | null
-  readonly workspaceId: string | null
+  readonly workspaceId: WorkspaceId | null
   readonly deviceId: string | null
   readonly observedSource: string
   readonly createdAt: string
@@ -153,19 +154,19 @@ export interface WorkRefUpdateRow {
  * Also models append-only workflow *events* — a `status_set` edge points the ref
  * at a status literal (`to_kind='external'`, `to_id='done'`); the latest wins. */
 export interface WorkEdgeRow {
-  readonly id: string
+  readonly id: WorkEdgeId
   readonly type: string // created_in_session | references | supersedes | status_set | ...
   readonly fromKind: string // node | ref | external
-  readonly fromId: string
+  readonly fromId: string // polymorphic: a node/ref id or an external locator, per fromKind
   readonly toKind: string // node | ref | external
-  readonly toId: string
+  readonly toId: string // polymorphic: a node/ref id or an external locator, per toKind
   readonly family: string // provenance | live | workflow
   readonly source: string // observed | inferred | user_confirmed | legacy
   readonly confidence: string // high | medium | low
   readonly note: string | null
   readonly actor: string | null
   readonly sessionId: string | null
-  readonly workspaceId: string | null
+  readonly workspaceId: WorkspaceId | null
   readonly observedSource: string
   readonly createdAt: string
   readonly schemaVersion: number
@@ -175,15 +176,15 @@ export interface WorkEdgeRow {
  * `workRefId` is denormalized (a comment on a node also records which ref the
  * node belongs to) so comments list by work id with a single indexed query. */
 export interface WorkCommentRow {
-  readonly id: string
-  readonly workRefId: string
+  readonly id: CommentId
+  readonly workRefId: WorkId
   readonly subjectKind: string // node | ref
-  readonly subjectId: string // a graph_node id (node) or graph_ref id (ref)
+  readonly subjectId: string // a graph_node id (node) or graph_ref id (ref), per subjectKind
   readonly body: string
   readonly actor: string | null
   readonly sessionId: string | null
-  readonly chatId: string | null
-  readonly workspaceId: string | null
+  readonly chatId: ChatId | null
+  readonly workspaceId: WorkspaceId | null
   readonly deviceId: string | null
   readonly observedSource: string
   // Observed execution runtime (harness/model) of the commenting session, as a
@@ -195,8 +196,8 @@ export interface WorkCommentRow {
 
 /** The flattened ref+current-node row a queue/detail projection reads. */
 export interface WorkProjectionRow {
-  readonly id: string // ref id
-  readonly nodeId: string
+  readonly id: WorkId // ref id
+  readonly nodeId: WorkRevId
   readonly title: string
   readonly body: string
   readonly labelsJson: string
@@ -207,8 +208,8 @@ export interface WorkProjectionRow {
   readonly updatedAt: string
   readonly actor: string | null
   readonly sessionId: string | null
-  readonly chatId: string | null
-  readonly workspaceId: string | null
+  readonly chatId: ChatId | null
+  readonly workspaceId: WorkspaceId | null
   readonly observedSource: string
   // JSON-encoded `WorkExecution` from the current node; null when unknown.
   readonly executionJson: string | null

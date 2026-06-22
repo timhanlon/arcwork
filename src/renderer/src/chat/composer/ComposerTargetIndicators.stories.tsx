@@ -1,5 +1,6 @@
 import type { TargetSession } from "../../../../shared/instance.js"
 import type { LiveTargetActivity } from "../../../../shared/live-target-state.js"
+import { arcId } from "../../../../shared/ids.js"
 import type { LiveStateById } from "../../sidebar/grouping.js"
 import { ComposerTargetIndicators } from "./ComposerTargetIndicators.js"
 
@@ -9,9 +10,9 @@ export default {
 
 const session = (id: string, provider: string): TargetSession => ({
   _tag: "TargetSession",
-  id,
+  id: arcId("target", id),
   provider,
-  chatId: "chat_demo",
+  chatId: arcId("chat", "chat_demo"),
   cwd: "/tmp/worktree",
   attached: true,
   state: "running",

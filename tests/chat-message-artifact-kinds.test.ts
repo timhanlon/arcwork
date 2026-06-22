@@ -6,8 +6,9 @@ import {
   type ArtifactRowSpec,
 } from "../src/main/services/chat-message/artifact-projection.js"
 import type { ExtractedRows, MessageRow, ToolCallRow } from "../src/main/ingest/db/schema.js"
+import { arcId } from "../src/shared/ids.js"
 
-const TARGET = { id: "target_1", chatId: "chat_1" }
+const TARGET = { id: arcId("target", "target_1"), chatId: arcId("chat", "chat_1") }
 
 const message = (over: Partial<MessageRow>): MessageRow => ({
   id: "msg",

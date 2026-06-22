@@ -11,6 +11,7 @@ import { TargetSessionManager } from "../src/main/services/TargetSessionManager.
 import { ChatMessageService, ChatMessageServiceLive } from "../src/main/services/ChatMessageService.js"
 import type { HookSignal } from "../src/main/hooks/signals.js"
 import { toSignal } from "../src/main/hooks/signals.js"
+import { arcId } from "../src/shared/ids.js"
 
 const NOW = "2026-06-11T00:00:00.000Z"
 const CHAT = "chat_1"
@@ -62,11 +63,11 @@ const run = async <A, E>(
 // on set/clear inserts an activity row, so the parents must exist.
 const seed = Effect.gen(function* () {
   const db = yield* ArcStore
-  yield* db.upsertWorkspace({ id: "ws_1", path: "/tmp/ws", name: "ws", createdAt: NOW, lastOpenedAt: NOW })
-  yield* db.insertChat({ id: CHAT, workspaceId: "ws_1", title: "c", createdAt: NOW })
+  yield* db.upsertWorkspace({ id: arcId("workspace", "ws_1"), path: "/tmp/ws", name: "ws", createdAt: NOW, lastOpenedAt: NOW })
+  yield* db.insertChat({ id: arcId("chat", CHAT), workspaceId: arcId("workspace", "ws_1"), title: "c", createdAt: NOW })
   yield* db.upsertTargetSession({
-    id: TARGET,
-    chatId: CHAT,
+    id: arcId("target", TARGET),
+    chatId: arcId("chat", CHAT),
     provider: "claude",
     preset: null,
     cwd: "/tmp/ws",
@@ -188,7 +189,7 @@ describe("live pending permission flag (ChatMessageService)", () => {
         const svc = yield* ChatMessageService
         yield* svc.ingestSignal(permissionRequest())
         const before = yield* svc.listPending
-        const cleared = yield* svc.supersedePendingForTarget(TARGET)
+        const cleared = yield* svc.supersedePendingForTarget(arcId("target", TARGET))
         const after = yield* svc.listPending
         return { before: before.length, cleared, after: after.length }
       }),

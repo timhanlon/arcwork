@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { ChatId, WorkspaceId } from "./ids.js"
 
 /**
  * A Chat — the human-facing conversation thread and the unit target CLI sessions
@@ -13,8 +14,8 @@ import { Schema } from "effect"
  */
 export const Chat = Schema.Struct({
   _tag: Schema.Literal("Chat"),
-  id: Schema.String, // TypeID prefix: chat
-  workspaceId: Schema.String,
+  id: ChatId,
+  workspaceId: WorkspaceId,
   title: Schema.String,
   createdAt: Schema.String,
 })

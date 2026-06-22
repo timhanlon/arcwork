@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { WorkspaceId } from "./ids.js"
 
 export const GitChangeStatus = Schema.Literals([
   "added",
@@ -26,7 +27,7 @@ export const GitFileChange = Schema.Struct({
 export type GitFileChange = typeof GitFileChange.Type
 
 export const GitStatus = Schema.Struct({
-  workspaceId: Schema.String,
+  workspaceId: WorkspaceId,
   workspaceName: Schema.String,
   branch: Schema.optional(Schema.String),
   head: Schema.optional(Schema.String),

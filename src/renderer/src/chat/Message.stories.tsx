@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import type { ChatMessage } from "../../../shared/chat-message.js"
+import { arcId } from "../../../shared/ids.js"
 import { Message } from "./Message.js"
 
 export default {
@@ -12,17 +13,23 @@ const List = ({ children }: { readonly children: ReactNode }) => (
   </ul>
 )
 
-const msg = (over: Partial<ChatMessage>): ChatMessage => ({
+const msg = (
+  over: Partial<Omit<ChatMessage, "id" | "chatId" | "targetSessionId">> & {
+    readonly id?: string
+    readonly chatId?: string
+    readonly targetSessionId?: string
+  },
+): ChatMessage => ({
   _tag: "ChatMessage",
-  id: "msg_01",
-  chatId: "chat_01",
-  targetSessionId: "target_01",
   role: "assistant",
   body: "",
   status: "final",
   occurredAt: "2026-06-01T19:48:51.124Z",
   source: "artifact:claude",
   ...over,
+  id: arcId("message", over.id ?? "msg_01"),
+  chatId: arcId("chat", over.chatId ?? "chat_01"),
+  targetSessionId: arcId("target", over.targetSessionId ?? "target_01"),
 })
 
 /** Recap with both Goal and Next — the common "picking up where you left off" shape. */

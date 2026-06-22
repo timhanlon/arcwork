@@ -1,5 +1,6 @@
 import type { ArcEntity, ArcSearchHit, ArcSearchKind, ArcSearchParams } from "../../../shared/read.js"
 import type { Chat } from "../../../shared/chat.js"
+import type { ChatId, WorkId, WorkspaceId } from "../../../shared/ids.js"
 
 export type SearchScope = "all" | "currentChat"
 
@@ -7,13 +8,13 @@ export interface ArcSearchDraft {
   readonly query: string
   readonly kinds: ReadonlySet<ArcSearchKind>
   readonly scope: SearchScope
-  readonly currentChatId?: string
+  readonly currentChatId?: ChatId
 }
 
 export type SearchOpenTarget =
-  | { readonly kind: "work"; readonly workId: string }
-  | { readonly kind: "chat"; readonly chatId: string }
-  | { readonly kind: "message"; readonly chatId: string }
+  | { readonly kind: "work"; readonly workId: WorkId }
+  | { readonly kind: "chat"; readonly chatId: ChatId }
+  | { readonly kind: "message"; readonly chatId: ChatId }
 
 export const labelForSearchHit = (hit: ArcSearchHit): string => {
   const meta = hit.message
@@ -59,7 +60,7 @@ export const targetFromSearchHit = (
 export const workspaceIdForSearchTarget = (
   chats: ReadonlyArray<Chat>,
   target: SearchOpenTarget,
-): string | undefined => {
+): WorkspaceId | undefined => {
   if (target.kind === "work") return undefined
   return chats.find((chat) => chat.id === target.chatId)?.workspaceId
 }

@@ -6,6 +6,7 @@ import { ArcRpcs } from "../src/shared/rpc.js"
 import { ArcRpcHandlersLive } from "../src/main/rpc.js"
 import { TargetSession } from "../src/shared/instance.js"
 import { TargetSessionManager } from "../src/main/services/TargetSessionManager.js"
+import { newArcId } from "../src/shared/ids.js"
 
 /**
  * The renderer<->main RPC transport carrying a *streaming* RPC, exercised
@@ -32,19 +33,24 @@ import { TargetSessionManager } from "../src/main/services/TargetSessionManager.
 // Two session-list snapshots the streaming handler emits, to prove each chunk
 // round-trips and decodes as a real `TargetSession`. A finite `Stream.fromIterable`
 // (not a live SubscriptionRef) so `Stream.runCollect` terminates.
-const sessionSnapshot = (ids: ReadonlyArray<string>): ReadonlyArray<TargetSession> =>
+// Valid TypeIDs (not short fixture ids): the snapshots round-trip through the
+// real RPC schema decode, which validates the `target_…` pattern per chunk.
+const SESS_A = newArcId("target")
+const SESS_B = newArcId("target")
+const CHAT_STREAM = newArcId("chat")
+const sessionSnapshot = (ids: ReadonlyArray<TargetSession["id"]>): ReadonlyArray<TargetSession> =>
   ids.map((id) => ({
     _tag: "TargetSession" as const,
     id,
     provider: "claude",
-    chatId: "chat_stream",
+    chatId: CHAT_STREAM,
     cwd: "/tmp/ws_rpc",
     attached: false,
     state: "unknown" as const,
     startedAt: "2026-06-08T00:00:00.000Z",
   }))
-const SNAPSHOT_A = sessionSnapshot(["sess_a"])
-const SNAPSHOT_AB = sessionSnapshot(["sess_a", "sess_b"])
+const SNAPSHOT_A = sessionSnapshot([SESS_A])
+const SNAPSHOT_AB = sessionSnapshot([SESS_A, SESS_B])
 const SESSION_SNAPSHOTS = [SNAPSHOT_A, SNAPSHOT_AB]
 
 const TargetSessionManagerStub = Layer.succeed(
@@ -138,8 +144,8 @@ describe("arc rpc streaming transport (structured-clone IPC)", () => {
       expect(snapshots).toHaveLength(2)
       const [first, second] = snapshots
       if (first === undefined || second === undefined) throw new Error("expected two snapshots")
-      expect(first.map((s) => s.id)).toEqual(["sess_a"])
-      expect(second.map((s) => s.id)).toEqual(["sess_a", "sess_b"])
+      expect(first.map((s) => s.id)).toEqual([SESS_A])
+      expect(second.map((s) => s.id)).toEqual([SESS_A, SESS_B])
       expect(second.every((s) => Schema.is(TargetSession)(s))).toBe(true)
     } finally {
       await runtime.dispose()

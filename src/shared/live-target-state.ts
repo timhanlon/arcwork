@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { ChatId, TargetId } from "./ids.js"
 
 /**
  * The *live* activity of a target session — what it is doing right now, for the
@@ -32,8 +33,8 @@ export type LiveTargetActivity = typeof LiveTargetActivity.Type
 /** One target session's live activity, keyed by `targetSessionId`. `chatId` is
  * carried so a consumer can fold per-chat without re-joining the session list. */
 export const LiveTargetState = Schema.Struct({
-  targetSessionId: Schema.String,
-  chatId: Schema.String,
+  targetSessionId: TargetId,
+  chatId: ChatId,
   activity: LiveTargetActivity,
 })
 export type LiveTargetState = typeof LiveTargetState.Type

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react"
 import { createActor } from "xstate"
 import type { Chat } from "../../../shared/chat.js"
-import { newArcId } from "../../../shared/ids.js"
+import { type ChatId, newArcId, type PaneId, type TargetId, type WorkspaceId } from "../../../shared/ids.js"
 import type { TargetSession } from "../../../shared/instance.js"
 import type { Workspace } from "../../../shared/workspace.js"
 import {
@@ -18,22 +18,22 @@ type ViteImportMeta = ImportMeta & { readonly env?: { readonly DEV?: boolean } }
 const isDevelopment = ((import.meta as ViteImportMeta).env?.DEV ?? false) === true
 
 export interface ArcShellActions {
-  readonly selectChat: (workspaceId: string, chatId: string) => void
+  readonly selectChat: (workspaceId: WorkspaceId, chatId: ChatId) => void
   readonly selectSidebar: (selection: ShellTreeSelection) => void
   /** The one pane-opening verb — `open({kind:"work", workId}, "right")`,
    * `open({kind:"chat"}, "center")`, `open({kind:"git", path?}, "right")`, … —
    * replacing the old setCenterView/setRightView/openWorkInRightPane/
    * selectGitPath/closeRightWork. Illegal (target, pane) pairs are no-ops. */
   readonly open: (target: OpenTarget, pane: Pane) => void
-  readonly launchTarget: (provider: string, chatId: string) => void
-  readonly bindTarget: (paneId: string, sessionId: string) => void
-  readonly focusSession: (sessionId: string) => void
+  readonly launchTarget: (provider: string, chatId: ChatId) => void
+  readonly bindTarget: (paneId: PaneId, sessionId: TargetId) => void
+  readonly focusSession: (sessionId: TargetId) => void
   readonly adoptSession: (session: ShellSessionRef) => void
   readonly resumeDetached: () => void
   /** Re-attach a specific detached/resumable session (e.g. its sidebar row). */
-  readonly resumeSession: (sessionId: string) => void
-  readonly ptyExited: (sessionId: string) => void
-  readonly stopSession: (sessionId: string) => void
+  readonly resumeSession: (sessionId: TargetId) => void
+  readonly ptyExited: (sessionId: TargetId) => void
+  readonly stopSession: (sessionId: TargetId) => void
   readonly focusComposer: () => void
   readonly jumpChatToBottom: () => void
   /** Surface the work navigator (center) and open the new-work form. */
@@ -52,14 +52,14 @@ export interface ArcShell {
 
 const workspaceIdForChat = (
   chats: ReadonlyArray<Chat>,
-  chatId: string,
-): string | undefined => chats.find((chat) => chat.id === chatId)?.workspaceId
+  chatId: ChatId,
+): WorkspaceId | undefined => chats.find((chat) => chat.id === chatId)?.workspaceId
 
 const workspaceForSession = (
   sessions: ReadonlyArray<TargetSession>,
   chats: ReadonlyArray<Chat>,
-  sessionId: string,
-): { readonly session: ShellSessionRef; readonly workspaceId?: string } | undefined => {
+  sessionId: TargetId,
+): { readonly session: ShellSessionRef; readonly workspaceId?: WorkspaceId } | undefined => {
   const session = sessions.find((candidate) => candidate.id === sessionId)
   if (!session) return undefined
   return {

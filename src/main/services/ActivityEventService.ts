@@ -7,7 +7,7 @@ import type { HookSignal } from "../hooks/signals.js"
 import { ArcStore } from "../db/store.js"
 import type { ActivityEventRow } from "../db/schema.js"
 import type { ActivityEvent } from "../../shared/activity-event.js"
-import { newArcId } from "../../shared/ids.js"
+import { arcId, arcIdOrNull, type ChatId, newArcId } from "../../shared/ids.js"
 import { bestEffort } from "./failure-policy.js"
 
 /**
@@ -24,7 +24,7 @@ export class ActivityEventService extends Context.Service<
     readonly listForWork: (
       workRefId: string,
     ) => Effect.Effect<ReadonlyArray<ActivityEvent>, SqlError>
-    readonly changes: Stream.Stream<{ readonly chatId: string }>
+    readonly changes: Stream.Stream<{ readonly chatId: ChatId }>
     readonly record: (event: {
       readonly workspaceRoot?: string | null
       readonly chatId?: string | null
@@ -78,14 +78,14 @@ const draftToRow = (signal: HookSignal, draft: ActivityEventDraft): ActivityEven
   dedupKey: draft.dedupKey,
 })
 
-const chatIdFromSignal = (signal: HookSignal): string | null =>
+const chatIdFromSignal = (signal: HookSignal): ChatId | null =>
   signal.arcChatSessionId ?? signal.arc.chatId ?? null
 
 export const ActivityEventServiceLive = Layer.effect(
   ActivityEventService,
   Effect.gen(function* () {
     const db = yield* ArcStore
-    const updates = yield* PubSub.unbounded<{ readonly chatId: string }>()
+    const updates = yield* PubSub.unbounded<{ readonly chatId: ChatId }>()
 
     const listForChat = (chatId: string) =>
       db.loadActivityEventsForChat(chatId).pipe(Effect.map((rows) => rows.map(rowToActivityEvent)))
@@ -130,9 +130,9 @@ export const ActivityEventServiceLive = Layer.effect(
         const row: ActivityEventRow = {
           id: newArcId("activity"),
           workspaceRoot: event.workspaceRoot ?? "",
-          workContextId: event.chatId ?? null,
+          workContextId: arcIdOrNull("chat", event.chatId),
           userActionId: null,
-          targetSessionId: event.targetSessionId ?? null,
+          targetSessionId: arcIdOrNull("target", event.targetSessionId),
           source: event.source,
           kind: event.kind,
           actor: event.actor ?? null,
@@ -147,7 +147,9 @@ export const ActivityEventServiceLive = Layer.effect(
           ),
           Effect.orElseSucceed(() => false),
         )
-        if (inserted && event.chatId) yield* PubSub.publish(updates, { chatId: event.chatId })
+        if (inserted && event.chatId) {
+          yield* PubSub.publish(updates, { chatId: arcId("chat", event.chatId) })
+        }
         return inserted
       }).pipe(bestEffort(`activity event record failed (${event.kind})`, false))
 

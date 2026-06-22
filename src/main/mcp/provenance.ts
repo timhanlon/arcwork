@@ -1,6 +1,7 @@
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest"
 import { Effect } from "effect"
 import { ArcEnvTags } from "../../shared/env-tags.js"
+import { arcId } from "../../shared/ids.js"
 import type { WorkProvenance } from "../../shared/work.js"
 
 /** HTTP headers the per-session stdio proxy stamps on upstream MCP requests.
@@ -60,10 +61,12 @@ export const mergeProvenanceIds = (
   chatId: fromHeaders.chatId ?? fromParams.chatId,
 })
 
-/** Build work provenance for an MCP write, merging header and param sources. */
+/** Build work provenance for an MCP write, merging header and param sources. The
+ * `chatId` is an env/header-stamped arc id (trusted), branded as it lands. */
 export const mcpWriteProvenance = (params: ArcMcpProvenanceIds): WorkProvenance => ({
   source: "mcp",
-  ...params,
+  ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+  ...(params.chatId ? { chatId: arcId("chat", params.chatId) } : {}),
 })
 
 /** Read provenance ids from the current HTTP request, if this handler is serving MCP. */

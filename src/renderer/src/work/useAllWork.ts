@@ -2,6 +2,7 @@ import { useAtomRefresh, useAtomValue } from "@effect/atom-react"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import * as Atom from "effect/unstable/reactivity/Atom"
 import type { Work } from "../../../shared/work.js"
+import type { ChatId } from "../../../shared/ids.js"
 import { allWorkAtom } from "../atoms.js"
 
 /**
@@ -18,7 +19,7 @@ import { allWorkAtom } from "../atoms.js"
  */
 const emptyWorkAtom = Atom.make(AsyncResult.success<ReadonlyArray<Work>>([]))
 
-export function useAllWork(chatId: string | undefined): {
+export function useAllWork(chatId: ChatId | undefined): {
   readonly work: ReadonlyArray<Work>
   readonly loading: boolean
   readonly reload: () => void

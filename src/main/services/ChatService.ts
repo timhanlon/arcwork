@@ -5,7 +5,7 @@ import type { Chat } from "../../shared/chat.js"
 import { ArcStore } from "../db/store.js"
 import type { ChatRow } from "../db/schema.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
-import { newArcId } from "../../shared/ids.js"
+import { newArcId, type WorkspaceId } from "../../shared/ids.js"
 
 /**
  * Owns the set of chats — the conversation threads target sessions belong to.
@@ -19,7 +19,7 @@ export class ChatService extends Context.Service<
     readonly list: Effect.Effect<ReadonlyArray<Chat>>
     readonly changes: Stream.Stream<ReadonlyArray<Chat>>
     readonly create: (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
       title?: string,
     ) => Effect.Effect<Chat, ArcRequestError | SqlError>
     readonly updateTitleIfDefault: (
@@ -58,7 +58,7 @@ export const ChatServiceLive = Layer.effect(
     const list = SubscriptionRef.get(store)
     const changes = SubscriptionRef.changes(store)
 
-    const create = Effect.fn("ChatService.create")((workspaceId: string, title?: string) =>
+    const create = Effect.fn("ChatService.create")((workspaceId: WorkspaceId, title?: string) =>
       Effect.gen(function* () {
         const exists = yield* db.workspaceExists(workspaceId)
         if (!exists) {

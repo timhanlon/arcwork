@@ -3,10 +3,16 @@ import { useEffect, useState } from "react"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import * as Atom from "effect/unstable/reactivity/Atom"
 import type { WorkCommentListing } from "../../../shared/work.js"
+import { arcId, type WorkId } from "../../../shared/ids.js"
 import { workCommentsAtomFor } from "../atoms.js"
 
-/** The empty listing shown before the first fetch resolves (or for no selection). */
-const EMPTY: WorkCommentListing = { currentNodeId: "", comments: [], olderRevisionCommentCount: 0 }
+/** The empty listing shown before the first fetch resolves (or for no selection).
+ * `currentNodeId` is an empty sentinel — no comments reference it. */
+const EMPTY: WorkCommentListing = {
+  currentNodeId: arcId("work_rev", ""),
+  comments: [],
+  olderRevisionCommentCount: 0,
+}
 
 const emptyCommentsAtom = Atom.make(AsyncResult.success<WorkCommentListing>(EMPTY))
 
@@ -21,7 +27,7 @@ const emptyCommentsAtom = Atom.make(AsyncResult.success<WorkCommentListing>(EMPT
  * by {@link workCommentsAtomFor}, refreshed on the shared work invalidation
  * signal — the in-app `arc:work` push plus a coarse chat-activity fallback.
  */
-export function useWorkComments(workId: string | undefined): {
+export function useWorkComments(workId: WorkId | undefined): {
   readonly listing: WorkCommentListing
   readonly loading: boolean
   readonly allRevisions: boolean
