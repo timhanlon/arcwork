@@ -11,7 +11,6 @@ import {
   liveActivityFor,
   sessionStatus,
   type LiveStateById,
-  type WorkspaceGroup,
 } from "./grouping.js"
 import { DISCLOSURE } from "./row-styles.js"
 import { WorkspaceRow } from "./WorkspaceRow.js"
