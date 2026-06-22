@@ -3,7 +3,9 @@ import { rowToWorkspace } from "../src/main/services/WorkspaceService.js"
 import type { RepositoryRow, WorkspaceRow } from "../src/main/db/schema.js"
 import { arcId } from "../src/shared/ids.js"
 
-const repo = (over: Partial<RepositoryRow> & Pick<RepositoryRow, "id" | "rootPath">): RepositoryRow => ({
+const repo = (
+  over: Partial<Omit<RepositoryRow, "id">> & { readonly id: string; readonly rootPath: string },
+): RepositoryRow => ({
   commonGitDir: `${over.rootPath}/.git`,
   defaultBranch: "main",
   remotesJson: "[]",
@@ -13,6 +15,7 @@ const repo = (over: Partial<RepositoryRow> & Pick<RepositoryRow, "id" | "rootPat
   createdAt: "2026-01-01T00:00:00Z",
   lastSeenAt: "2026-01-01T00:00:00Z",
   ...over,
+  id: arcId("repo", over.id),
 })
 
 const wsRow = (
@@ -35,7 +38,7 @@ describe("rowToWorkspace", () => {
       ["repo_1", repo({ id: "repo_1", rootPath: "/dev/arc", githubOwner: "acme", githubRepo: "arc" })],
     ])
     const ws = rowToWorkspace(
-      wsRow({ id: "ws_1", path: "/dev/arc", repositoryId: "repo_1", gitBranch: "main" }),
+      wsRow({ id: "ws_1", path: "/dev/arc", repositoryId: arcId("repo", "repo_1"), gitBranch: "main" }),
       repos,
     )
     expect(ws.repoLabel).toBe("acme/arc")
@@ -46,14 +49,14 @@ describe("rowToWorkspace", () => {
 
   it("falls back to the repo root basename without a GitHub identity", () => {
     const repos = new Map([["repo_1", repo({ id: "repo_1", rootPath: "/dev/arc" })]])
-    const ws = rowToWorkspace(wsRow({ id: "ws_1", path: "/dev/arc", repositoryId: "repo_1" }), repos)
+    const ws = rowToWorkspace(wsRow({ id: "ws_1", path: "/dev/arc", repositoryId: arcId("repo", "repo_1") }), repos)
     expect(ws.repoLabel).toBe("arc")
   })
 
   it("marks a workspace below the repo root as a worktree", () => {
     const repos = new Map([["repo_1", repo({ id: "repo_1", rootPath: "/dev/arc" })]])
     const ws = rowToWorkspace(
-      wsRow({ id: "ws_2", path: "/wt/arc-feat", repositoryId: "repo_1", gitBranch: "feat/git" }),
+      wsRow({ id: "ws_2", path: "/wt/arc-feat", repositoryId: arcId("repo", "repo_1"), gitBranch: "feat/git" }),
       repos,
     )
     expect(ws.isWorktree).toBe(true)

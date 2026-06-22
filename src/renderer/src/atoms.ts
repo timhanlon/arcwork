@@ -3,7 +3,7 @@ import * as Atom from "effect/unstable/reactivity/Atom"
 import { AtomRpc } from "effect/unstable/reactivity"
 import { rpc, sharedFlatRpcClient } from "./rpc-client.js"
 import { ArcRpcs } from "../../shared/rpc.js"
-import { arcId, type ChatId } from "../../shared/ids.js"
+import { arcId, type ChatId, type WorkspaceId } from "../../shared/ids.js"
 import type { Work, WorkStatus } from "../../shared/work.js"
 
 /**
@@ -132,7 +132,7 @@ const chatActivitySignalAtom = Atom.family((chatId: string) =>
  * increment. Seed `0` matches `initialValue` so the pane's own first pull on
  * mount isn't doubled by a boot tick.
  */
-export const gitChangesSignalAtom = Atom.family((workspaceId: string) =>
+export const gitChangesSignalAtom = Atom.family((workspaceId: WorkspaceId) =>
   ArcRpcAtomClient.runtime.atom(
     Stream.unwrap(
       ArcRpcAtomClient.use((client) =>
@@ -161,21 +161,21 @@ export const gitChangesSignalAtom = Atom.family((workspaceId: string) =>
  */
 const GIT_ATOM_TTL = Duration.minutes(5)
 
-export const gitStatusAtom = Atom.family((workspaceId: string) =>
+export const gitStatusAtom = Atom.family((workspaceId: WorkspaceId) =>
   ArcRpcAtomClient.query("GetWorkspaceGitStatus", { workspaceId }).pipe(
     Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
     Atom.setIdleTTL(GIT_ATOM_TTL),
   )
 )
 
-export const gitContextAtom = Atom.family((workspaceId: string) =>
+export const gitContextAtom = Atom.family((workspaceId: WorkspaceId) =>
   ArcRpcAtomClient.query("GetWorkspaceGitContext", { workspaceId }).pipe(
     Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
     Atom.setIdleTTL(GIT_ATOM_TTL),
   )
 )
 
-export const gitCommitsAtom = Atom.family((workspaceId: string) =>
+export const gitCommitsAtom = Atom.family((workspaceId: WorkspaceId) =>
   ArcRpcAtomClient.query("GetWorkspaceGitCommits", { workspaceId }).pipe(
     Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
     Atom.setIdleTTL(GIT_ATOM_TTL),
@@ -190,11 +190,11 @@ export const gitCommitsAtom = Atom.family((workspaceId: string) =>
  * plain-object args as reference-unique; a workspace id and a path never contain
  * a newline, so it is an unambiguous separator.
  */
-const gitFileDiffKey = (workspaceId: string, path: string): string => `${workspaceId}\n${path}`
+const gitFileDiffKey = (workspaceId: WorkspaceId, path: string): string => `${workspaceId}\n${path}`
 
 export const gitFileDiffAtom = Atom.family((key: string) => {
   const sep = key.indexOf("\n")
-  const workspaceId = key.slice(0, sep)
+  const workspaceId = arcId("workspace", key.slice(0, sep))
   const path = key.slice(sep + 1)
   return ArcRpcAtomClient.query("GetWorkspaceGitFileDiff", { workspaceId, path }).pipe(
     Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
@@ -202,7 +202,7 @@ export const gitFileDiffAtom = Atom.family((key: string) => {
   )
 })
 
-export const gitFileDiffAtomFor = (workspaceId: string, path: string) =>
+export const gitFileDiffAtomFor = (workspaceId: WorkspaceId, path: string) =>
   gitFileDiffAtom(gitFileDiffKey(workspaceId, path))
 
 /**

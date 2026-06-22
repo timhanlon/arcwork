@@ -10,6 +10,7 @@ import type {
   WorkspaceGitContext,
 } from "../../shared/git.js"
 import type { PullRequestRow, RepositoryRow, WorktreeRow } from "../db/schema.js"
+import type { WorkspaceId } from "../../shared/ids.js"
 import type { Workspace } from "../../shared/workspace.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { WorkspaceService } from "./WorkspaceService.js"
@@ -39,12 +40,12 @@ import { mapGhPullRequest, toWirePullRequest, toWireRepository, toWireWorktree }
 export class GitService extends Context.Service<
   GitService,
   {
-    readonly status: (workspaceId: string) => Effect.Effect<GitStatus, ArcRequestError>
-    readonly diff: (workspaceId: string, filePath: string) => Effect.Effect<GitFileDiff, ArcRequestError>
+    readonly status: (workspaceId: WorkspaceId) => Effect.Effect<GitStatus, ArcRequestError>
+    readonly diff: (workspaceId: WorkspaceId, filePath: string) => Effect.Effect<GitFileDiff, ArcRequestError>
     /** Recent commits on the workspace's current branch (newest first). Empty when
      * the cwd is not a git repo or the branch is unborn. */
     readonly commits: (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
       limit?: number,
     ) => Effect.Effect<ReadonlyArray<GitCommit>, ArcRequestError>
     /** Detect the workspace's git identity from its cwd and persist it: upsert
@@ -53,7 +54,7 @@ export class GitService extends Context.Service<
      * worktree, cached branch/head). Idempotent — safe to re-run. Resolves to the
      * persisted repository, or null when the cwd is not inside a git work tree. */
     readonly detectRepository: (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
     ) => Effect.Effect<RepositoryRow | null, ArcRequestError>
     /** Sync the workspace repository's GitHub pull requests via `gh` and persist
      * them into the PR read model. Detects the repo first (so the GitHub
@@ -61,13 +62,13 @@ export class GitService extends Context.Service<
      * Resolves to the persisted rows — empty when the repo has no GitHub remote
      * or `gh` is unavailable/unauthenticated (logged, never fatal). */
     readonly syncPullRequests: (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
     ) => Effect.Effect<ReadonlyArray<PullRequestRow>, ArcRequestError>
     /** Assemble the workspace's git context for the renderer: detect the repo
      * (local git only — no network), then read the persisted worktrees, current
      * branch, and the PR that branch maps to. */
     readonly gitContext: (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
     ) => Effect.Effect<WorkspaceGitContext, ArcRequestError>
     /** Live "the git read model changed for this workspace" stream — the
      * renderer re-pulls `gitContext` on each tick. Backed by a PubSub the hook
@@ -89,7 +90,7 @@ export class GitService extends Context.Service<
      * when omitted); otherwise `branch` must already exist. Resolves to the
      * persisted worktree row. */
     readonly createWorktree: (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
       options: {
         readonly branch: string
         readonly baseRef?: string
@@ -103,25 +104,25 @@ export class GitService extends Context.Service<
      * Refuses the main worktree; without `force`, git refuses a dirty/locked
      * tree. */
     readonly removeWorktree: (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
       worktreePath: string,
       options?: { readonly force?: boolean },
     ) => Effect.Effect<void, ArcRequestError>
     /** `git worktree prune` for missing trees, then reconcile the read model.
      * Resolves to the number of stale rows removed. */
-    readonly pruneWorktrees: (workspaceId: string) => Effect.Effect<number, ArcRequestError>
+    readonly pruneWorktrees: (workspaceId: WorkspaceId) => Effect.Effect<number, ArcRequestError>
     /** Auto-prune arc-managed worktrees whose branch has a merged PR — the
      * "remove after merge when safe" lifecycle step. Skips the main worktree,
      * non-arc-managed trees, and any tree with uncommitted changes. Resolves to
      * the paths actually pruned. */
     readonly pruneMergedWorktrees: (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
     ) => Effect.Effect<ReadonlyArray<string>, ArcRequestError>
     /** Open a GitHub PR for the workspace's current branch via `gh pr create`
      * (base = repo default branch unless overridden), then sync it into the read
      * model. Resolves to the new PR row, or null if it couldn't be read back. */
     readonly createPullRequest: (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
       options: {
         readonly title?: string
         readonly body?: string
@@ -135,10 +136,10 @@ export class GitService extends Context.Service<
 /** A tiny git-read-model change descriptor: which workspace's repo/PR state
  * moved. Carries no data — the renderer re-pulls `gitContext` for that id. */
 export interface GitChange {
-  readonly workspaceId: string
+  readonly workspaceId: WorkspaceId
 }
 
-const resolveWorkspace = (workspaces: ReadonlyArray<Workspace>, workspaceId: string): Workspace | undefined =>
+const resolveWorkspace = (workspaces: ReadonlyArray<Workspace>, workspaceId: WorkspaceId): Workspace | undefined =>
   workspaces.find((w) => w.id === workspaceId)
 
 export const GitServiceLive = Layer.effect(
@@ -151,14 +152,14 @@ export const GitServiceLive = Layer.effect(
     // (from the hook refresh paths below) never blocks the refreshing fiber.
     const updates = yield* PubSub.unbounded<GitChange>()
     const changes = Stream.fromPubSub(updates)
-    const publishChange = (workspaceId: string) => PubSub.publish(updates, { workspaceId })
+    const publishChange = (workspaceId: WorkspaceId) => PubSub.publish(updates, { workspaceId })
     // The layer's own scope — debounced pre-push syncs fork into it (not the
     // caller's), so a delayed sync outlives the hook signal that scheduled it
     // and is interrupted only on app shutdown.
     const scope = yield* Effect.scope
 
     const detectRepository = (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
     ): Effect.Effect<RepositoryRow | null, ArcRequestError> =>
       Effect.gen(function* () {
         const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
@@ -262,7 +263,7 @@ export const GitServiceLive = Layer.effect(
       }).pipe(Effect.withSpan("arc.git.detect_repository", { attributes: { "arc.workspace_id": workspaceId } }))
 
     const syncPullRequests = (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
     ): Effect.Effect<ReadonlyArray<PullRequestRow>, ArcRequestError> =>
       Effect.gen(function* () {
         const repository = yield* detectRepository(workspaceId)
@@ -322,7 +323,7 @@ export const GitServiceLive = Layer.effect(
     // this just joins those stored rows, so it's cheap to call on every workspace
     // switch and never competes with the switch's own DB reads.
     const gitContext = (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
     ): Effect.Effect<WorkspaceGitContext, ArcRequestError> =>
       Effect.gen(function* () {
         const workspaceRow = (yield* store.loadWorkspaces.pipe(
@@ -375,7 +376,7 @@ export const GitServiceLive = Layer.effect(
       Effect.forkScoped,
     )
 
-    const status = (workspaceId: string): Effect.Effect<GitStatus, ArcRequestError> =>
+    const status = (workspaceId: WorkspaceId): Effect.Effect<GitStatus, ArcRequestError> =>
       Effect.gen(function* () {
           const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
           if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
@@ -431,7 +432,7 @@ export const GitServiceLive = Layer.effect(
         })
 
     const commits = (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
       limit = 50,
     ): Effect.Effect<ReadonlyArray<GitCommit>, ArcRequestError> =>
       Effect.gen(function* () {
@@ -539,7 +540,7 @@ export const GitServiceLive = Layer.effect(
     const profile = resolveProfile()
     const managedWorktreesRoot = arcWorkWorktreesDir(profile)
 
-    const requireRepository = (workspaceId: string): Effect.Effect<RepositoryRow, ArcRequestError> =>
+    const requireRepository = (workspaceId: WorkspaceId): Effect.Effect<RepositoryRow, ArcRequestError> =>
       detectRepository(workspaceId).pipe(
         Effect.flatMap((repo) =>
           repo
@@ -566,7 +567,7 @@ export const GitServiceLive = Layer.effect(
       canonical(worktreePath).startsWith(canonical(managedWorktreesRoot) + path.sep)
 
     const createWorktree = (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
       options: { readonly branch: string; readonly baseRef?: string; readonly createBranch?: boolean },
     ): Effect.Effect<WorktreeRow, ArcRequestError> =>
       Effect.gen(function* () {
@@ -612,7 +613,7 @@ export const GitServiceLive = Layer.effect(
       }).pipe(Effect.withSpan("arc.git.open_worktree", { attributes: { "arc.worktree_path": worktreePath } }))
 
     const removeWorktree = (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
       worktreePath: string,
       options?: { readonly force?: boolean },
     ): Effect.Effect<void, ArcRequestError> =>
@@ -634,7 +635,7 @@ export const GitServiceLive = Layer.effect(
         yield* publishChange(workspaceId)
       }).pipe(Effect.withSpan("arc.git.remove_worktree", { attributes: { "arc.workspace_id": workspaceId } }))
 
-    const pruneWorktrees = (workspaceId: string): Effect.Effect<number, ArcRequestError> =>
+    const pruneWorktrees = (workspaceId: WorkspaceId): Effect.Effect<number, ArcRequestError> =>
       Effect.gen(function* () {
         const repo = yield* requireRepository(workspaceId)
         const result = yield* Effect.promise(() => runGitCapture(repo.rootPath, ["worktree", "prune"]))
@@ -665,7 +666,7 @@ export const GitServiceLive = Layer.effect(
       }).pipe(Effect.withSpan("arc.git.prune_worktrees", { attributes: { "arc.workspace_id": workspaceId } }))
 
     const pruneMergedWorktrees = (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
     ): Effect.Effect<ReadonlyArray<string>, ArcRequestError> =>
       Effect.gen(function* () {
         const repo = yield* requireRepository(workspaceId)
@@ -709,7 +710,7 @@ export const GitServiceLive = Layer.effect(
       }).pipe(Effect.withSpan("arc.git.prune_merged_worktrees", { attributes: { "arc.workspace_id": workspaceId } }))
 
     const createPullRequest = (
-      workspaceId: string,
+      workspaceId: WorkspaceId,
       options: {
         readonly title?: string
         readonly body?: string

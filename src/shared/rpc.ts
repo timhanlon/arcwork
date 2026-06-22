@@ -114,7 +114,7 @@ const IngestKinds = Schema.Literals(["all", "claude", "codex", "cursor"])
  */
 const ChatChange = Schema.Struct({ chatId: ChatId })
 const WorkChangeWire = Schema.Struct({ refId: WorkId, chatId: Schema.NullOr(ChatId) })
-const GitChange = Schema.Struct({ workspaceId: Schema.String })
+const GitChange = Schema.Struct({ workspaceId: WorkspaceId })
 
 /**
  * The contract. Each `Rpc.make` carries its own payload + success + error, so
@@ -138,12 +138,12 @@ export const ArcRpcs = RpcGroup.make(
     error: RpcError,
   }),
   Rpc.make("GetWorkspaceGitStatus", {
-    payload: { workspaceId: Schema.String },
+    payload: { workspaceId: WorkspaceId },
     success: GitStatus,
     error: RpcError,
   }),
   Rpc.make("GetWorkspaceGitFileDiff", {
-    payload: { workspaceId: Schema.String, path: Schema.String },
+    payload: { workspaceId: WorkspaceId, path: Schema.String },
     success: GitFileDiff,
     error: RpcError,
   }),
@@ -151,7 +151,7 @@ export const ArcRpcs = RpcGroup.make(
    * pane's history list. Local read; `limit` caps the count (default applied in
    * the service). */
   Rpc.make("GetWorkspaceGitCommits", {
-    payload: { workspaceId: Schema.String, limit: Schema.optional(Schema.Number) },
+    payload: { workspaceId: WorkspaceId, limit: Schema.optional(Schema.Number) },
     success: Schema.Array(GitCommit),
     error: RpcError,
   }),
@@ -163,14 +163,14 @@ export const ArcRpcs = RpcGroup.make(
    * network refresh.
    */
   Rpc.make("GetWorkspaceGitContext", {
-    payload: { workspaceId: Schema.String },
+    payload: { workspaceId: WorkspaceId },
     success: WorkspaceGitContext,
     error: RpcError,
   }),
   /** Refresh the repository's pull requests from GitHub via `gh` and return the
    * persisted rows. The one network call in the git surface — caller-triggered. */
   Rpc.make("SyncWorkspacePullRequests", {
-    payload: { workspaceId: Schema.String },
+    payload: { workspaceId: WorkspaceId },
     success: Schema.Array(PullRequest),
     error: RpcError,
   }),
@@ -178,7 +178,7 @@ export const ArcRpcs = RpcGroup.make(
    * `createBranch` cuts a new branch off `baseRef` (default branch when omitted). */
   Rpc.make("CreateWorktree", {
     payload: {
-      workspaceId: Schema.String,
+      workspaceId: WorkspaceId,
       branch: Schema.String,
       baseRef: Schema.optional(Schema.String),
       createBranch: Schema.optional(Schema.Boolean),
@@ -195,7 +195,7 @@ export const ArcRpcs = RpcGroup.make(
   /** Remove a worktree (`git worktree remove`); `force` overrides a dirty tree. */
   Rpc.make("RemoveWorktree", {
     payload: {
-      workspaceId: Schema.String,
+      workspaceId: WorkspaceId,
       worktreePath: Schema.String,
       force: Schema.optional(Schema.Boolean),
     },
@@ -204,14 +204,14 @@ export const ArcRpcs = RpcGroup.make(
   }),
   /** Prune missing worktrees and reconcile the read model; returns the count. */
   Rpc.make("PruneWorktrees", {
-    payload: { workspaceId: Schema.String },
+    payload: { workspaceId: WorkspaceId },
     success: Schema.Struct({ removed: Schema.Number }),
     error: RpcError,
   }),
   /** Auto-prune arc-managed worktrees whose branch has a merged PR (safe-only).
    * Returns the paths actually pruned. */
   Rpc.make("PruneMergedWorktrees", {
-    payload: { workspaceId: Schema.String },
+    payload: { workspaceId: WorkspaceId },
     success: Schema.Array(Schema.String),
     error: RpcError,
   }),
@@ -219,7 +219,7 @@ export const ArcRpcs = RpcGroup.make(
    * then sync it into the read model. */
   Rpc.make("CreatePullRequest", {
     payload: {
-      workspaceId: Schema.String,
+      workspaceId: WorkspaceId,
       title: Schema.optional(Schema.String),
       body: Schema.optional(Schema.String),
       base: Schema.optional(Schema.String),
@@ -326,7 +326,7 @@ export const ArcRpcs = RpcGroup.make(
       chatId: ChatId,
       /** Diff endpoint to run in — the worker writes here and hooks/file refs
        * resolve against it. Omit to use the chat's own workspace. */
-      workspaceId: Schema.optional(Schema.String),
+      workspaceId: Schema.optional(WorkspaceId),
       /** draft prompt to seed the session (prefill flag / env / stdin per provider) */
       prompt: Schema.optional(Schema.String),
       preset: Schema.optional(Schema.String),

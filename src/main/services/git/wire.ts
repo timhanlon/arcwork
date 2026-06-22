@@ -1,6 +1,7 @@
 import type { PullRequestRow, RepositoryRow, WorktreeRow } from "../../db/schema.js"
 import type { PrState, PullRequest, Repository, Worktree } from "../../../shared/git.js"
 import { toPrState } from "../../../shared/git.js"
+import type { PrId, RepositoryId } from "../../../shared/ids.js"
 import { bool, type GhPullRequest, lowerOrNull, summarizeChecks } from "./parse.js"
 
 /** Normalize a `gh pr list` record into a PullRequestRow. GitHub's createdAt/
@@ -8,8 +9,8 @@ import { bool, type GhPullRequest, lowerOrNull, summarizeChecks } from "./parse.
  * created_at, refreshes updated_at), with `lastSyncedAt` stamping this sync.
  * Enums are lowercased; blank review/mergeable/state values become null. */
 export const mapGhPullRequest = (
-  repositoryId: string,
-  id: string,
+  repositoryId: RepositoryId,
+  id: PrId,
   raw: GhPullRequest,
   now: string,
 ): PullRequestRow => ({

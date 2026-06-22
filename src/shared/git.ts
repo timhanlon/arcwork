@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { WorkspaceId } from "./ids.js"
+import { PrId, RepositoryId, WorkspaceId, WorktreeId } from "./ids.js"
 
 export const GitChangeStatus = Schema.Literals([
   "added",
@@ -56,7 +56,7 @@ export type GitCommit = typeof GitCommit.Type
 /** A local clone's identity for the renderer — the durable read-model fields,
  * minus internals (common git dir, remotes blob, timestamps). */
 export const Repository = Schema.Struct({
-  id: Schema.String,
+  id: RepositoryId,
   rootPath: Schema.String,
   defaultBranch: Schema.NullOr(Schema.String),
   githubOwner: Schema.NullOr(Schema.String),
@@ -66,7 +66,7 @@ export type Repository = typeof Repository.Type
 
 /** A git worktree under a repository, with its lifecycle flags as booleans. */
 export const Worktree = Schema.Struct({
-  id: Schema.String,
+  id: WorktreeId,
   path: Schema.String,
   branch: Schema.NullOr(Schema.String),
   headSha: Schema.NullOr(Schema.String),
@@ -88,7 +88,7 @@ export const toPrState = (state: string): PrState | null =>
 
 /** The GitHub PR read model as the renderer sees it. */
 export const PullRequest = Schema.Struct({
-  id: Schema.String,
+  id: PrId,
   number: Schema.Number,
   title: Schema.String,
   state: PrState,
@@ -108,7 +108,7 @@ export type PullRequest = typeof PullRequest.Type
  * that clone, the workspace's current branch, and the open PR that branch maps
  * to (if any). `repository` is null when the workspace cwd is not a git repo. */
 export const WorkspaceGitContext = Schema.Struct({
-  workspaceId: Schema.String,
+  workspaceId: WorkspaceId,
   branch: Schema.NullOr(Schema.String),
   repository: Schema.NullOr(Repository),
   worktrees: Schema.Array(Worktree),

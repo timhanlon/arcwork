@@ -108,3 +108,13 @@ export type HookId = typeof HookId.Type
 
 export const PaneId = ArcId("pane")
 export type PaneId = typeof PaneId.Type
+
+// git/github read model: a local clone, its worktrees, and a synced PR.
+export const RepositoryId = ArcId("repo")
+export type RepositoryId = typeof RepositoryId.Type
+
+export const WorktreeId = ArcId("worktree")
+export type WorktreeId = typeof WorktreeId.Type
+
+export const PrId = ArcId("pr")
+export type PrId = typeof PrId.Type

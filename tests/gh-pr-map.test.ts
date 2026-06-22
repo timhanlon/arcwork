@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { summarizeChecks, type GhPullRequest } from "../src/main/services/git/parse.js"
 import { mapGhPullRequest } from "../src/main/services/git/wire.js"
+import { arcId } from "../src/shared/ids.js"
 
 describe("summarizeChecks", () => {
   it("returns null when there are no checks", () => {
@@ -60,9 +61,9 @@ describe("mapGhPullRequest", () => {
       updatedAt: "2026-06-19T00:00:00.000Z",
     }
 
-    expect(mapGhPullRequest("repo_x", "pr_x", raw, now)).toEqual({
-      id: "pr_x",
-      repositoryId: "repo_x",
+    expect(mapGhPullRequest(arcId("repo", "repo_x"), arcId("pr", "pr_x"), raw, now)).toEqual({
+      id: arcId("pr", "pr_x"),
+      repositoryId: arcId("repo", "repo_x"),
       number: 42,
       githubNodeId: "PR_node",
       title: "Add worktrees",
@@ -97,7 +98,7 @@ describe("mapGhPullRequest", () => {
       headRefName: "fix",
       baseRefName: "main",
     }
-    const row = mapGhPullRequest("repo_x", "pr_y", raw, now)
+    const row = mapGhPullRequest(arcId("repo", "repo_x"), arcId("pr", "pr_y"), raw, now)
     expect(row.state).toBe("merged")
     expect(row.isDraft).toBe(1)
     expect(row.reviewState).toBeNull()

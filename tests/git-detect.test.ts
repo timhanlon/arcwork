@@ -153,7 +153,7 @@ describe("git repository detection", () => {
           const repo = yield* service.detectRepository(workspace.id)
           // Seed a PR whose head ref is the workspace's branch (main).
           yield* store.upsertPullRequest({
-            id: "pr_seed",
+            id: arcId("pr", "pr_seed"),
             repositoryId: repo!.id,
             number: 99,
             githubNodeId: null,
@@ -241,7 +241,7 @@ describe("git worktree lifecycle", () => {
             })
             // A merged PR for that branch is the signal that makes the tree prunable.
             yield* store.upsertPullRequest({
-              id: "pr_merged",
+              id: arcId("pr", "pr_merged"),
               repositoryId: repo!.id,
               number: 7,
               githubNodeId: null,

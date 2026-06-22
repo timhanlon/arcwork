@@ -13,7 +13,17 @@
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
 import { newArcId } from "../../shared/ids.js"
-import type { ActivityId, ChatId, HookId, MessageId, TargetId, WorkspaceId } from "../../shared/ids.js"
+import type {
+  ActivityId,
+  ChatId,
+  HookId,
+  MessageId,
+  PrId,
+  RepositoryId,
+  TargetId,
+  WorkspaceId,
+  WorktreeId,
+} from "../../shared/ids.js"
 import { sqlMigration, type Migrations } from "./migrator.js"
 
 const addSearchDocumentWorkspaceColumn = Effect.gen(function* () {
@@ -43,8 +53,8 @@ export interface WorkspaceRow {
   readonly name: string
   readonly createdAt: string
   readonly lastOpenedAt: string
-  readonly repositoryId: string | null
-  readonly worktreeId: string | null
+  readonly repositoryId: RepositoryId | null
+  readonly worktreeId: WorktreeId | null
   readonly gitBranch: string | null
   readonly gitHeadSha: string | null
 }
@@ -54,7 +64,7 @@ export interface WorkspaceRow {
  * GitHub columns are null for a clone with no recognized remote; it is still a
  * valid repository row. Keyed locally by `commonGitDir`. */
 export interface RepositoryRow {
-  readonly id: string
+  readonly id: RepositoryId
   readonly commonGitDir: string
   /** the main worktree path (`git rev-parse --show-toplevel` of the clone) */
   readonly rootPath: string
@@ -73,8 +83,8 @@ export interface RepositoryRow {
  * from an arc workspace (a worktree can exist before arc opens it, or after the
  * workspace is gone). Keyed by `path`. */
 export interface WorktreeRow {
-  readonly id: string
-  readonly repositoryId: string
+  readonly id: WorktreeId
+  readonly repositoryId: RepositoryId
   readonly path: string
   readonly branch: string | null
   readonly headSha: string | null
@@ -93,8 +103,8 @@ export interface WorktreeRow {
  * Keyed `(repositoryId, number)`; `(repositoryId, headRef)` is the branch→PR
  * map. `checksState` is a JSON summary; `lastSyncedAt` stamps the last sync. */
 export interface PullRequestRow {
-  readonly id: string
-  readonly repositoryId: string
+  readonly id: PrId
+  readonly repositoryId: RepositoryId
   readonly number: number
   readonly githubNodeId: string | null
   readonly title: string

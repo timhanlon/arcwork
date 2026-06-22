@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react"
 import { Option } from "effect"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import type { GitCommit, GitStatus, WorkspaceGitContext } from "../../../shared/git.js"
+import type { WorkspaceId } from "../../../shared/ids.js"
 import { gitCommitsAtom, gitContextAtom, gitStatusAtom } from "../atoms.js"
 
 const errorMessage = <E extends { readonly message: string }>(
@@ -27,7 +28,7 @@ export interface WorkspaceGit {
  * subscriber (the prefetch) has kept it live. Refreshes retain the prior value, so
  * `loading` is true only on the very first pull.
  */
-export function useWorkspaceGit(workspaceId: string): WorkspaceGit {
+export function useWorkspaceGit(workspaceId: WorkspaceId): WorkspaceGit {
   const statusResult = useAtomValue(gitStatusAtom(workspaceId))
   const contextResult = useAtomValue(gitContextAtom(workspaceId))
   const commitsResult = useAtomValue(gitCommitsAtom(workspaceId))

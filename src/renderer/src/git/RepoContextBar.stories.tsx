@@ -1,12 +1,13 @@
-import type { PullRequest, WorkspaceGitContext } from "../../../shared/git.js"
+import type { PullRequest, Repository, WorkspaceGitContext } from "../../../shared/git.js"
+import { arcId } from "../../../shared/ids.js"
 import { RepoContextBar } from "./RepoContextBar.js"
 
 export default {
   title: "Git / RepoContextBar",
 }
 
-const repository: WorkspaceGitContext["repository"] = {
-  id: "repo_1",
+const repository: Repository = {
+  id: arcId("repo", "repo_1"),
   rootPath: "/Users/tim/dev/aux",
   defaultBranch: "main",
   githubOwner: "twofutures",
@@ -14,7 +15,7 @@ const repository: WorkspaceGitContext["repository"] = {
 }
 
 const pr = (overrides: Partial<PullRequest>): PullRequest => ({
-  id: "pr_1",
+  id: arcId("pr", "pr_1"),
   number: 128,
   title: "Make GitHub PRs and Git worktrees first-class",
   state: "open",
@@ -31,7 +32,7 @@ const pr = (overrides: Partial<PullRequest>): PullRequest => ({
 })
 
 const context = (overrides: Partial<WorkspaceGitContext>): WorkspaceGitContext => ({
-  workspaceId: "workspace_1",
+  workspaceId: arcId("workspace", "workspace_1"),
   branch: "feat/git",
   repository,
   worktrees: [],

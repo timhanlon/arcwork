@@ -136,7 +136,7 @@ describe("ReadService.search", () => {
         const read = yield* ReadService
         const db = yield* ArcStore
         yield* db.upsertRepository({
-          id: "repo_1",
+          id: arcId("repo", "repo_1"),
           commonGitDir: "/tmp/repo/.git",
           rootPath: "/tmp/repo",
           defaultBranch: "main",

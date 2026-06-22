@@ -1,5 +1,6 @@
 import { type JSX, useEffect, useState } from "react"
 import { useAtomRefresh } from "@effect/atom-react"
+import type { WorkspaceId } from "../../../shared/ids.js"
 import { gitContextAtom } from "../atoms.js"
 import { rpc } from "../rpc-client.js"
 import { useWorkspaceGit } from "./useWorkspaceGit.js"
@@ -22,8 +23,8 @@ const WARM_DELAY_MS = 400
  * status/context/commits atoms (holding them live while the pane is closed) and
  * pull fresh PRs. Rapid switching does no git work at all. Renders nothing.
  */
-export function GitPrefetch({ workspaceId }: { readonly workspaceId: string }): JSX.Element | null {
-  const [warmId, setWarmId] = useState<string | undefined>(undefined)
+export function GitPrefetch({ workspaceId }: { readonly workspaceId: WorkspaceId }): JSX.Element | null {
+  const [warmId, setWarmId] = useState<WorkspaceId | undefined>(undefined)
 
   useEffect(() => {
     const timer = setTimeout(() => setWarmId(workspaceId), WARM_DELAY_MS)
@@ -33,7 +34,7 @@ export function GitPrefetch({ workspaceId }: { readonly workspaceId: string }): 
   return warmId === workspaceId ? <GitWarm workspaceId={workspaceId} /> : null
 }
 
-function GitWarm({ workspaceId }: { readonly workspaceId: string }): null {
+function GitWarm({ workspaceId }: { readonly workspaceId: WorkspaceId }): null {
   useWorkspaceGit(workspaceId)
   const refreshContext = useAtomRefresh(gitContextAtom(workspaceId))
 
