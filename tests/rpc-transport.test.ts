@@ -11,6 +11,12 @@ import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { ChatService, ChatServiceLive } from "../src/main/services/ChatService.js"
 import { ChatMessageService } from "../src/main/services/ChatMessageService.js"
 import { ReadServiceLive } from "../src/main/read/service.js"
+import { newArcId } from "../src/shared/ids.js"
+
+// A valid TypeID: the seeded workspace id flows into the created Work's
+// provenance and is decoded back through the RPC schema, which validates the
+// `workspace_…` pattern — so a short fixture id won't survive the round trip.
+const WS_RPC = newArcId("workspace")
 
 /**
  * The renderer<->main RPC transport, exercised in-process.
@@ -167,13 +173,13 @@ describe("arc rpc transport (structured-clone IPC)", () => {
           const arc = yield* ArcStore
           const chats = yield* ChatService
           yield* arc.upsertWorkspace({
-            id: "ws_rpc",
+            id: WS_RPC,
             path: "/tmp/ws_rpc",
             name: "rpc ws",
             createdAt: "2026-06-08T00:00:00.000Z",
             lastOpenedAt: "2026-06-08T00:00:00.000Z",
           })
-          const chat = yield* chats.create("ws_rpc", "rpc chat")
+          const chat = yield* chats.create(WS_RPC, "rpc chat")
 
           // Success path: a real create, then a real list, both decoded by the
           // typed client — no envelope, no dynamic schema cast. `chatId` anchors
@@ -195,7 +201,7 @@ describe("arc rpc transport (structured-clone IPC)", () => {
           // Error path: the handler fails with ArcRequestError; the typed client
           // surfaces it as a structured RpcError on the error channel.
           const failure = yield* Effect.exit(
-            client.UpdateWorkStatus({ id: "work_does_not_exist", status: "done" }),
+            client.UpdateWorkStatus({ id: newArcId("work"), status: "done" }),
           )
 
           return { created, listed, searched, comments, failure }

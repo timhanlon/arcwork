@@ -7,6 +7,7 @@ import {
   pickWorkForCommit,
 } from "../src/main/hooks/commit.js"
 import type { Work, WorkStatus } from "../src/shared/work.js"
+import { arcId } from "../src/shared/ids.js"
 
 /**
  * The git `post-commit` hook ships a wire record (commit metadata in `hookInput`,
@@ -53,7 +54,7 @@ const signalFrom = (over: { hookInput?: Record<string, unknown> } & Record<strin
 
 const workRow = (over: Partial<Work> & Pick<Work, "id" | "status" | "updatedAt">): Work => ({
   _tag: "Work",
-  nodeId: `${over.id}_node`,
+  nodeId: arcId("work_rev", `${over.id}_node`),
   title: "w",
   body: "",
   labels: [],
@@ -113,7 +114,7 @@ describe("commit signal → fact", () => {
 
 describe("pickWorkForCommit (which work a commit lands on)", () => {
   const open = (id: string, updatedAt: string, status: WorkStatus = "open") =>
-    workRow({ id, status, updatedAt })
+    workRow({ id: arcId("work", id), status, updatedAt })
 
   it("returns null when the chat has no work", () => {
     expect(pickWorkForCommit([])).toBeNull()

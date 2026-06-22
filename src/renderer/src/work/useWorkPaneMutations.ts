@@ -1,11 +1,12 @@
 import { useState } from "react"
 import type { Work, WorkCreateInput, WorkPriority, WorkReviseInput, WorkStatus } from "../../../shared/work.js"
+import type { ChatId, WorkId } from "../../../shared/ids.js"
 import { rpc } from "../rpc-client.js"
 import { errorMessage } from "./utils.js"
 
 export interface UseWorkPaneMutationsOptions {
   readonly reload: () => void
-  readonly chatId?: string
+  readonly chatId?: ChatId
   readonly onCreated?: (work: Work) => void
 }
 
@@ -14,9 +15,9 @@ export function useWorkPaneMutations({ reload, chatId, onCreated }: UseWorkPaneM
   readonly error: string | undefined
   readonly setError: (error: string | undefined) => void
   readonly create: (input: WorkCreateInput) => Promise<void>
-  readonly changeStatus: (id: string, status: WorkStatus) => void
-  readonly changePriority: (id: string, priority: WorkPriority) => void
-  readonly revise: (id: string, edits: WorkReviseInput) => void
+  readonly changeStatus: (id: WorkId, status: WorkStatus) => void
+  readonly changePriority: (id: WorkId, priority: WorkPriority) => void
+  readonly revise: (id: WorkId, edits: WorkReviseInput) => void
 } {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
@@ -50,15 +51,15 @@ export function useWorkPaneMutations({ reload, chatId, onCreated }: UseWorkPaneM
     }
   }
 
-  const changeStatus = (id: string, status: WorkStatus): void => {
+  const changeStatus = (id: WorkId, status: WorkStatus): void => {
     void runMutation(() => rpc("UpdateWorkStatus", { id, status }))
   }
 
-  const changePriority = (id: string, priority: WorkPriority): void => {
+  const changePriority = (id: WorkId, priority: WorkPriority): void => {
     void runMutation(() => rpc("UpdateWorkPriority", { id, priority }))
   }
 
-  const revise = (id: string, edits: WorkReviseInput): void => {
+  const revise = (id: WorkId, edits: WorkReviseInput): void => {
     void runMutation(() => rpc("ReviseWork", { id, edits }))
   }
 

@@ -11,6 +11,7 @@ import {
   type WorkspaceRow,
 } from "./schema.js"
 import { runMigrations } from "./migrator.js"
+import type { ChatId, TargetId, WorkspaceId } from "../../shared/ids.js"
 import type { ChatMessageUpsertMode } from "../hooks/chat-message.js"
 
 /**
@@ -34,10 +35,10 @@ export class ArcStore extends Context.Service<
     readonly insertChat: (chat: ChatRow) => Effect.Effect<void, SqlError>
     readonly updateChatTitle: (chatId: string, title: string) => Effect.Effect<boolean, SqlError>
     readonly workspacePathForChat: (chatId: string) => Effect.Effect<string | null, SqlError>
-    readonly workspaceIdForChat: (chatId: string) => Effect.Effect<string | null, SqlError>
+    readonly workspaceIdForChat: (chatId: string) => Effect.Effect<WorkspaceId | null, SqlError>
     readonly workspaceIdForTargetSession: (
       targetSessionId: string,
-    ) => Effect.Effect<string | null, SqlError>
+    ) => Effect.Effect<WorkspaceId | null, SqlError>
     readonly loadTargetSessions: Effect.Effect<ReadonlyArray<TargetSessionRow>, SqlError>
     readonly upsertTargetSession: (s: TargetSessionRow) => Effect.Effect<void, SqlError>
     readonly setNativeSessionId: (
@@ -60,7 +61,7 @@ export class ArcStore extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<ActivityEventRow>, SqlError>
     readonly chatIdForTargetSession: (
       targetSessionId: string,
-    ) => Effect.Effect<string | null, SqlError>
+    ) => Effect.Effect<ChatId | null, SqlError>
     /** The harness/provider a target session runs (its `target_sessions.provider`),
      * or null when the session is unknown. The stable, Arc-owned half of execution
      * provenance — set at launch, never mutated. */
@@ -78,7 +79,7 @@ export class ArcStore extends Context.Service<
     readonly targetSessionForNative: (
       provider: string,
       nativeSessionId: string,
-    ) => Effect.Effect<{ readonly id: string; readonly chatId: string } | null, SqlError>
+    ) => Effect.Effect<{ readonly id: TargetId; readonly chatId: ChatId } | null, SqlError>
     readonly targetSessionsForChat: (
       chatId: string,
     ) => Effect.Effect<ReadonlyArray<TargetSessionRow>, SqlError>
@@ -114,8 +115,8 @@ export class ArcStore extends Context.Service<
     /** target-originated request rows still awaiting the user, across all chats */
     readonly loadPendingRequests: Effect.Effect<
       ReadonlyArray<{
-        readonly chatId: string
-        readonly targetSessionId: string
+        readonly chatId: ChatId
+        readonly targetSessionId: TargetId
         readonly requestJson: string | null
       }>,
       SqlError
@@ -287,7 +288,7 @@ export const ArcStoreLive = Layer.effect(
 
     const workspaceIdForChat = (chatId: string) =>
       Effect.gen(function* () {
-        const rows = yield* sql<{ workspaceId: string }>`
+        const rows = yield* sql<{ workspaceId: WorkspaceId }>`
           SELECT workspace_id AS "workspaceId" FROM chats
           WHERE id = ${chatId}
           LIMIT 1`
@@ -296,7 +297,7 @@ export const ArcStoreLive = Layer.effect(
 
     const workspaceIdForTargetSession = (targetSessionId: string) =>
       Effect.gen(function* () {
-        const rows = yield* sql<{ workspaceId: string }>`
+        const rows = yield* sql<{ workspaceId: WorkspaceId }>`
           SELECT chats.workspace_id AS "workspaceId" FROM target_sessions
           JOIN chats ON chats.id = target_sessions.chat_id
           WHERE target_sessions.id = ${targetSessionId}
@@ -386,7 +387,7 @@ export const ArcStoreLive = Layer.effect(
 
     const chatIdForTargetSession = (targetSessionId: string) =>
       Effect.gen(function* () {
-        const rows = yield* sql<{ chatId: string }>`
+        const rows = yield* sql<{ chatId: ChatId }>`
           SELECT chat_id AS chatId FROM target_sessions WHERE id = ${targetSessionId} LIMIT 1`
         return rows[0]?.chatId ?? null
       })
@@ -413,14 +414,14 @@ export const ArcStoreLive = Layer.effect(
 
     const targetSessionForNative = (provider: string, nativeSessionId: string) =>
       Effect.gen(function* () {
-        const rows = yield* sql<{ id: string; chatId: string }>`
+        const rows = yield* sql<{ id: TargetId; chatId: ChatId }>`
           SELECT id, chat_id AS chatId FROM target_sessions
           WHERE provider = ${provider}
             AND native_session_id = ${nativeSessionId}
           LIMIT 1`
         if (rows[0]) return rows[0]
 
-        const unbound = yield* sql<{ id: string; chatId: string }>`
+        const unbound = yield* sql<{ id: TargetId; chatId: ChatId }>`
           SELECT id, chat_id AS chatId FROM target_sessions
           WHERE provider = ${provider}
             AND native_session_id IS NULL
@@ -726,8 +727,8 @@ export const ArcStoreLive = Layer.effect(
       )
 
     const loadPendingRequests = sql<{
-      readonly chatId: string
-      readonly targetSessionId: string
+      readonly chatId: ChatId
+      readonly targetSessionId: TargetId
       readonly requestJson: string | null
     }>`SELECT chat_id AS "chatId", target_session_id AS "targetSessionId", request_json AS "requestJson"
         FROM chat_messages

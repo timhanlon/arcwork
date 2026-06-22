@@ -13,7 +13,7 @@ import type { ExtractedRows, MessageRow, ToolCallRow } from "../../ingest/db/sch
 import type { QuestionRequest } from "../../../shared/chat-request.js"
 import type { ToolCall as ToolCallData } from "../../../shared/tool-call.js"
 import { decodeQuestionTool } from "../../../shared/question-tools.js"
-import { newArcId } from "../../../shared/ids.js"
+import { type ChatId, newArcId, type TargetId } from "../../../shared/ids.js"
 import { str } from "../../hooks/hook-input.js"
 import {
   assistantDedupKey,
@@ -164,7 +164,7 @@ const toolLines = (tool: ToolCallData): Array<string> => {
  * re-spelled at every message kind.
  */
 export const artifactRow = (
-  target: { readonly id: string; readonly chatId: string },
+  target: { readonly id: TargetId; readonly chatId: ChatId },
   provider: string,
   fields: {
     readonly role: ChatMessageRow["role"]
@@ -258,7 +258,7 @@ export type ArtifactRowSpec = {
 
 export type ArtifactProjectionContext = {
   readonly rows: ExtractedRows
-  readonly target: { readonly id: string; readonly chatId: string }
+  readonly target: { readonly id: TargetId; readonly chatId: ChatId }
   readonly projected: ReadonlyArray<ChatMessageRow>
   // Wall-clock captured once per projection pass. Used only when the transcript
   // has no stable session clock.

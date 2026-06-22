@@ -6,6 +6,7 @@ import {
   type ArcShellEvent,
   type ShellSessionRef,
 } from "../src/renderer/src/shell/arcShellMachine.js"
+import { arcId } from "../src/shared/ids.js"
 
 const snapshotAfter = (...events: ReadonlyArray<ArcShellEvent>) => {
   const actor = createActor(arcShellMachine).start()
@@ -29,16 +30,16 @@ const emittedAfter = (...events: ReadonlyArray<ArcShellEvent>): ReadonlyArray<Ar
 }
 
 const attachedSession: ShellSessionRef = {
-  id: "target_attached",
+  id: arcId("target", "target_attached"),
   provider: "claude",
-  chatId: "chat_1",
+  chatId: arcId("chat", "chat_1"),
   attached: true,
 }
 
 const detachedSession: ShellSessionRef = {
-  id: "target_detached",
+  id: arcId("target", "target_detached"),
   provider: "codex",
-  chatId: "chat_2",
+  chatId: arcId("chat", "chat_2"),
   attached: false,
 }
 
@@ -53,25 +54,25 @@ describe("arc shell machine", () => {
     const context = snapshotAfter(
       {
         type: "TARGET_LAUNCH_REQUESTED",
-        paneId: "pane_1",
+        paneId: arcId("pane", "pane_1"),
         provider: "claude",
-        chatId: "chat_1",
-        workspaceId: "workspace_1",
+        chatId: arcId("chat", "chat_1"),
+        workspaceId: arcId("workspace", "workspace_1"),
       },
-      { type: "TARGET_BOUND", paneId: "pane_1", sessionId: "target_1" },
+      { type: "TARGET_BOUND", paneId: arcId("pane", "pane_1"), sessionId: arcId("target", "target_1") },
     )
 
     expect(context.layout.center.surface.kind).toBe("chat")
-    expect(context.selection.chatByWorkspace["workspace_1"]).toBe("chat_1")
+    expect(context.selection.chatByWorkspace[arcId("workspace", "workspace_1")]).toBe("chat_1")
     expect(context.selection.terminalPaneId).toBe("pane_1")
     // Launch focuses the composer, not the not-yet-spawned terminal, so the
     // user can type their first prompt while the PTY spins up.
     const emitted = emittedAfter({
       type: "TARGET_LAUNCH_REQUESTED",
-      paneId: "pane_1",
+      paneId: arcId("pane", "pane_1"),
       provider: "claude",
-      chatId: "chat_1",
-      workspaceId: "workspace_1",
+      chatId: arcId("chat", "chat_1"),
+      workspaceId: arcId("workspace", "workspace_1"),
     })
     expect(emitted).toEqual(["focusComposer"])
     expect(context.panes).toEqual([
@@ -88,9 +89,9 @@ describe("arc shell machine", () => {
   it("focuses an attached session by opening a live pane", () => {
     const context = snapshotAfter({
       type: "SESSION_FOCUSED",
-      paneId: "pane_attached",
+      paneId: arcId("pane", "pane_attached"),
       session: attachedSession,
-      workspaceId: "workspace_1",
+      workspaceId: arcId("workspace", "workspace_1"),
     })
 
     expect(context.detachedSessionId).toBeUndefined()
@@ -113,9 +114,9 @@ describe("arc shell machine", () => {
       { type: "RIGHT_PANEL_TOGGLED" },
       {
         type: "SESSION_FOCUSED",
-        paneId: "pane_attached",
+        paneId: arcId("pane", "pane_attached"),
         session: attachedSession,
-        workspaceId: "workspace_1",
+        workspaceId: arcId("workspace", "workspace_1"),
       },
     )
 
@@ -127,14 +128,14 @@ describe("arc shell machine", () => {
   it("opens work in the right pane and returns to terminal mode on close", () => {
     const opened = snapshotAfter(
       { type: "RIGHT_PANEL_TOGGLED" },
-      { type: "SURFACE_OPENED", target: { kind: "work", workId: "work_01abc" }, pane: "right" },
+      { type: "SURFACE_OPENED", target: { kind: "work", workId: arcId("work", "work_01abc") }, pane: "right" },
     )
     expect(opened.layout.right.collapsed).toBe(false)
     expect(opened.layout.right.surface).toEqual({ kind: "work", workId: "work_01abc" })
 
     const closed = snapshotAfter(
       { type: "RIGHT_PANEL_TOGGLED" },
-      { type: "SURFACE_OPENED", target: { kind: "work", workId: "work_01abc" }, pane: "right" },
+      { type: "SURFACE_OPENED", target: { kind: "work", workId: arcId("work", "work_01abc") }, pane: "right" },
       { type: "SURFACE_OPENED", target: { kind: "terminal" }, pane: "right" },
     )
     expect(closed.layout.right.collapsed).toBe(false)
@@ -143,12 +144,12 @@ describe("arc shell machine", () => {
 
   it("replaces right-pane work when focusing a target session", () => {
     const context = snapshotAfter(
-      { type: "SURFACE_OPENED", target: { kind: "work", workId: "work_01abc" }, pane: "right" },
+      { type: "SURFACE_OPENED", target: { kind: "work", workId: arcId("work", "work_01abc") }, pane: "right" },
       {
         type: "SESSION_FOCUSED",
-        paneId: "pane_attached",
+        paneId: arcId("pane", "pane_attached"),
         session: attachedSession,
-        workspaceId: "workspace_1",
+        workspaceId: arcId("workspace", "workspace_1"),
       },
     )
 
@@ -167,13 +168,13 @@ describe("arc shell machine", () => {
 
   it("records the selected path on the right git surface, leaving the center alone", () => {
     const context = snapshotAfter(
-      { type: "CHAT_SELECTED", workspaceId: "workspace_1", chatId: "chat_1" },
+      { type: "CHAT_SELECTED", workspaceId: arcId("workspace", "workspace_1"), chatId: arcId("chat", "chat_1") },
       { type: "SURFACE_OPENED", target: { kind: "git" }, pane: "right" },
       { type: "SURFACE_OPENED", target: { kind: "git", path: "src/app.ts" }, pane: "right" },
     )
     expect(context.layout.right.surface).toEqual({ kind: "git", path: "src/app.ts" })
     expect(context.layout.center.surface.kind).toBe("chat")
-    expect(context.selection.gitPathByWorkspace["workspace_1"]).toBe("src/app.ts")
+    expect(context.selection.gitPathByWorkspace[arcId("workspace", "workspace_1")]).toBe("src/app.ts")
   })
 
   it("never disturbs the center across the whole git lifecycle", () => {
@@ -191,7 +192,7 @@ describe("arc shell machine", () => {
 
   it("remembers the selected git path when re-entering the git pane", () => {
     const context = snapshotAfter(
-      { type: "CHAT_SELECTED", workspaceId: "workspace_1", chatId: "chat_1" },
+      { type: "CHAT_SELECTED", workspaceId: arcId("workspace", "workspace_1"), chatId: arcId("chat", "chat_1") },
       { type: "SURFACE_OPENED", target: { kind: "git" }, pane: "right" },
       { type: "SURFACE_OPENED", target: { kind: "git", path: "src/app.ts" }, pane: "right" },
       { type: "SURFACE_OPENED", target: { kind: "terminal" }, pane: "right" },
@@ -222,9 +223,9 @@ describe("arc shell machine", () => {
   it("emits focusTerminal each time an attached session is focused", () => {
     const focus: ArcShellEvent = {
       type: "SESSION_FOCUSED",
-      paneId: "pane_attached",
+      paneId: arcId("pane", "pane_attached"),
       session: attachedSession,
-      workspaceId: "workspace_1",
+      workspaceId: arcId("workspace", "workspace_1"),
     }
     const twice = snapshotAfter(focus, focus)
 
@@ -239,9 +240,9 @@ describe("arc shell machine", () => {
     expect(
       emittedAfter({
         type: "SESSION_FOCUSED",
-        paneId: "pane_unused",
+        paneId: arcId("pane", "pane_unused"),
         session: detachedSession,
-        workspaceId: "workspace_2",
+        workspaceId: arcId("workspace", "workspace_2"),
       }),
     ).toEqual([])
   })
@@ -270,9 +271,9 @@ describe("arc shell machine", () => {
   it("focuses a detached session by showing the resume prompt without opening a pane", () => {
     const context = snapshotAfter({
       type: "SESSION_FOCUSED",
-      paneId: "pane_unused",
+      paneId: arcId("pane", "pane_unused"),
       session: detachedSession,
-      workspaceId: "workspace_2",
+      workspaceId: arcId("workspace", "workspace_2"),
     })
 
     expect(context.detachedSessionId).toBe("target_detached")
@@ -287,9 +288,9 @@ describe("arc shell machine", () => {
       { type: "RIGHT_PANEL_TOGGLED" },
       {
         type: "SESSION_FOCUSED",
-        paneId: "pane_unused",
+        paneId: arcId("pane", "pane_unused"),
         session: detachedSession,
-        workspaceId: "workspace_2",
+        workspaceId: arcId("workspace", "workspace_2"),
       },
     )
 
@@ -301,16 +302,16 @@ describe("arc shell machine", () => {
     const context = snapshotAfter(
       {
         type: "SESSION_FOCUSED",
-        paneId: "pane_unused",
+        paneId: arcId("pane", "pane_unused"),
         session: detachedSession,
-        workspaceId: "workspace_2",
+        workspaceId: arcId("workspace", "workspace_2"),
       },
       {
         type: "SIDEBAR_SELECTION_CHANGED",
         selection: {
-          workspaceId: "workspace_2",
-          chatId: "chat_2",
-          sessionId: "target_detached",
+          workspaceId: arcId("workspace", "workspace_2"),
+          chatId: arcId("chat", "chat_2"),
+          sessionId: arcId("target", "target_detached"),
         },
       },
     )
@@ -323,19 +324,19 @@ describe("arc shell machine", () => {
     const context = snapshotAfter(
       {
         type: "TARGET_LAUNCH_REQUESTED",
-        paneId: "pane_1",
+        paneId: arcId("pane", "pane_1"),
         provider: "claude",
-        chatId: "chat_1",
+        chatId: arcId("chat", "chat_1"),
       },
-      { type: "TARGET_BOUND", paneId: "pane_1", sessionId: "target_1" },
+      { type: "TARGET_BOUND", paneId: arcId("pane", "pane_1"), sessionId: arcId("target", "target_1") },
       {
         type: "TARGET_LAUNCH_REQUESTED",
-        paneId: "pane_2",
+        paneId: arcId("pane", "pane_2"),
         provider: "codex",
-        chatId: "chat_1",
+        chatId: arcId("chat", "chat_1"),
       },
-      { type: "TARGET_BOUND", paneId: "pane_2", sessionId: "target_2" },
-      { type: "PTY_EXITED", sessionId: "target_2" },
+      { type: "TARGET_BOUND", paneId: arcId("pane", "pane_2"), sessionId: arcId("target", "target_2") },
+      { type: "PTY_EXITED", sessionId: arcId("target", "target_2") },
     )
 
     expect(context.selection.terminalPaneId).toBe("pane_1")
@@ -345,9 +346,9 @@ describe("arc shell machine", () => {
   it("turns a detached resume request into a measuring resume pane", () => {
     const context = snapshotAfter({
       type: "DETACHED_RESUME_REQUESTED",
-      paneId: "pane_resume",
+      paneId: arcId("pane", "pane_resume"),
       session: detachedSession,
-      workspaceId: "workspace_2",
+      workspaceId: arcId("workspace", "workspace_2"),
     })
 
     expect(context.detachedSessionId).toBeUndefined()

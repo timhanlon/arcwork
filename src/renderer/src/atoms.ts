@@ -3,6 +3,7 @@ import * as Atom from "effect/unstable/reactivity/Atom"
 import { AtomRpc } from "effect/unstable/reactivity"
 import { rpc, sharedFlatRpcClient } from "./rpc-client.js"
 import { ArcRpcs } from "../../shared/rpc.js"
+import { arcId, type ChatId } from "../../shared/ids.js"
 import type { Work, WorkStatus } from "../../shared/work.js"
 
 /**
@@ -149,19 +150,19 @@ export const workInvalidationSignalAtom = ArcRpcAtomClient.runtime.atom(
   { initialValue: 0 },
 )
 
-export const chatWorkAtom = Atom.family((chatId: string) =>
+export const chatWorkAtom = Atom.family((chatId: ChatId) =>
   ArcRpcAtomClient.query("ListWorkForChat", { chatId }).pipe(
     Atom.makeRefreshOnSignal(workInvalidationSignalAtom),
   )
 )
 
-export const chatMessagesAtom = Atom.family((chatId: string) =>
+export const chatMessagesAtom = Atom.family((chatId: ChatId) =>
   ArcRpcAtomClient.query("ListChatMessages", { chatId }).pipe(
     Atom.makeRefreshOnSignal(chatMessagesSignalAtom(chatId)),
   )
 )
 
-export const chatActivityAtom = Atom.family((chatId: string) =>
+export const chatActivityAtom = Atom.family((chatId: ChatId) =>
   ArcRpcAtomClient.query("ListChatActivity", { chatId }).pipe(
     Atom.makeRefreshOnSignal(chatActivitySignalAtom(chatId)),
   )
@@ -181,7 +182,7 @@ const ALL_WORK_STATUSES: ReadonlyArray<WorkStatus> = [
   "superseded",
 ]
 
-const loadWorkspaceWork = (chatId: string): Effect.Effect<ReadonlyArray<Work>, unknown> =>
+const loadWorkspaceWork = (chatId: ChatId): Effect.Effect<ReadonlyArray<Work>, unknown> =>
   Effect.tryPromise(async () => {
     const search = await rpc("SearchArc", {
       params: { kinds: ["work"], filters: { chatId, status: ALL_WORK_STATUSES }, limit: 500 },
@@ -192,7 +193,7 @@ const loadWorkspaceWork = (chatId: string): Effect.Effect<ReadonlyArray<Work>, u
     return hydrated.entities.flatMap((entity) => (entity._tag === "work" ? [entity.work] : []))
   })
 
-export const allWorkAtom = Atom.family((chatId: string) =>
+export const allWorkAtom = Atom.family((chatId: ChatId) =>
   Atom.make(loadWorkspaceWork(chatId)).pipe(
     Atom.makeRefreshOnSignal(workInvalidationSignalAtom),
   )
@@ -209,7 +210,8 @@ const workCommentsKey = (id: string, allRevisions: boolean): string =>
 
 export const workCommentsAtom = Atom.family((key: string) => {
   const sep = key.lastIndexOf("::")
-  const id = key.slice(0, sep)
+  // The work id is flattened into the composite family key, so rebrand it here.
+  const id = arcId("work", key.slice(0, sep))
   const allRevisions = key.slice(sep + 2) === "all"
   return ArcRpcAtomClient.query("ListWorkComments", { id, allRevisions }).pipe(
     Atom.makeRefreshOnSignal(workInvalidationSignalAtom),

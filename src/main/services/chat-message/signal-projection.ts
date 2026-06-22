@@ -7,10 +7,11 @@
  */
 import type { HookSignal } from "../../hooks/signals.js"
 import type { RawHookSignalRow } from "../../db/schema.js"
+import type { ChatId } from "../../../shared/ids.js"
 import * as canon from "../../hooks/canonical.js"
 import { isTurnEnd } from "../../hooks/turn-lifecycle.js"
 
-export const chatIdFromSignal = (signal: HookSignal): string | null =>
+export const chatIdFromSignal = (signal: HookSignal): ChatId | null =>
   signal.arcChatSessionId ?? signal.arc.chatId ?? null
 
 export const rawHookSignalFromRow = (row: RawHookSignalRow): HookSignal | null => {

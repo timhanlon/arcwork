@@ -1,4 +1,5 @@
 import { Terminal } from "@xterm/xterm"
+import type { PaneId, TargetId } from "../../../shared/ids.js"
 import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 import type { ArcShellActor } from "../shell/arcShellMachine.js"
@@ -28,25 +29,25 @@ import { createPreBindBuffer, type PreBindBuffer } from "./ptyReplayBuffer.js"
  */
 
 export interface TerminalPaneSpec {
-  readonly id: string
-  readonly sessionId?: string
+  readonly id: PaneId
+  readonly sessionId?: TargetId
   /** `resumeSessionId !== undefined` — measure on first show even with a session. */
   readonly measureOnMount: boolean
 }
 
 export interface TerminalRegistryDeps {
   readonly shellActor: ArcShellActor
-  readonly onMeasured: (paneId: string, cols: number, rows: number) => void
+  readonly onMeasured: (paneId: PaneId, cols: number, rows: number) => void
 }
 
 interface Entry {
-  readonly id: string
+  readonly id: PaneId
   readonly term: Terminal
   readonly fit: FitAddon
   /** The element xterm was `open()`ed on; reparented between slot and parking lot. */
   readonly host: HTMLDivElement
   readonly replay: PreBindBuffer
-  sessionId: string | undefined
+  sessionId: TargetId | undefined
   /** True until the first attach measures + reports the spawn size. */
   pendingMeasure: boolean
   /** True while this entry's host is in the live slot (visible/focused). */
@@ -72,14 +73,14 @@ const getParkingLot = (): HTMLDivElement => {
   return el
 }
 
-const entries = new Map<string, Entry>()
+const entries = new Map<PaneId, Entry>()
 let deps: TerminalRegistryDeps | undefined
 let slot: HTMLElement | null = null
-let activeId: string | null = null
+let activeId: PaneId | null = null
 // Which pane's host currently lives in the slot. Drives idempotent reconciliation
 // in render(): the registry can be poked from either the App-level sync effect or
 // the slot component in any order without double-attaching or losing a host.
-let mountedId: string | null = null
+let mountedId: PaneId | null = null
 
 // Save/restore the scroll position across a `fit()` (which reflows and can shift
 // viewportY). The key distinction: a viewport pinned to the bottom is *following*
@@ -304,7 +305,7 @@ export const sync = (specs: ReadonlyArray<TerminalPaneSpec>, d: TerminalRegistry
 // creation (undefined → real), but a resume/adopt knows its id at creation and may
 // never change it — gating on change would leave that gate shut, so the data
 // handler buffers bytes forever and the terminal stays blank.
-const bind = (entry: Entry, sessionId: string | undefined): void => {
+const bind = (entry: Entry, sessionId: TargetId | undefined): void => {
   if (sessionId === undefined) {
     entry.sessionId = undefined
     return
@@ -329,7 +330,7 @@ export const setSlot = (el: HTMLElement | null): void => {
 }
 
 /** Which pane should be visible — `null` shows none (detached overlay / empty). */
-export const setActive = (paneId: string | null): void => {
+export const setActive = (paneId: PaneId | null): void => {
   if (activeId === paneId) return
   activeId = paneId
   render()

@@ -1,3 +1,4 @@
+import type { TargetId } from "../../../shared/ids.js"
 /**
  * Pre-bind PTY replay buffer (per pane).
  *
@@ -49,12 +50,12 @@ export interface PreBindBuffer {
   /** True once {@link flush} has run; the pane renders live from then on. */
   readonly flushed: boolean
   /** Capture a pre-bind data event (bounded per session). No-op after flush. */
-  capture: (sessionId: string, data: string) => void
+  capture: (sessionId: TargetId, data: string) => void
   /**
    * Bind: write the bytes captured for `sessionId` (in arrival order) via
    * `write`, report recovery/overflow, then retire the buffer. Idempotent.
    */
-  flush: (sessionId: string, write: (data: string) => void) => void
+  flush: (sessionId: TargetId, write: (data: string) => void) => void
 }
 
 export const createPreBindBuffer = (): PreBindBuffer => {

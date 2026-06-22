@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { ChatId, MessageId, TargetId } from "./ids.js"
 import { ChatRequest } from "./chat-request.js"
 import { Provider } from "./provider.js"
 import { ToolCall } from "./tool-call.js"
@@ -23,9 +24,9 @@ export type ChatMessagePayload = typeof ChatMessagePayload.Type
  */
 export const ChatMessage = Schema.Struct({
   _tag: Schema.Literal("ChatMessage"),
-  id: Schema.String,
-  chatId: Schema.String,
-  targetSessionId: Schema.optional(Schema.String),
+  id: MessageId,
+  chatId: ChatId,
+  targetSessionId: Schema.optional(TargetId),
   role: ChatMessageRole,
   /** the target that emitted this row, derived at read from its target session
    * (`target_sessions.provider`) — session metadata, never stored in the payload.

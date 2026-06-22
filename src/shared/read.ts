@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { ChatId } from "./ids.js"
 import { Chat } from "./chat.js"
 import { ChatMessage, ChatMessageRole } from "./chat-message.js"
 import { Work, WorkComment, WorkStatus } from "./work.js"
@@ -53,7 +54,7 @@ export type ArcSearchSort = typeof ArcSearchSort.Type
 export const ArcSearchFilters = Schema.Struct({
   status: Schema.optional(Schema.Array(WorkStatus)),
   labels: Schema.optional(Schema.Array(Schema.String)),
-  chatId: Schema.optional(Schema.String),
+  chatId: Schema.optional(ChatId),
 })
 export type ArcSearchFilters = typeof ArcSearchFilters.Type
 
@@ -90,7 +91,7 @@ export type ArcMessageRowStatus = typeof ArcMessageRowStatus.Type
  * just enough to answer "which tool calls are pending, in what order/time?" from
  * the search result alone — `arc.get(message_…)` hydrates the full row. */
 export const ArcMessageHitMeta = Schema.Struct({
-  chatId: Schema.String,
+  chatId: ChatId,
   role: ChatMessageRole,
   rowKind: ArcMessageRowKind,
   /** the tool invoked, for `tool` rows; absent otherwise */

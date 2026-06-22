@@ -1,24 +1,25 @@
 import { assign, createMachine, emit, enqueueActions, type ActorRefFrom } from "xstate"
+import type { ChatId, PaneId, TargetId, WorkId, WorkspaceId } from "../../../shared/ids.js"
 
 export interface ShellPane {
-  readonly id: string
+  readonly id: PaneId
   readonly provider: string
-  readonly chatId: string
-  readonly sessionId?: string
-  readonly resumeSessionId?: string
+  readonly chatId: ChatId
+  readonly sessionId?: TargetId
+  readonly resumeSessionId?: TargetId
 }
 
 /** A tree pick in the left product surface — what the sidebar emits on select. */
 export interface ShellTreeSelection {
-  readonly workspaceId?: string
-  readonly chatId?: string
-  readonly sessionId?: string
+  readonly workspaceId?: WorkspaceId
+  readonly chatId?: ChatId
+  readonly sessionId?: TargetId
 }
 
 export interface ShellSessionRef {
-  readonly id: string
+  readonly id: TargetId
   readonly provider: string
-  readonly chatId: string
+  readonly chatId: ChatId
   readonly attached: boolean
 }
 
@@ -43,7 +44,7 @@ export type CenterSurface =
 export type RightSurface =
   | { readonly kind: "terminal" }
   | { readonly kind: "git"; readonly path?: string }
-  | { readonly kind: "work"; readonly workId: string }
+  | { readonly kind: "work"; readonly workId: WorkId }
 
 // The one verb for moving a surface into a region: `open(target, pane)`. The
 // target is the *what* (a tagged surface), the pane the *where* — replacing the
@@ -55,7 +56,7 @@ export type RightSurface =
 export type Pane = "center" | "right"
 export type OpenTarget =
   | { readonly kind: "chat" }
-  | { readonly kind: "work"; readonly workId?: string }
+  | { readonly kind: "work"; readonly workId?: WorkId }
   | { readonly kind: "git"; readonly path?: string }
   | { readonly kind: "terminal" }
 
@@ -73,13 +74,13 @@ export interface ShellLayout {
 // selected item rides this map (not the layout surface) for the same reason the
 // git path does: it's a product pick, and it must survive a surface switch.
 export interface ShellSelection {
-  readonly workspaceId?: string
-  readonly chatId?: string
-  readonly sessionId?: string
-  readonly terminalPaneId?: string
-  readonly chatByWorkspace: Readonly<Record<string, string>>
-  readonly gitPathByWorkspace: Readonly<Record<string, string>>
-  readonly workByWorkspace: Readonly<Record<string, string>>
+  readonly workspaceId?: WorkspaceId
+  readonly chatId?: ChatId
+  readonly sessionId?: TargetId
+  readonly terminalPaneId?: PaneId
+  readonly chatByWorkspace: Readonly<Record<WorkspaceId, ChatId>>
+  readonly gitPathByWorkspace: Readonly<Record<WorkspaceId, string>>
+  readonly workByWorkspace: Readonly<Record<WorkspaceId, WorkId>>
 }
 
 export interface ArcShellContext {
@@ -89,7 +90,7 @@ export interface ArcShellContext {
   readonly layout: ShellLayout
   readonly selection: ShellSelection
   readonly panes: ReadonlyArray<ShellPane>
-  readonly detachedSessionId?: string
+  readonly detachedSessionId?: TargetId
 }
 
 // One-shot imperative signals the shell fires alongside its state transitions.
@@ -109,8 +110,8 @@ export type ArcShellEmitted =
 export type ArcShellEvent =
   | {
       readonly type: "CHAT_SELECTED"
-      readonly workspaceId: string
-      readonly chatId: string
+      readonly workspaceId: WorkspaceId
+      readonly chatId: ChatId
     }
   | {
       readonly type: "SIDEBAR_SELECTION_CHANGED"
@@ -119,40 +120,40 @@ export type ArcShellEvent =
   | { readonly type: "SURFACE_OPENED"; readonly target: OpenTarget; readonly pane: Pane }
   | {
       readonly type: "TARGET_LAUNCH_REQUESTED"
-      readonly paneId: string
+      readonly paneId: PaneId
       readonly provider: string
-      readonly chatId: string
-      readonly workspaceId?: string
+      readonly chatId: ChatId
+      readonly workspaceId?: WorkspaceId
     }
   | {
       readonly type: "TARGET_BOUND"
-      readonly paneId: string
-      readonly sessionId: string
+      readonly paneId: PaneId
+      readonly sessionId: TargetId
     }
   | {
       readonly type: "SESSION_FOCUSED"
-      readonly paneId: string
+      readonly paneId: PaneId
       readonly session: ShellSessionRef
-      readonly workspaceId?: string
+      readonly workspaceId?: WorkspaceId
     }
   | {
       readonly type: "TARGET_ADOPTED"
-      readonly paneId: string
+      readonly paneId: PaneId
       readonly session: ShellSessionRef
     }
   | {
       readonly type: "DETACHED_RESUME_REQUESTED"
-      readonly paneId: string
+      readonly paneId: PaneId
       readonly session: ShellSessionRef
-      readonly workspaceId?: string
+      readonly workspaceId?: WorkspaceId
     }
   | {
       readonly type: "PTY_EXITED"
-      readonly sessionId: string
+      readonly sessionId: TargetId
     }
   | {
       readonly type: "SESSION_STOP_REQUESTED"
-      readonly sessionId: string
+      readonly sessionId: TargetId
     }
   | { readonly type: "COMPOSER_FOCUS_REQUESTED" }
   | { readonly type: "CHAT_JUMP_TO_BOTTOM_REQUESTED" }
@@ -239,8 +240,8 @@ const openSurface = (
 
 const selectChat = (
   context: ArcShellContext,
-  workspaceId: string,
-  chatId: string,
+  workspaceId: WorkspaceId,
+  chatId: ChatId,
 ): ArcShellContext => ({
   ...context,
   selection: {
@@ -255,8 +256,8 @@ const selectChat = (
 
 const closePaneForSession = (
   context: ArcShellContext,
-  sessionId: string,
-): { readonly panes: ReadonlyArray<ShellPane>; readonly terminalPaneId?: string } => {
+  sessionId: TargetId,
+): { readonly panes: ReadonlyArray<ShellPane>; readonly terminalPaneId?: PaneId } => {
   const closing = context.panes.find((pane) => pane.sessionId === sessionId)
   if (!closing) {
     return { panes: context.panes, terminalPaneId: context.selection.terminalPaneId }

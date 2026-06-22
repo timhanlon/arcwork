@@ -1,6 +1,7 @@
 import type { Workspace } from "../../../shared/workspace.js"
 import type { Chat } from "../../../shared/chat.js"
 import type { TargetSession } from "../../../shared/instance.js"
+import type { TargetId } from "../../../shared/ids.js"
 import type { LiveTargetActivity } from "../../../shared/live-target-state.js"
 import type { SessionDisplayStatus } from "./row-styles.js"
 
@@ -85,8 +86,8 @@ export function orderedPendingSessionIds(
   chats: ReadonlyArray<Chat>,
   sessions: ReadonlyArray<TargetSession>,
   pendingSessionIds: ReadonlySet<string>,
-): ReadonlyArray<string> {
-  const ordered: Array<string> = []
+): ReadonlyArray<TargetId> {
+  const ordered: Array<TargetId> = []
   for (const { chats: chatGroup, sessionsByChat } of groupSidebarData(workspaces, chats, sessions)) {
     for (const chat of chatGroup) {
       for (const session of sessionsByChat.get(chat.id) ?? []) {

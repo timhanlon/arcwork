@@ -1,4 +1,5 @@
 import { Autocomplete } from "@base-ui/react/autocomplete"
+import type { ChatId, WorkId, WorkspaceId } from "../../../shared/ids.js"
 import { Dialog } from "@base-ui/react/dialog"
 import { Toggle } from "@base-ui/react/toggle"
 import { ToggleGroup } from "@base-ui/react/toggle-group"
@@ -19,8 +20,8 @@ import {
 
 export interface ArcSearchPanelProps {
   readonly chats: ReadonlyArray<Chat>
-  readonly currentChatId?: string
-  readonly onOpenChat: (workspaceId: string, chatId: string) => void
+  readonly currentChatId?: ChatId
+  readonly onOpenChat: (workspaceId: WorkspaceId, chatId: ChatId) => void
   readonly onClose: () => void
 }
 
@@ -40,7 +41,7 @@ export function ArcSearchPanel({
   onClose,
 }: ArcSearchPanelProps): JSX.Element {
   const { open } = useShellActions()
-  const onOpenWork = (workId: string): void => open({ kind: "work", workId }, "right")
+  const onOpenWork = (workId: WorkId): void => open({ kind: "work", workId }, "right")
   const [query, setQuery] = useState("")
   const [kinds, setKinds] = useState<ReadonlySet<ArcSearchKind>>(() => new Set(["work"]))
   const [hits, setHits] = useState<ReadonlyArray<ArcSearchHit>>([])

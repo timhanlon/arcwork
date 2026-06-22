@@ -1,4 +1,5 @@
 import type { JSX, ReactNode } from "react"
+import { arcId, type WorkId } from "../../../../shared/ids.js"
 import type { WorkStatus } from "../../../../shared/work.js"
 import { isWorkPriority, isWorkStatus } from "../../../../shared/work.js"
 import { PriorityChip } from "../../work/work-priority-controls.js"
@@ -59,10 +60,10 @@ const OpenButton = ({
   onOpenWork,
 }: {
   readonly id?: string | null
-  readonly onOpenWork?: (workId: string) => void
+  readonly onOpenWork?: (workId: WorkId) => void
 }): JSX.Element | null =>
   id && onOpenWork ? (
-    <Button variant="ghost" size="sm" className="flex-none" onClick={() => onOpenWork(id)}>
+    <Button variant="ghost" size="sm" className="flex-none" onClick={() => onOpenWork(arcId("work", id))}>
       open
     </Button>
   ) : null
@@ -98,7 +99,7 @@ const WorkLine = ({
   onOpenWork,
 }: {
   readonly work: Record<string, unknown>
-  readonly onOpenWork?: (workId: string) => void
+  readonly onOpenWork?: (workId: WorkId) => void
 }): JSX.Element => {
   const title = str(work["title"]) ?? "untitled"
   const status = work["status"]
@@ -113,7 +114,7 @@ const WorkLine = ({
         <Button
           variant="link"
           title={title}
-          onClick={() => onOpenWork(id)}
+          onClick={() => onOpenWork(arcId("work", id))}
           className={titleCls}
         >
           {title}
@@ -177,7 +178,7 @@ const EntityLine = ({
   onOpenWork,
 }: {
   readonly entity: Record<string, unknown>
-  readonly onOpenWork?: (workId: string) => void
+  readonly onOpenWork?: (workId: WorkId) => void
 }): JSX.Element | null => {
   switch (str(entity["_tag"])) {
     case "work": {
@@ -234,7 +235,7 @@ const GetEntities = ({
 }: {
   readonly entities: ReadonlyArray<unknown>
   readonly notFound: ReadonlyArray<string>
-  readonly onOpenWork?: (workId: string) => void
+  readonly onOpenWork?: (workId: WorkId) => void
 }): JSX.Element => {
   const cards = entities.map(obj)
   return (
@@ -263,7 +264,7 @@ const GetEntities = ({
 
 // ── input dispatch ────────────────────────────────────────────────────────────
 
-const refField = (a: Record<string, unknown>, onOpenWork?: (workId: string) => void): JSX.Element | null => {
+const refField = (a: Record<string, unknown>, onOpenWork?: (workId: WorkId) => void): JSX.Element | null => {
   const ref = str(a["workRefId"]) ?? str(a["ref"])
   const refs = Array.isArray(a["refs"]) ? (a["refs"] as ReadonlyArray<unknown>).map(str).filter(Boolean) : []
   if (ref) return <OpenButton id={ref} onOpenWork={onOpenWork} />
@@ -329,7 +330,7 @@ const WorkUpdateArgs = ({ a }: { readonly a: Record<string, unknown> }): JSX.Ele
 export function arcToolBody(
   toolName: string,
   args: unknown,
-  onOpenWork?: (workId: string) => void,
+  onOpenWork?: (workId: WorkId) => void,
 ): JSX.Element | null {
   const a = obj(args)
   if (!a) return null
@@ -456,7 +457,7 @@ export function arcResultSupersedesInput(output: string): boolean {
   return parsed["entities"].length > 0 || notFound.length > 0
 }
 
-export function arcToolOutput(output: string, onOpenWork?: (workId: string) => void): JSX.Element | null {
+export function arcToolOutput(output: string, onOpenWork?: (workId: WorkId) => void): JSX.Element | null {
   const work = resultWork(output)
   if (work) return <WorkLine work={work} onOpenWork={onOpenWork} />
   const parsed = obj(tryParse(output))

@@ -7,11 +7,12 @@ import {
   type ShellPane,
 } from "../src/renderer/src/shell/arcShellMachine.js"
 import { unadoptedSessions } from "../src/renderer/src/shell/sessionAdoption.js"
+import { arcId, type PaneId, type TargetId } from "../src/shared/ids.js"
 
-const session = (over: Partial<TargetSession> & { readonly id: string }): TargetSession => ({
+const session = (over: Partial<TargetSession> & { readonly id: TargetId }): TargetSession => ({
   _tag: "TargetSession",
   provider: "cursor",
-  chatId: "chat_a",
+  chatId: arcId("chat", "chat_a"),
   cwd: "/work",
   attached: true,
   state: "running",
@@ -19,61 +20,61 @@ const session = (over: Partial<TargetSession> & { readonly id: string }): Target
   ...over,
 })
 
-const pane = (over: Partial<ShellPane> & { readonly id: string }): ShellPane => ({
+const pane = (over: Partial<ShellPane> & { readonly id: PaneId }): ShellPane => ({
   provider: "cursor",
-  chatId: "chat_a",
+  chatId: arcId("chat", "chat_a"),
   ...over,
 })
 
 describe("unadoptedSessions", () => {
   it("adopts an attached session with no pane (an MCP/handoff launch)", () => {
-    const s = session({ id: "target_mcp" })
+    const s = session({ id: arcId("target", "target_mcp") })
     expect(unadoptedSessions([s], [])).toEqual([s])
   })
 
   it("skips a session already bound to a pane", () => {
-    const s = session({ id: "target_bound" })
-    const panes = [pane({ id: "pane_1", sessionId: "target_bound" })]
+    const s = session({ id: arcId("target", "target_bound") })
+    const panes = [pane({ id: arcId("pane", "pane_1"), sessionId: arcId("target", "target_bound") })]
     expect(unadoptedSessions([s], panes)).toEqual([])
   })
 
   it("skips a manual launch mid-bind: an unbound pane for the same (provider, chat)", () => {
     // The session is broadcast the instant launch writes the store, which can
     // beat the launch rpc binding its pane — the pane is still unbound here.
-    const s = session({ id: "target_manual", provider: "claude" })
-    const panes = [pane({ id: "pane_2", provider: "claude", chatId: "chat_a" })]
+    const s = session({ id: arcId("target", "target_manual"), provider: "claude" })
+    const panes = [pane({ id: arcId("pane", "pane_2"), provider: "claude", chatId: arcId("chat", "chat_a") })]
     expect(unadoptedSessions([s], panes)).toEqual([])
   })
 
   it("still adopts when an unbound pane is for a different (provider, chat)", () => {
-    const s = session({ id: "target_mcp", provider: "cursor", chatId: "chat_a" })
-    const panes = [pane({ id: "pane_3", provider: "claude", chatId: "chat_b" })]
+    const s = session({ id: arcId("target", "target_mcp"), provider: "cursor", chatId: arcId("chat", "chat_a") })
+    const panes = [pane({ id: arcId("pane", "pane_3"), provider: "claude", chatId: arcId("chat", "chat_b") })]
     expect(unadoptedSessions([s], panes)).toEqual([s])
   })
 
   it("skips detached and exited sessions (resume affordance, not a live pane)", () => {
-    const detached = session({ id: "target_detached", attached: false })
-    const exited = session({ id: "target_exited", state: "exited" })
+    const detached = session({ id: arcId("target", "target_detached"), attached: false })
+    const exited = session({ id: arcId("target", "target_exited"), state: "exited" })
     expect(unadoptedSessions([detached, exited], [])).toEqual([])
   })
 })
 
 describe("arcShellMachine TARGET_ADOPTED", () => {
-  const adopt = (paneId: string, id: string, over?: Partial<ShellPane>) =>
+  const adopt = (paneId: PaneId, id: TargetId, over?: Partial<ShellPane>) =>
     ({
       type: "TARGET_ADOPTED" as const,
       paneId,
       session: {
         id,
         provider: over?.provider ?? "cursor",
-        chatId: over?.chatId ?? "chat_a",
+        chatId: over?.chatId ?? arcId("chat", "chat_a"),
         attached: true,
       },
     })
 
   it("mounts a pane and makes it active when the terminal region is empty", () => {
     const actor = createActor(arcShellMachine).start()
-    actor.send(adopt("pane_1", "target_mcp"))
+    actor.send(adopt(arcId("pane", "pane_1"), arcId("target", "target_mcp")))
     const { panes, selection } = actor.getSnapshot().context
     expect(panes).toEqual([
       { id: "pane_1", provider: "cursor", chatId: "chat_a", sessionId: "target_mcp" },
@@ -89,7 +90,7 @@ describe("arcShellMachine TARGET_ADOPTED", () => {
     for (const type of ["focusComposer", "focusTerminal", "scrollChatToBottom"] as const) {
       actor.on(type, (event) => emitted.push(event.type))
     }
-    actor.send(adopt("pane_1", "target_mcp"))
+    actor.send(adopt(arcId("pane", "pane_1"), arcId("target", "target_mcp")))
     const ctx = actor.getSnapshot().context
     expect(emitted).toEqual([])
     expect(ctx.selection.chatId).toBeUndefined()
@@ -99,8 +100,8 @@ describe("arcShellMachine TARGET_ADOPTED", () => {
 
   it("mounts later adoptions in the background without stealing the active pane", () => {
     const actor = createActor(arcShellMachine).start()
-    actor.send(adopt("pane_1", "target_first"))
-    actor.send(adopt("pane_2", "target_second"))
+    actor.send(adopt(arcId("pane", "pane_1"), arcId("target", "target_first")))
+    actor.send(adopt(arcId("pane", "pane_2"), arcId("target", "target_second")))
     const { panes, selection } = actor.getSnapshot().context
     expect(panes.map((p) => p.sessionId)).toEqual(["target_first", "target_second"])
     expect(selection.terminalPaneId).toBe("pane_1")
@@ -108,8 +109,8 @@ describe("arcShellMachine TARGET_ADOPTED", () => {
 
   it("is idempotent: re-adopting a bound session is a no-op", () => {
     const actor = createActor(arcShellMachine).start()
-    actor.send(adopt("pane_1", "target_mcp"))
-    actor.send(adopt("pane_2", "target_mcp"))
+    actor.send(adopt(arcId("pane", "pane_1"), arcId("target", "target_mcp")))
+    actor.send(adopt(arcId("pane", "pane_2"), arcId("target", "target_mcp")))
     expect(actor.getSnapshot().context.panes).toHaveLength(1)
   })
 })

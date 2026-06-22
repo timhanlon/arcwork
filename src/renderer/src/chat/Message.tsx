@@ -1,4 +1,5 @@
 import { memo } from "react"
+import type { TargetId } from "../../../shared/ids.js"
 import type { JSX } from "react"
 import type { ChatMessage } from "../../../shared/chat-message.js"
 import { parseRecap } from "../../../shared/recap.js"
@@ -75,7 +76,7 @@ function MessageBody({
   onFocusSession,
 }: {
   readonly message: ChatMessage
-  readonly onFocusSession?: (sessionId: string) => void
+  readonly onFocusSession?: (sessionId: TargetId) => void
 }): JSX.Element {
   const payload = message.payload
   if (payload?.kind === "question") {
@@ -131,7 +132,7 @@ export const Message = memo(function Message({
   /** resolved target label (provider, disambiguated by session) for attribution */
   readonly target?: string
   /** focus the live target session waiting on a pending question */
-  readonly onFocusSession?: (sessionId: string) => void
+  readonly onFocusSession?: (sessionId: TargetId) => void
 }): JSX.Element {
   const cls = [ITEM, ROLE_CARD[message.role], message.status === "streaming" ? "opacity-[0.92]" : ""]
     .filter(Boolean)

@@ -9,6 +9,7 @@ import { WorkStoreLive } from "../src/main/work/store.js"
 import { ReadService, ReadServiceLive } from "../src/main/read/service.js"
 import type { ChatMessage } from "../src/shared/chat-message.js"
 import type { WorkProvenance } from "../src/shared/work.js"
+import { arcId, type ChatId, type MessageId, type WorkspaceId } from "../src/shared/ids.js"
 
 /**
  * `ReadService.search` / `.get` — the v1 core read surface
@@ -24,14 +25,14 @@ import type { WorkProvenance } from "../src/shared/work.js"
  * heavy hook-projection layer.
  */
 
-const prov = (chatId?: string): WorkProvenance => ({ source: "mcp", chatId })
+const prov = (chatId?: ChatId): WorkProvenance => ({ source: "mcp", chatId })
 
 // Per-test timeline rows the ChatMessageService stub serves; reset by each
 // message test before `run`. Non-message tests leave it empty (no message hits).
 let messageFixtures: ReadonlyArray<ChatMessage> = []
 
 const message = (
-  over: Partial<ChatMessage> & { readonly id: string; readonly chatId: string; readonly role: ChatMessage["role"] },
+  over: Partial<ChatMessage> & { readonly id: MessageId; readonly chatId: ChatId; readonly role: ChatMessage["role"] },
 ): ChatMessage => ({
   _tag: "ChatMessage",
   body: "",
@@ -70,7 +71,7 @@ const run = <A, E>(
   return runtime.runPromise(program).finally(() => runtime.dispose())
 }
 
-const insertWorkspace = (id: string, name = id) =>
+const insertWorkspace = (id: WorkspaceId, name: string = id) =>
   Effect.flatMap(ArcStore, (db) =>
     db.upsertWorkspace({
       id,
@@ -88,8 +89,8 @@ describe("ReadService.search", () => {
         const work = yield* WorkService
         const chats = yield* ChatService
         const read = yield* ReadService
-        yield* insertWorkspace("ws_1")
-        const chat = yield* chats.create("ws_1", "design chat")
+        yield* insertWorkspace(arcId("workspace", "ws_1"))
+        const chat = yield* chats.create(arcId("workspace", "ws_1"), "design chat")
         yield* work.create({ title: "auth auth auth refactor", body: "the auth saga" }, prov(chat.id))
         yield* work.create({ title: "unrelated", body: "auth mentioned once here" }, prov(chat.id))
         yield* work.create({ title: "billing", body: "nothing to see" }, prov(chat.id))
@@ -113,8 +114,8 @@ describe("ReadService.search", () => {
         const work = yield* WorkService
         const chats = yield* ChatService
         const read = yield* ReadService
-        yield* insertWorkspace("ws_1")
-        const chat = yield* chats.create("ws_1", "design chat")
+        yield* insertWorkspace(arcId("workspace", "ws_1"))
+        const chat = yield* chats.create(arcId("workspace", "ws_1"), "design chat")
         yield* work.create({ title: "open item", body: "" }, prov(chat.id))
         yield* work.create({ title: "finished item", body: "", status: "done" }, prov(chat.id))
         const browse = yield* read.search({ filters: { chatId: chat.id } })
@@ -138,8 +139,8 @@ describe("ReadService.search", () => {
         const work = yield* WorkService
         const chats = yield* ChatService
         const read = yield* ReadService
-        yield* insertWorkspace("ws_1")
-        const chat = yield* chats.create("ws_1", "design chat")
+        yield* insertWorkspace(arcId("workspace", "ws_1"))
+        const chat = yield* chats.create(arcId("workspace", "ws_1"), "design chat")
         const w = yield* work.create({ title: "commented then closed", body: "" }, prov(chat.id))
         yield* work.comment(w.id, { body: "a review note while still open" }, prov(chat.id))
         yield* work.updateStatus(w.id, "done", prov(chat.id))
@@ -161,8 +162,8 @@ describe("ReadService.search", () => {
         const work = yield* WorkService
         const chats = yield* ChatService
         const read = yield* ReadService
-        yield* insertWorkspace("ws_1", "ws")
-        const chat = yield* chats.create("ws_1", "design chat")
+        yield* insertWorkspace(arcId("workspace", "ws_1"), "ws")
+        const chat = yield* chats.create(arcId("workspace", "ws_1"), "design chat")
         yield* work.create({ title: "mcp work", body: "", labels: ["mcp"] }, prov(chat.id))
         yield* work.create({ title: "other work", body: "", labels: ["ui"] }, prov())
         const byLabel = yield* read.search({ filters: { chatId: chat.id, labels: ["mcp"] } })
@@ -185,11 +186,11 @@ describe("ReadService.search", () => {
         const work = yield* WorkService
         const chats = yield* ChatService
         const read = yield* ReadService
-        yield* insertWorkspace("ws_1", "repo-one")
-        yield* insertWorkspace("ws_2", "repo-two")
-        const chatA = yield* chats.create("ws_1", "repo one A")
-        const chatB = yield* chats.create("ws_1", "repo one B")
-        const chatOther = yield* chats.create("ws_2", "repo two")
+        yield* insertWorkspace(arcId("workspace", "ws_1"), "repo-one")
+        yield* insertWorkspace(arcId("workspace", "ws_2"), "repo-two")
+        const chatA = yield* chats.create(arcId("workspace", "ws_1"), "repo one A")
+        const chatB = yield* chats.create(arcId("workspace", "ws_1"), "repo one B")
+        const chatOther = yield* chats.create(arcId("workspace", "ws_2"), "repo two")
         yield* work.create({ title: "same workspace from A", body: "needle" }, prov(chatA.id))
         yield* work.create({ title: "same workspace from B", body: "needle" }, prov(chatB.id))
         yield* work.create({ title: "other workspace", body: "needle" }, prov(chatOther.id))
@@ -213,8 +214,8 @@ describe("ReadService.search", () => {
         const work = yield* WorkService
         const chats = yield* ChatService
         const read = yield* ReadService
-        yield* insertWorkspace("ws_1")
-        const chat = yield* chats.create("ws_1", "design chat")
+        yield* insertWorkspace(arcId("workspace", "ws_1"))
+        const chat = yield* chats.create(arcId("workspace", "ws_1"), "design chat")
         // Distinct scores via term repetition → deterministic relevance order.
         yield* work.create({ title: "x x x x", body: "" }, prov(chat.id))
         yield* work.create({ title: "x x x", body: "" }, prov(chat.id))
@@ -248,8 +249,8 @@ describe("ReadService.search", () => {
         const work = yield* WorkService
         const chats = yield* ChatService
         const read = yield* ReadService
-        yield* insertWorkspace("ws_1")
-        const chat = yield* chats.create("ws_1", "design chat")
+        yield* insertWorkspace(arcId("workspace", "ws_1"))
+        const chat = yield* chats.create(arcId("workspace", "ws_1"), "design chat")
         const w = yield* work.create({ title: "planner", body: "ordinary body" }, prov(chat.id))
         yield* work.comment(w.id, { body: "handoff summary mentions flamelock" }, prov(chat.id))
         const result = yield* read.search({ query: "flamelock", filters: { chatId: chat.id } })
@@ -274,13 +275,13 @@ describe("ReadService.get", () => {
         const chats = yield* ChatService
         const read = yield* ReadService
         yield* db.upsertWorkspace({
-          id: "ws_1",
+          id: arcId("workspace", "ws_1"),
           path: "/tmp/ws",
           name: "ws",
           createdAt: "2026-06-08T00:00:00.000Z",
           lastOpenedAt: "2026-06-08T00:00:00.000Z",
         })
-        const chat = yield* chats.create("ws_1", "a chat")
+        const chat = yield* chats.create(arcId("workspace", "ws_1"), "a chat")
         const w = yield* work.create({ title: "hydrate me", body: "body text" }, prov())
         yield* work.comment(w.id, { body: "a remark" }, prov())
         const got = yield* read.get({ refs: [w.id, chat.id, "comment_unknown", "work_missing"] })
@@ -318,7 +319,7 @@ describe("ReadService.get", () => {
 
   it("hydrates a message_… ref in full and routes an unknown message id to notFound", async () => {
     messageFixtures = [
-      message({ id: "message_real", chatId: "chat_a", role: "assistant", body: "the full body" }),
+      message({ id: arcId("message", "message_real"), chatId: arcId("chat", "chat_a"), role: "assistant", body: "the full body" }),
     ]
     const result = await run(
       Effect.gen(function* () {
@@ -337,20 +338,20 @@ describe("ReadService.get", () => {
 describe("ReadService.search — message timeline", () => {
   it("returns thin rows in render order with typed rowKind/status, scoped to the chat", async () => {
     messageFixtures = [
-      message({ id: "message_user1", chatId: "chat_a", role: "user", body: "please run the tool" }),
+      message({ id: arcId("message", "message_user1"), chatId: arcId("chat", "chat_a"), role: "user", body: "please run the tool" }),
       message({
-        id: "message_tool1",
-        chatId: "chat_a",
+        id: arcId("message", "message_tool1"),
+        chatId: arcId("chat", "chat_a"),
         role: "tool",
         payload: { kind: "tool", state: "input-available", toolName: "mcp__codex__codex", args: { p: 1 } },
       }),
-      message({ id: "message_asst1", chatId: "chat_a", role: "assistant", body: "done" }),
-      message({ id: "message_other", chatId: "chat_b", role: "user", body: "a different chat" }),
+      message({ id: arcId("message", "message_asst1"), chatId: arcId("chat", "chat_a"), role: "assistant", body: "done" }),
+      message({ id: arcId("message", "message_other"), chatId: arcId("chat", "chat_b"), role: "user", body: "a different chat" }),
     ]
     const hits = await run(
       Effect.gen(function* () {
         const read = yield* ReadService
-        const r = yield* read.search({ kinds: ["message"], filters: { chatId: "chat_a" } })
+        const r = yield* read.search({ kinds: ["message"], filters: { chatId: arcId("chat", "chat_a") } })
         return r.hits
       }),
     )
@@ -369,7 +370,7 @@ describe("ReadService.search — message timeline", () => {
   })
 
   it("contributes no message hits without a chatId filter", async () => {
-    messageFixtures = [message({ id: "message_x", chatId: "chat_a", role: "user", body: "hi" })]
+    messageFixtures = [message({ id: arcId("message", "message_x"), chatId: arcId("chat", "chat_a"), role: "user", body: "hi" })]
     const hits = await run(
       Effect.gen(function* () {
         const read = yield* ReadService
@@ -383,14 +384,14 @@ describe("ReadService.search — message timeline", () => {
 
   it("keeps absolute ordinal when a query narrows the timeline", async () => {
     messageFixtures = [
-      message({ id: "message_0", chatId: "chat_a", role: "user", body: "alpha" }),
-      message({ id: "message_1", chatId: "chat_a", role: "assistant", body: "beta needle" }),
-      message({ id: "message_2", chatId: "chat_a", role: "assistant", body: "gamma" }),
+      message({ id: arcId("message", "message_0"), chatId: arcId("chat", "chat_a"), role: "user", body: "alpha" }),
+      message({ id: arcId("message", "message_1"), chatId: arcId("chat", "chat_a"), role: "assistant", body: "beta needle" }),
+      message({ id: arcId("message", "message_2"), chatId: arcId("chat", "chat_a"), role: "assistant", body: "gamma" }),
     ]
     const hits = await run(
       Effect.gen(function* () {
         const read = yield* ReadService
-        const r = yield* read.search({ kinds: ["message"], filters: { chatId: "chat_a" }, query: "needle" })
+        const r = yield* read.search({ kinds: ["message"], filters: { chatId: arcId("chat", "chat_a") }, query: "needle" })
         return r.hits
       }),
     )

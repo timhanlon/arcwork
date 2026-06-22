@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { ChatId, TargetId } from "./ids.js"
 
 /**
  * Structured target-originated input requests, carried on a `request`-role
@@ -73,8 +74,8 @@ export type ChatRequest = typeof ChatRequest.Type
  * focuses its target, where the provider's own picker UI takes the answer.
  */
 export const PendingRequest = Schema.Struct({
-  chatId: Schema.String,
-  targetSessionId: Schema.String,
+  chatId: ChatId,
+  targetSessionId: TargetId,
   kind: Schema.Literals(["permission", "question"]),
 })
 export type PendingRequest = typeof PendingRequest.Type

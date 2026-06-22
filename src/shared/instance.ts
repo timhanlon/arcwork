@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { ChatId, RunId, TargetId } from "./ids.js"
 
 /**
  * Layer 3 — Instance (the running/recorded thing). Arc-owned ids are TypeIDs:
@@ -22,7 +23,7 @@ export type TargetState = typeof TargetState.Type
 
 export const Run = Schema.Struct({
   _tag: Schema.Literal("Run"),
-  id: Schema.String, // TypeID prefix: run
+  id: RunId,
   provider: Schema.String,
   preset: Schema.optional(Schema.String),
   cwd: Schema.String,
@@ -32,10 +33,10 @@ export type Run = typeof Run.Type
 
 export const TargetSession = Schema.Struct({
   _tag: Schema.Literal("TargetSession"),
-  id: Schema.String, // TypeID prefix: target
+  id: TargetId,
   provider: Schema.String,
   preset: Schema.optional(Schema.String),
-  chatId: Schema.String, // the chat this session belongs to
+  chatId: ChatId, // the chat this session belongs to
   cwd: Schema.String, // worktree root — the instance binding
   /** discovered after launch via the SessionStart hook; Arc-owned session
    * metadata persisted to `.arc/state/` — valuable for resume, debugging, and

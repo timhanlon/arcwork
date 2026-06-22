@@ -1,4 +1,5 @@
 import { type JSX, useEffect, useRef } from "react"
+import type { PaneId } from "../../../shared/ids.js"
 import { setActive, setSlot } from "./terminalRegistry.js"
 
 /**
@@ -9,7 +10,7 @@ import { setActive, setSlot } from "./terminalRegistry.js"
  * it registers the slot element; whenever the active pane changes it tells the
  * registry, which reparents the right host in and parks the previous one.
  */
-export function TerminalSurface({ activePaneId }: { activePaneId?: string }): JSX.Element {
+export function TerminalSurface({ activePaneId }: { activePaneId?: PaneId }): JSX.Element {
   const slotRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {

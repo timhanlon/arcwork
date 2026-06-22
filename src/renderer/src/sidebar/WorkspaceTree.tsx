@@ -1,4 +1,5 @@
 import { type JSX, useMemo, useState } from "react"
+import type { ChatId, TargetId, WorkId, WorkspaceId } from "../../../shared/ids.js"
 import { Collapsible } from "@base-ui/react/collapsible"
 import { Button } from "@base-ui/react/button"
 import {
@@ -50,10 +51,10 @@ export interface ChatScopedWork {
 }
 
 export interface WorkspaceTreeSelection {
-  readonly workspaceId?: string
-  readonly chatId?: string
-  readonly sessionId?: string
-  readonly workId?: string
+  readonly workspaceId?: WorkspaceId
+  readonly chatId?: ChatId
+  readonly sessionId?: TargetId
+  readonly workId?: WorkId
 }
 
 export interface WorkspaceTreeProps {
@@ -62,19 +63,19 @@ export interface WorkspaceTreeProps {
   readonly sessions: ReadonlyArray<TargetSession>
   /** chat id → work authored in or mentioned by that chat */
   readonly workByChat?: ReadonlyMap<string, ReadonlyArray<ChatScopedWork>>
-  readonly activeSessionId?: string
+  readonly activeSessionId?: TargetId
   readonly liveStateById?: LiveStateById
   readonly pendingSessionIds?: ReadonlySet<string>
   readonly requestSlots?: ReadonlyMap<string, number>
   readonly selectedWorkspaceId?: string
   readonly selectedChatId?: string
   readonly selectedWorkId?: string
-  readonly onSelectChat: (workspaceId: string, chatId: string) => void
-  readonly onSelectSession: (provider: string, chatId: string, sessionId: string) => void
-  readonly onSelectWork?: (workspaceId: string, chatId: string, workId: string) => void
-  readonly onStopSession?: (sessionId: string) => void
-  readonly onCreateChat: (workspaceId: string) => void
-  readonly onRenameChat?: (chatId: string, title: string) => Promise<void>
+  readonly onSelectChat: (workspaceId: WorkspaceId, chatId: ChatId) => void
+  readonly onSelectSession: (provider: string, chatId: ChatId, sessionId: TargetId) => void
+  readonly onSelectWork?: (workspaceId: WorkspaceId, chatId: ChatId, workId: WorkId) => void
+  readonly onStopSession?: (sessionId: TargetId) => void
+  readonly onCreateChat: (workspaceId: WorkspaceId) => void
+  readonly onRenameChat?: (chatId: ChatId, title: string) => Promise<void>
   readonly onSelectionChange?: (selection: WorkspaceTreeSelection) => void
 }
 
@@ -96,9 +97,9 @@ export function WorkspaceTree(props: WorkspaceTreeProps): JSX.Element {
   )
   const [collapsedChats, setCollapsedChats] = useState<ReadonlySet<string>>(() => new Set())
 
-  const isChatOpen = (chatId: string): boolean => !collapsedChats.has(chatId)
+  const isChatOpen = (chatId: ChatId): boolean => !collapsedChats.has(chatId)
 
-  const setChatOpen = (chatId: string, open: boolean): void => {
+  const setChatOpen = (chatId: ChatId, open: boolean): void => {
     setCollapsedChats((prev) => {
       const next = new Set(prev)
       if (open) next.delete(chatId)
@@ -118,26 +119,26 @@ export function WorkspaceTree(props: WorkspaceTreeProps): JSX.Element {
     })
   }
 
-  const selectWorkspace = (workspaceId: string): void => {
+  const selectWorkspace = (workspaceId: WorkspaceId): void => {
     props.onSelectionChange?.({ workspaceId })
   }
 
-  const selectChat = (workspaceId: string, chatId: string): void => {
+  const selectChat = (workspaceId: WorkspaceId, chatId: ChatId): void => {
     props.onSelectChat(workspaceId, chatId)
     props.onSelectionChange?.({ workspaceId, chatId })
   }
 
   const selectSession = (
-    workspaceId: string,
+    workspaceId: WorkspaceId,
     provider: string,
-    chatId: string,
-    sessionId: string,
+    chatId: ChatId,
+    sessionId: TargetId,
   ): void => {
     props.onSelectSession(provider, chatId, sessionId)
     props.onSelectionChange?.({ workspaceId, chatId, sessionId })
   }
 
-  const selectWork = (workspaceId: string, chatId: string, workId: string): void => {
+  const selectWork = (workspaceId: WorkspaceId, chatId: ChatId, workId: WorkId): void => {
     props.onSelectWork?.(workspaceId, chatId, workId)
     props.onSelectionChange?.({ workspaceId, chatId, workId })
   }

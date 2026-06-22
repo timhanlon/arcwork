@@ -4,6 +4,7 @@ import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
 import { ChatService, ChatServiceLive } from "../src/main/services/ChatService.js"
 import type { ChatMessageRow } from "../src/main/db/schema.js"
+import { arcId } from "../src/shared/ids.js"
 
 const NOW = "2026-06-08T00:00:00.000Z"
 
@@ -29,13 +30,13 @@ describe("ChatService title updates", () => {
         const db = yield* ArcStore
         const chats = yield* ChatService
         yield* db.upsertWorkspace({
-          id: "ws_1",
+          id: arcId("workspace", "ws_1"),
           path: "/tmp/ws",
           name: "ws",
           createdAt: NOW,
           lastOpenedAt: NOW,
         })
-        const chat = yield* chats.create("ws_1")
+        const chat = yield* chats.create(arcId("workspace", "ws_1"))
         const updated = yield* chats.updateTitle(chat.id, "  Better title  ")
         const listed = yield* chats.list
         return { updated, listedTitle: listed.find((item) => item.id === chat.id)?.title }
@@ -52,13 +53,13 @@ describe("ChatService title updates", () => {
         const db = yield* ArcStore
         const chats = yield* ChatService
         yield* db.upsertWorkspace({
-          id: "ws_1",
+          id: arcId("workspace", "ws_1"),
           path: "/tmp/ws",
           name: "ws",
           createdAt: NOW,
           lastOpenedAt: NOW,
         })
-        const chat = yield* chats.create("ws_1")
+        const chat = yield* chats.create(arcId("workspace", "ws_1"))
         return yield* Effect.exit(chats.updateTitle(chat.id, "   "))
       }),
     )
@@ -72,13 +73,13 @@ describe("ChatService title updates", () => {
         const db = yield* ArcStore
         const chats = yield* ChatService
         yield* db.upsertWorkspace({
-          id: "ws_1",
+          id: arcId("workspace", "ws_1"),
           path: "/tmp/ws",
           name: "ws",
           createdAt: NOW,
           lastOpenedAt: NOW,
         })
-        const chat = yield* chats.create("ws_1", "already named")
+        const chat = yield* chats.create(arcId("workspace", "ws_1"), "already named")
         const same = yield* chats.updateTitle(chat.id, "already named")
         return { chat, same }
       }),
@@ -93,13 +94,13 @@ describe("ChatService title updates", () => {
         const db = yield* ArcStore
         const chats = yield* ChatService
         yield* db.upsertWorkspace({
-          id: "ws_1",
+          id: arcId("workspace", "ws_1"),
           path: "/tmp/ws",
           name: "ws",
           createdAt: NOW,
           lastOpenedAt: NOW,
         })
-        const chat = yield* chats.create("ws_1")
+        const chat = yield* chats.create(arcId("workspace", "ws_1"))
         yield* chats.updateTitle(chat.id, "manual title")
         const changed = yield* chats.updateTitleIfDefault(chat.id, "generated title")
         const listed = yield* chats.list
@@ -116,16 +117,16 @@ describe("assistant turn repair (Stop)", () => {
   const seed = Effect.gen(function* () {
     const db = yield* ArcStore
     yield* db.upsertWorkspace({
-        id: "ws_1",
+        id: arcId("workspace", "ws_1"),
         path: "/tmp/ws",
         name: "ws",
         createdAt: NOW,
         lastOpenedAt: NOW,
       })
-      yield* db.insertChat({ id: "chat_1", workspaceId: "ws_1", title: "c", createdAt: NOW })
+      yield* db.insertChat({ id: arcId("chat", "chat_1"), workspaceId: arcId("workspace", "ws_1"), title: "c", createdAt: NOW })
       yield* db.upsertTargetSession({
-        id: "target_1",
-        chatId: "chat_1",
+        id: arcId("target", "target_1"),
+        chatId: arcId("chat", "chat_1"),
         provider: "claude",
         preset: null,
         cwd: "/tmp/ws",
@@ -138,9 +139,9 @@ describe("assistant turn repair (Stop)", () => {
 
 
   const streamRow = (turnId: string, dedupKey: string, body: string) => ({
-    id: `stream_${turnId}`,
-    chatId: "chat_1",
-    targetSessionId: "target_1",
+    id: arcId("message", `stream_${turnId}`),
+    chatId: arcId("chat", "chat_1"),
+    targetSessionId: arcId("target", "target_1"),
     role: "assistant",
     turnId,
     messageId: "msg_1",
@@ -170,9 +171,9 @@ describe("assistant turn repair (Stop)", () => {
         // hook falls back to a per-payload hash) and no message_id.
         yield* db.upsertChatMessage(
           {
-            id: "stop_row",
-            chatId: "chat_1",
-            targetSessionId: "target_1",
+            id: arcId("message", "stop_row"),
+            chatId: arcId("chat", "chat_1"),
+            targetSessionId: arcId("target", "target_1"),
             role: "assistant",
             turnId: "sha-divergent",
             messageId: null,
@@ -209,9 +210,9 @@ describe("assistant turn repair (Stop)", () => {
         // `:assistant-final` placeholder under a per-payload hash turn id.
         yield* db.upsertChatMessage(
           {
-            id: "stop_row",
-            chatId: "chat_1",
-            targetSessionId: "target_1",
+            id: arcId("message", "stop_row"),
+            chatId: arcId("chat", "chat_1"),
+            targetSessionId: arcId("target", "target_1"),
             role: "assistant",
             turnId: "sha-divergent",
             messageId: null,
@@ -263,9 +264,9 @@ describe("assistant turn repair (Stop)", () => {
         // A genuine prior turn that finalized as a standalone assistant-final row.
         yield* db.upsertChatMessage(
           {
-            id: "turn0_row",
-            chatId: "chat_1",
-            targetSessionId: "target_1",
+            id: arcId("message", "turn0_row"),
+            chatId: arcId("chat", "chat_1"),
+            targetSessionId: arcId("target", "target_1"),
             role: "assistant",
             turnId: "turn-0",
             messageId: null,
@@ -301,16 +302,16 @@ describe("composer reconciliation", () => {
   const seed = Effect.gen(function* () {
     const db = yield* ArcStore
     yield* db.upsertWorkspace({
-      id: "ws_1",
+      id: arcId("workspace", "ws_1"),
       path: "/tmp/ws",
       name: "ws",
       createdAt: NOW,
       lastOpenedAt: NOW,
     })
-    yield* db.insertChat({ id: "chat_1", workspaceId: "ws_1", title: "c", createdAt: NOW })
+    yield* db.insertChat({ id: arcId("chat", "chat_1"), workspaceId: arcId("workspace", "ws_1"), title: "c", createdAt: NOW })
     yield* db.upsertTargetSession({
-      id: "target_1",
-      chatId: "chat_1",
+      id: arcId("target", "target_1"),
+      chatId: arcId("chat", "chat_1"),
       provider: "claude",
       preset: null,
       cwd: "/tmp/ws",
@@ -322,9 +323,9 @@ describe("composer reconciliation", () => {
   })
 
   const userRow = (overrides: Partial<ChatMessageRow>): ChatMessageRow => ({
-    id: "message_1",
-    chatId: "chat_1",
-    targetSessionId: "target_1",
+    id: arcId("message", "message_1"),
+    chatId: arcId("chat", "chat_1"),
+    targetSessionId: arcId("target", "target_1"),
     role: "user",
     turnId: null,
     messageId: null,
@@ -364,13 +365,13 @@ describe("composer reconciliation", () => {
         const db = yield* ArcStore
         yield* seed
         yield* db.upsertChatMessage(
-          userRow({ id: "composer_1", dedupKey: "target_1:composer-user:composer_1" }),
+          userRow({ id: arcId("message", "composer_1"), dedupKey: "target_1:composer-user:composer_1" }),
           "insert",
         )
 
         const changed = yield* db.reconcileComposerOptimisticUser(
           userRow({
-            id: "hook_1",
+            id: arcId("message", "hook_1"),
             turnId: "turn_1",
             source: "hook:claude",
             dedupKey: "target_1:turn_1:user",
@@ -392,12 +393,12 @@ describe("composer reconciliation", () => {
         const db = yield* ArcStore
         yield* seed
         yield* db.upsertChatMessage(
-          userRow({ id: "composer_1", dedupKey: "target_1:composer-user:composer_1" }),
+          userRow({ id: arcId("message", "composer_1"), dedupKey: "target_1:composer-user:composer_1" }),
           "insert",
         )
         yield* db.upsertChatMessage(
           userRow({
-            id: "hook_1",
+            id: arcId("message", "hook_1"),
             turnId: "turn_1",
             source: "hook:claude",
             dedupKey: "target_1:turn_1:user",
@@ -407,7 +408,7 @@ describe("composer reconciliation", () => {
 
         const changed = yield* db.reconcileComposerOptimisticUser(
           userRow({
-            id: "hook_1_again",
+            id: arcId("message", "hook_1_again"),
             turnId: "turn_1",
             source: "hook:claude",
             dedupKey: "target_1:turn_1:user",

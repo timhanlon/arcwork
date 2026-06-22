@@ -1,4 +1,5 @@
 import type { Chat } from "../../../shared/chat.js"
+import type { ChatId, TargetId, WorkId, WorkspaceId } from "../../../shared/ids.js"
 import type { TargetSession } from "../../../shared/instance.js"
 import type { Workspace } from "../../../shared/workspace.js"
 import type { ArcShellContext } from "./arcShellMachine.js"
@@ -15,19 +16,19 @@ export interface ShellServerData {
 }
 
 export interface ShellViewModel {
-  readonly workspaceId?: string
-  readonly chatId?: string
+  readonly workspaceId?: WorkspaceId
+  readonly chatId?: ChatId
   readonly workspace?: Workspace
   readonly chat?: Chat
   /** The workspace owning the selected chat — may differ from `workspace`. */
   readonly chatWorkspace?: Workspace
   readonly sessionCount: number
-  readonly activeSessionId?: string
+  readonly activeSessionId?: TargetId
   /** A restored, not-attached session to surface a resume prompt for, if any. */
   readonly detachedSession?: TargetSession
   readonly gitPath?: string
   /** The work item selected in the center navigator, remembered per workspace. */
-  readonly workId?: string
+  readonly workId?: WorkId
 }
 
 export const deriveShellViewModel = (

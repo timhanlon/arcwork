@@ -3,6 +3,7 @@ import { useAtomSet } from "@effect/atom-react"
 import { Exit } from "effect"
 import type { TargetSession } from "../../../../shared/instance.js"
 import type { Work } from "../../../../shared/work.js"
+import type { WorkspaceId } from "../../../../shared/ids.js"
 import { listWorkspaceFilesAtom } from "../../atoms.js"
 import {
   type ReferenceCandidate,
@@ -22,7 +23,7 @@ import {
 export function useReferenceTargets(args: {
   readonly work: ReadonlyArray<Work>
   readonly sessions: ReadonlyArray<TargetSession>
-  readonly workspaceId?: string
+  readonly workspaceId?: WorkspaceId
 }): {
   readonly candidates: ReadonlyArray<ReferenceCandidate>
   readonly ensureFilesLoaded: () => void

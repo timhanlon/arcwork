@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import * as Atom from "effect/unstable/reactivity/Atom"
 import type { Work } from "../../../shared/work.js"
+import type { ChatId } from "../../../shared/ids.js"
 import { chatWorkAtom } from "../atoms.js"
 
 /**
@@ -14,7 +15,7 @@ import { chatWorkAtom } from "../atoms.js"
 const emptyChatWorkAtom = Atom.make(AsyncResult.success<ReadonlyArray<Work>>([]))
 
 export function useChatWork(
-  chatId: string | undefined,
+  chatId: ChatId | undefined,
 ): { readonly work: ReadonlyArray<Work> } {
   const atom = chatId ? chatWorkAtom(chatId) : emptyChatWorkAtom
   const result = useAtomValue(atom)
