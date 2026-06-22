@@ -1,18 +1,21 @@
 import { Schema } from "effect"
-import { PrState } from "./git.js"
+import { PullRequest } from "./git.js"
 
 /**
  * The slice of a branch's open pull request the sidebar needs: enough to render
  * a chip (number, draft/state colour) and link out (`url`), with the title for a
  * tooltip. The Git pane reads the full {@link PullRequest} via `gitContext`; this
  * rides the workspace stream so the tree can show it without a per-row fetch.
+ *
+ * Each field is sourced from {@link PullRequest} so the two can't drift — this is
+ * a strict projection of it, not a parallel declaration.
  */
 export const WorkspacePullRequest = Schema.Struct({
-  number: Schema.Number,
-  title: Schema.String,
-  state: PrState,
-  isDraft: Schema.Boolean,
-  url: Schema.NullOr(Schema.String),
+  number: PullRequest.fields.number,
+  title: PullRequest.fields.title,
+  state: PullRequest.fields.state,
+  isDraft: PullRequest.fields.isDraft,
+  url: PullRequest.fields.url,
 })
 export type WorkspacePullRequest = typeof WorkspacePullRequest.Type
 
