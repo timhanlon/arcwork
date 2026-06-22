@@ -6,6 +6,7 @@ import { useShellActions } from "../../shell/ShellActionsContext.js"
 import { arcResultSupersedesInput, arcToolBody, arcToolLabel, arcToolOutput, isArcTool } from "./arc-tool-body.js"
 import { chromeToolBody, chromeToolLabel, isChromeTool } from "./chrome-tool-body.js"
 import { CodeBlock, FLAG, flagsFor, formatArgs, toolBody } from "./tool-body.js"
+import { renderShapeFor } from "../../../../shared/tool-catalog.js"
 
 const CARD = "grid gap-2 min-w-0"
 const HEAD = "flex items-center justify-between gap-2"
@@ -57,6 +58,9 @@ export function ToolCall({
         : toolBody(provider, tool.toolName, tool.args)
   const fallback = body || supersededByResult ? null : formatArgs(tool.args)
   const outputCard = arc && tool.output ? arcToolOutput(tool.output, openWork) : null
+  // The diff body already shows what changed; an Edit/patch's "file updated"
+  // success text is pure noise, so drop the raw output block for diff tools.
+  const isDiff = !arc && renderShapeFor(provider, tool.toolName) === "diff"
   return (
     <div className={CARD}>
       <div className={HEAD}>
@@ -72,7 +76,7 @@ export function ToolCall({
       </div>
       {body}
       {fallback && <CodeBlock text={fallback} />}
-      {outputCard ?? (tool.output ? <CodeBlock text={tool.output} /> : null)}
+      {outputCard ?? (!isDiff && tool.output ? <CodeBlock text={tool.output} /> : null)}
     </div>
   )
 }

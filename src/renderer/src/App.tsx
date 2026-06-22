@@ -20,6 +20,7 @@ import {
 } from "./atoms.js"
 import type { LiveTargetActivity } from "../../shared/live-target-state.js"
 import type { ChatId, PaneId, TargetId, WorkspaceId } from "../../shared/ids.js"
+import { arcId } from "../../shared/ids.js"
 import { ArcSidebarTree } from "./sidebar/ArcSidebarTree.js"
 import { orderedPendingSessionIds } from "./sidebar/grouping.js"
 import { TargetSessionPane } from "./chat/TargetSessionPane.js"
@@ -27,14 +28,17 @@ import { sync as syncTerminals } from "./terminal/terminalRegistry.js"
 import { UnifiedChatPane, type ChatPaneHandle } from "./chat/UnifiedChatPane.js"
 import { WorkPane, type WorkPaneHandle } from "./work/WorkPane.js"
 import { GitPane } from "./git/GitPane.js"
+import { GitPrefetch } from "./git/GitPrefetch.js"
 import { NavBar } from "./shell/NavBar.js"
 import { ArcSearchPanel } from "./search/ArcSearchPanel.js"
+import { CommandPalette } from "./shell/CommandPalette.js"
+import type { Command } from "./shell/commandPaletteModel.js"
 import { useArcShell } from "./shell/useArcShell.js"
 import { ShellActionsProvider } from "./shell/ShellActionsContext.js"
 import { unadoptedSessions } from "./shell/sessionAdoption.js"
 import { deriveShellViewModel } from "./shell/shellSelectors.js"
 import { useKeyboardShortcuts } from "./shell/useKeyboardShortcuts.js"
-import { focusRequestId, REQUEST_SLOTS, type GlobalCommandId } from "./shell/keybindings.js"
+import { bindingFor, focusRequestId, REQUEST_SLOTS, type GlobalCommandId } from "./shell/keybindings.js"
 
 /**
  * The surface. Sidebar lists workspaces, chats, and sessions. The center pane
@@ -68,6 +72,7 @@ export function App(): JSX.Element {
     [workspacesResult],
   )
   const [searchOpen, setSearchOpen] = useState(false)
+  const [commandOpen, setCommandOpen] = useState(false)
 
   const providersResult = useAtomValue(providersAtom)
   const providers = AsyncResult.isSuccess(providersResult) ? providersResult.value : []
@@ -255,6 +260,7 @@ export function App(): JSX.Element {
       showGitView: () => shell.actions.open({ kind: "git" }, "right"),
       focusComposer: shell.actions.focusComposer,
       openSearchPalette: () => setSearchOpen(true),
+      openCommandPalette: () => setCommandOpen(true),
       jumpToChatBottom: shell.actions.jumpChatToBottom,
       resumeDetachedSession: () => {
         if (vm.detachedSession?.resumable) shell.actions.resumeDetached()
@@ -275,9 +281,85 @@ export function App(): JSX.Element {
     if (Exit.isSuccess(exit)) shell.actions.selectChat(workspaceId, exit.value.id)
   }
 
+  // Open a worktree as a workspace (minting its row if needed), then start a
+  // chat in it — for a worktree that already exists.
+  const openWorktreeChat = async (worktreePath: string): Promise<void> => {
+    const workspace = await rpc("OpenWorktree", { worktreePath })
+    await createChat(workspace.id)
+  }
+
+  // Branch a fresh worktree off the repo's default branch, open it, and chat in
+  // it — the "start a new isolated line of work" path. baseRef is omitted, so
+  // the main side defaults it to the repo's default branch.
+  const newWorktreeChat = async (branch: string): Promise<void> => {
+    if (!vm.workspaceId) return
+    const worktree = await rpc("CreateWorktree", {
+      workspaceId: vm.workspaceId,
+      branch,
+      createBranch: true,
+    })
+    await openWorktreeChat(worktree.path)
+  }
+
   const renameChat = async (chatId: ChatId, title: string): Promise<void> => {
     await rpc("UpdateChatTitle", { chatId, title })
   }
+
+  // Commands for the ⌘K palette. Leaf commands reuse the shortcut handlers (and
+  // borrow their combo for the on-row hint); "New chat in workspace…" opens a
+  // second stage over the open workspaces and lands the chat in the chosen one.
+  const leafCommand = (id: GlobalCommandId, title: string): Command => ({
+    id,
+    title,
+    combo: bindingFor(id)?.combo,
+    run: shortcutHandlers[id],
+  })
+  // The worktree commands act on the active workspace, so they only appear when
+  // one is selected — otherwise selecting them would silently do nothing.
+  const worktreeCommands: ReadonlyArray<Command> = vm.workspaceId
+    ? [
+        {
+          id: "newWorktree",
+          title: "New worktree…",
+          promptPlaceholder: "new branch name",
+          onSubmit: (branch) => void newWorktreeChat(branch),
+        },
+        {
+          id: "openWorktree",
+          title: "Open worktree…",
+          choosePlaceholder: "choose a worktree",
+          loadChoices: async () => {
+            if (!vm.workspaceId) return []
+            const context = await rpc("GetWorkspaceGitContext", { workspaceId: vm.workspaceId })
+            return context.worktrees.map((worktree) => ({
+              id: worktree.path,
+              title: worktree.branch ?? (worktree.path.split("/").pop() ?? worktree.path),
+              subtitle: worktree.path,
+            }))
+          },
+          onChoose: (worktreePath) => void openWorktreeChat(worktreePath),
+        },
+      ]
+    : []
+  const paletteCommands: ReadonlyArray<Command> = [
+    {
+      id: "newChatInWorkspace",
+      title: "New chat in workspace…",
+      choosePlaceholder: "choose a workspace",
+      choices: workspaces.map((w) => ({ id: w.id, title: w.name, subtitle: w.path })),
+      onChoose: (workspaceId) => void createChat(arcId("workspace", workspaceId)),
+    },
+    ...worktreeCommands,
+    leafCommand("createChat", "New chat"),
+    leafCommand("createWork", "New work item"),
+    leafCommand("showChatView", "Show chat"),
+    leafCommand("showWorkView", "Show work"),
+    leafCommand("showTerminalView", "Show terminal"),
+    leafCommand("showGitView", "Show git"),
+    leafCommand("toggleLeftPanel", "Toggle left panel"),
+    leafCommand("toggleRightPanel", "Toggle right panel"),
+    leafCommand("openSearchPalette", "Search…"),
+  ]
 
   const selectChat = (workspaceId: WorkspaceId, chatId: ChatId): void => {
     shell.actions.selectChat(workspaceId, chatId)
@@ -358,6 +440,7 @@ export function App(): JSX.Element {
 
   return (
     <ShellActionsProvider value={shell.actions}>
+    {vm.workspace ? <GitPrefetch workspaceId={vm.workspace.id} /> : null}
     <div className="grid h-full grid-rows-[auto_1fr]">
       {searchOpen ? (
         <ArcSearchPanel
@@ -366,6 +449,9 @@ export function App(): JSX.Element {
           onOpenChat={selectChat}
           onClose={() => setSearchOpen(false)}
         />
+      ) : null}
+      {commandOpen ? (
+        <CommandPalette commands={paletteCommands} onClose={() => setCommandOpen(false)} />
       ) : null}
       <NavBar
         isDev={isDev}

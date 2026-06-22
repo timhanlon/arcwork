@@ -11,8 +11,10 @@ import {
   type WorkspaceRow,
 } from "./schema.js"
 import { runMigrations } from "./migrator.js"
+import { newArcId } from "../../shared/ids.js"
 import type { ChatId, TargetId, WorkspaceId } from "../../shared/ids.js"
 import type { ChatMessageUpsertMode } from "../hooks/chat-message.js"
+import { type GitStore, makeGitStore } from "./store/git.js"
 
 /**
  * Durable persistence for arc's own domain. The in-memory `SubscriptionRef`s in
@@ -29,7 +31,12 @@ export class ArcStore extends Context.Service<
   ArcStore,
   {
     readonly loadWorkspaces: Effect.Effect<ReadonlyArray<WorkspaceRow>, SqlError>
-    readonly upsertWorkspace: (row: WorkspaceRow) => Effect.Effect<WorkspaceRow, SqlError>
+    /** Upsert a workspace's identity (keyed by path). The git-binding columns
+     * are never written here — they are populated by `setWorkspaceGit` after git
+     * detection — so the input is just the identity fields. */
+    readonly upsertWorkspace: (
+      row: Pick<WorkspaceRow, "id" | "path" | "name" | "createdAt" | "lastOpenedAt">,
+    ) => Effect.Effect<WorkspaceRow, SqlError>
     readonly workspaceExists: (id: string) => Effect.Effect<boolean, SqlError>
     readonly loadChats: Effect.Effect<ReadonlyArray<ChatRow>, SqlError>
     readonly insertChat: (chat: ChatRow) => Effect.Effect<void, SqlError>
@@ -40,7 +47,9 @@ export class ArcStore extends Context.Service<
       targetSessionId: string,
     ) => Effect.Effect<WorkspaceId | null, SqlError>
     readonly loadTargetSessions: Effect.Effect<ReadonlyArray<TargetSessionRow>, SqlError>
-    readonly upsertTargetSession: (s: TargetSessionRow) => Effect.Effect<void, SqlError>
+    readonly upsertTargetSession: (
+      s: Omit<TargetSessionRow, "channelId" | "workspaceId">,
+    ) => Effect.Effect<void, SqlError>
     readonly setNativeSessionId: (
       id: string,
       nativeSessionId: string,
@@ -130,7 +139,7 @@ export class ArcStore extends Context.Service<
     readonly loadRawHookSignalsForTarget: (
       targetSessionId: string,
     ) => Effect.Effect<ReadonlyArray<RawHookSignalRow>, SqlError>
-  }
+  } & GitStore
 >()("arcwork/ArcStore") {}
 
 const record = (value: unknown): Record<string, unknown> | null =>
@@ -234,17 +243,19 @@ export const ArcStoreLive = Layer.effect(
     const loadWorkspaces =
       sql<WorkspaceRow>`SELECT * FROM workspaces ORDER BY last_opened_at DESC, name, id`
 
-    const upsertWorkspace = (row: WorkspaceRow) =>
+    const upsertWorkspace = (
+      row: Pick<WorkspaceRow, "id" | "path" | "name" | "createdAt" | "lastOpenedAt">,
+    ) =>
       Effect.gen(function* () {
-        yield* sql`INSERT INTO workspaces ${sql.insert({
+        const rows = yield* sql<WorkspaceRow>`INSERT INTO workspaces ${sql.insert({
           id: row.id,
           path: row.path,
           name: row.name,
           createdAt: row.createdAt,
           lastOpenedAt: row.lastOpenedAt,
         })} ON CONFLICT(path) DO UPDATE SET
-          last_opened_at = excluded.last_opened_at`
-        const rows = yield* sql<WorkspaceRow>`SELECT * FROM workspaces WHERE path = ${row.path} LIMIT 1`
+          last_opened_at = excluded.last_opened_at
+          RETURNING *`
         const canonical = rows[0]
         if (!canonical) {
           return yield* Effect.die(new Error(`workspace upsert left no row for ${row.path}`))
@@ -305,27 +316,91 @@ export const ArcStoreLive = Layer.effect(
         return rows[0]?.workspaceId ?? null
       })
 
+    // Read the worker through its two endpoints: provider/preset from the comm
+    // endpoint (`channels`) and cwd from the diff endpoint (`workspaces`),
+    // falling back to the inlined columns when a ref is null (a backfill orphan).
+    // Gate on the ref id's presence so a channel whose preset is null still wins
+    // over the inlined preset — preset is nullable, so the resolved value alone
+    // can't distinguish "no channel" from "channel with a null preset".
     const loadTargetSessions =
-      sql<TargetSessionRow>`SELECT * FROM target_sessions ORDER BY started_at, id`
+      sql<TargetSessionRow>`SELECT
+          ts.id AS "id",
+          ts.chat_id AS "chatId",
+          CASE WHEN ts.channel_id IS NOT NULL THEN c.provider ELSE ts.provider END AS "provider",
+          CASE WHEN ts.channel_id IS NOT NULL THEN c.preset ELSE ts.preset END AS "preset",
+          CASE WHEN ts.workspace_id IS NOT NULL THEN w.path ELSE ts.cwd END AS "cwd",
+          ts.channel_id AS "channelId",
+          ts.workspace_id AS "workspaceId",
+          ts.native_session_id AS "nativeSessionId",
+          ts.native_transcript_path AS "nativeTranscriptPath",
+          ts.state AS "state",
+          ts.started_at AS "startedAt"
+        FROM target_sessions ts
+        LEFT JOIN channels c ON c.id = ts.channel_id
+        LEFT JOIN workspaces w ON w.id = ts.workspace_id
+        ORDER BY ts.started_at, ts.id`
 
-    const upsertTargetSession = (s: TargetSessionRow) =>
-      sql`INSERT INTO target_sessions ${sql.insert({
-        id: s.id,
-        chatId: s.chatId,
-        provider: s.provider,
-        preset: s.preset,
-        cwd: s.cwd,
-        nativeSessionId: s.nativeSessionId,
-        nativeTranscriptPath: s.nativeTranscriptPath,
-        state: s.state,
-        startedAt: s.startedAt,
-      })} ON CONFLICT(id) DO UPDATE SET
+    // Find-or-create the comm endpoint for a `(provider, model, preset)` and
+    // return its id. A fresh TypeID is offered; the unique index over
+    // `(kind, provider, COALESCE(model,''), COALESCE(preset,''))` collapses it to
+    // an existing row when one matches, and `RETURNING id` hands back whichever
+    // id won.
+    const ensureChannel = (
+      provider: string,
+      model: string | null,
+      preset: string | null,
+      at: string,
+    ) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{ id: string }>`INSERT INTO channels ${sql.insert({
+          id: newArcId("channel"),
+          kind: "local",
+          provider,
+          model,
+          preset,
+          createdAt: at,
+          lastUsedAt: at,
+        })} ON CONFLICT (kind, provider, COALESCE(model, ''), COALESCE(preset, ''))
+          DO UPDATE SET last_used_at = excluded.last_used_at
+          RETURNING id`
+        return rows[0]!.id
+      })
+
+    // A target session is the bound pair of a comm endpoint (`channels`) and a
+    // diff endpoint (`workspaces`). Both refs are derived here — the single
+    // place sessions are persisted — so the launch path stays unchanged until a
+    // later slice reads them: the comm endpoint is the `(provider, preset)`
+    // channel (model null = "harness default"), the diff endpoint is the
+    // workspace whose path equals the cwd (null for an orphan cwd, which then
+    // falls back to the still-written `cwd` column).
+    const upsertTargetSession = (s: Omit<TargetSessionRow, "channelId" | "workspaceId">) =>
+      Effect.gen(function* () {
+        const channelId = yield* ensureChannel(s.provider, null, s.preset, s.startedAt)
+        const workspaceRows = yield* sql<{ id: string }>`
+          SELECT id FROM workspaces WHERE path = ${s.cwd} LIMIT 1`
+        const workspaceId = workspaceRows[0]?.id ?? null
+        yield* sql`INSERT INTO target_sessions ${sql.insert({
+          id: s.id,
+          chatId: s.chatId,
+          provider: s.provider,
+          preset: s.preset,
+          cwd: s.cwd,
+          channelId,
+          workspaceId,
+          nativeSessionId: s.nativeSessionId,
+          nativeTranscriptPath: s.nativeTranscriptPath,
+          state: s.state,
+          startedAt: s.startedAt,
+        })} ON CONFLICT(id) DO UPDATE SET
         preset = excluded.preset,
         cwd = excluded.cwd,
+        channel_id = excluded.channel_id,
+        workspace_id = excluded.workspace_id,
         native_session_id = excluded.native_session_id,
         native_transcript_path = excluded.native_transcript_path,
         state = excluded.state,
-        started_at = excluded.started_at`.pipe(Effect.asVoid)
+        started_at = excluded.started_at`
+      }).pipe(Effect.asVoid)
 
     const setNativeSessionId = (
       id: string,
@@ -791,6 +866,9 @@ export const ArcStoreLive = Layer.effect(
         WHERE target_session_id = ${targetSessionId}
         ORDER BY observed_at, id`
 
+    // git/github domain read model — repository/worktree/PR persistence.
+    const gitStore = makeGitStore(sql)
+
     return {
       loadWorkspaces,
       upsertWorkspace,
@@ -825,6 +903,7 @@ export const ArcStoreLive = Layer.effect(
       supersedePendingRequestsForTarget,
       insertRawHookSignal,
       loadRawHookSignalsForTarget,
+      ...gitStore,
     } as const
   }),
 )

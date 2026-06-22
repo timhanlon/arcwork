@@ -142,6 +142,22 @@ export const StreamingOpenCodeFence = () => (
   </Surface>
 )
 
+/** A ```mermaid fenced block — rendered as a diagram by the @streamdown/mermaid plugin. */
+export const Mermaid = () => (
+  <Surface>
+    <MarkdownBody>
+      {"Here's the flow:\n\n" +
+        "```mermaid\n" +
+        "flowchart TD\n" +
+        "  A[Prompt] --> B{Has tool call?}\n" +
+        "  B -->|yes| C[Run tool]\n" +
+        "  B -->|no| D[Respond]\n" +
+        "  C --> D\n" +
+        "```"}
+    </MarkdownBody>
+  </Surface>
+)
+
 /** Plain prose with no markdown syntax — should read like ordinary text. */
 export const PlainText = () => (
   <Surface>

@@ -1,39 +1,20 @@
 import { PatchDiff } from "@pierre/diffs/react"
-import { type JSX, useEffect, useMemo, useState } from "react"
-import type { GitChangeStatus, GitFileChange, GitStatus } from "../../../shared/git.js"
+import { CaretDown, CaretRight } from "@phosphor-icons/react"
+import { Fragment, type JSX, type ReactNode, useState } from "react"
+import { useAtomValue } from "@effect/atom-react"
+import { Option } from "effect"
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
+import type { GitChangeStatus, GitCommit, GitFileChange } from "../../../shared/git.js"
 import type { Workspace } from "../../../shared/workspace.js"
-import { Button } from "../ui/Button.js"
 import { Row } from "../ui/Row.js"
-import { rpc } from "../rpc-client.js"
+import { gitFileDiffAtomFor } from "../atoms.js"
+import { RepoContextBar } from "./RepoContextBar.js"
+import { useWorkspaceGit } from "./useWorkspaceGit.js"
 
 export interface GitPaneProps {
   readonly workspace?: Workspace
   readonly selectedPath?: string
   readonly onSelectPath: (path: string) => void
-}
-
-const STATUS_ORDER: ReadonlyArray<GitChangeStatus> = [
-  "added",
-  "untracked",
-  "modified",
-  "typeChange",
-  "renamed",
-  "copied",
-  "deleted",
-  "unmerged",
-  "unknown",
-]
-
-const STATUS_LABEL: Record<GitChangeStatus, string> = {
-  added: "Added",
-  modified: "Modified",
-  deleted: "Deleted",
-  renamed: "Renamed",
-  copied: "Copied",
-  untracked: "Untracked",
-  unmerged: "Unmerged",
-  typeChange: "Type change",
-  unknown: "Changed",
 }
 
 const STATUS_GLYPH: Record<GitChangeStatus, string> = {
@@ -60,201 +41,283 @@ const STATUS_COLOR: Record<GitChangeStatus, string> = {
   unknown: "text-fg-dim",
 }
 
-const HEADER = "flex flex-none items-center justify-between gap-2 border-b border-border px-4 pb-3 pt-[14px]"
-const PANE_TITLE = "m-0 font-sans text-[15px] font-medium"
 const ERROR_BANNER =
-  "mx-4 mt-2.5 flex-none rounded-[var(--radius)] border border-danger px-2 py-1.5 text-[12px] text-danger"
-
-const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e))
-
-interface GitFileDiffProps {
-  readonly workspace?: Workspace
-  readonly selectedPath?: string
-}
+  "mx-3 mt-2.5 flex-none rounded-[var(--radius)] border border-danger px-2 py-1.5 text-[12px] text-danger"
 
 export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps): JSX.Element {
-  const [status, setStatus] = useState<GitStatus | undefined>(undefined)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | undefined>(undefined)
-
-  const grouped = useMemo(() => {
-    const map = new Map<GitChangeStatus, ReadonlyArray<GitFileChange>>()
-    for (const status of STATUS_ORDER) map.set(status, [])
-    for (const change of status?.changes ?? []) {
-      const existing = map.get(change.status) ?? []
-      map.set(change.status, [...existing, change])
-    }
-    return STATUS_ORDER.map((key) => ({ status: key, files: map.get(key) ?? [] })).filter(
-      (group) => group.files.length > 0,
-    )
-  }, [status?.changes])
-
-  // Honor the selection only while the file is still in the change set. After a
-  // commit clears a file, its `gitPath` lingers in shell state; without this the
-  // diff sub-pane would keep rendering a header for a file that no longer exists.
-  const effectiveSelectedPath = useMemo(
-    () => (selectedPath && status?.changes.some((change) => change.path === selectedPath) ? selectedPath : undefined),
-    [selectedPath, status?.changes],
-  )
-
-  const reload = (): void => {
-    if (!workspace) return
-    setLoading(true)
-    setError(undefined)
-    rpc("GetWorkspaceGitStatus", { workspaceId: workspace.id })
-      .then((next) => {
-        setStatus(next)
-        const stillSelected = selectedPath && next.changes.some((change) => change.path === selectedPath)
-        const nextPath = stillSelected ? selectedPath : next.changes[0]?.path
-        if (nextPath && nextPath !== selectedPath) onSelectPath(nextPath)
-      })
-      .catch((e) => {
-        setError(errorMessage(e))
-        setStatus(undefined)
-      })
-      .finally(() => setLoading(false))
-  }
-
-  useEffect(() => {
-    setStatus(undefined)
-    reload()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace?.id])
-
   if (!workspace) {
     return (
-      <section className="flex min-h-0 min-w-0 flex-col bg-background">
-        <div className={HEADER}>
-          <h2 className={PANE_TITLE}>Git</h2>
-        </div>
+      <section className="flex h-full min-h-0 min-w-0 flex-col bg-background">
         <EmptyState label="Open a workspace to view git changes" />
       </section>
     )
   }
+  // Keyed on the workspace so switching workspaces remounts the body — its
+  // auto-select effect re-runs against the new workspace's change set.
+  return (
+    <GitPaneBody
+      key={workspace.id}
+      workspace={workspace}
+      selectedPath={selectedPath}
+      onSelectPath={onSelectPath}
+    />
+  )
+}
+
+/** The Git pane for a known workspace. Reads the shared git atoms (warmed by the
+ * prefetch, so usually no load flash) rather than fetching into local state. */
+function GitPaneBody({
+  workspace,
+  selectedPath,
+  onSelectPath,
+}: {
+  readonly workspace: Workspace
+  readonly selectedPath?: string
+  readonly onSelectPath: (path: string) => void
+}): JSX.Element {
+  const { status, context, commits, loading, commitsLoading, error } = useWorkspaceGit(workspace.id)
+  const [changesOpen, setChangesOpen] = useState(true)
+  const [commitsOpen, setCommitsOpen] = useState(true)
+  // Which files have their diff expanded inline. Multiple may be open at once;
+  // seeded from the incoming selection so a remount keeps that file open.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() =>
+    selectedPath ? new Set([selectedPath]) : new Set(),
+  )
+
+  const toggleFile = (path: string): void => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else {
+        next.add(path)
+        onSelectPath(path)
+      }
+      return next
+    })
+  }
+
+  // The service already returns changes sorted by status then path, so the
+  // renderer lists them flat — the row's coloured glyph carries the status, no
+  // group headers needed.
+  const changes = status?.changes ?? []
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-col bg-background">
-      <div className={HEADER}>
-        <div className="min-w-0">
-          <h2 className={PANE_TITLE}>Git</h2>
-          <div className="truncate font-mono text-[11px] text-fg-dim">
-            {status?.branch ?? status?.head?.slice(0, 7) ?? workspace.name}
-          </div>
-        </div>
-        <Button size="sm" variant="ghost" disabled={loading} onClick={reload}>
-          Refresh
-        </Button>
-      </div>
+    <section className="flex h-full min-h-0 min-w-0 flex-col bg-background">
+      {/* Pinned context strip — stays put while the sections scroll. */}
+      <RepoContextBar context={context} />
       {error && <div className={ERROR_BANNER}>{error}</div>}
       {!loading && status?.isRepo === false ? (
         <EmptyState label="This workspace is not a git repository" />
-      ) : !loading && grouped.length === 0 ? (
-        // No changes: a single full-pane empty state, not the master-detail
-        // split — otherwise the message renders inside the capped list box with
-        // nothing to center against, and the stale diff header lingers below.
-        <EmptyState label="No changes" />
       ) : (
-        // Master-detail in one pane: the changed-file list on top (capped so it
-        // never crowds out the diff), the selected file's diff filling the rest.
+        // Sections are flex siblings: an open one grows and scrolls internally; a
+        // collapsed one shrinks to just its header so the other takes the space.
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="max-h-[45%] flex-none overflow-y-auto border-b border-border">
-            <ChangedFilesList
-              loading={loading}
-              grouped={grouped}
-              selectedPath={effectiveSelectedPath}
-              onSelect={onSelectPath}
-            />
-          </div>
-          <GitFileDiff workspace={workspace} selectedPath={effectiveSelectedPath} />
+          <GitSection
+            title="Changes"
+            count={status ? changes.length : undefined}
+            open={changesOpen}
+            onToggle={() => setChangesOpen((v) => !v)}
+          >
+            {loading ? (
+              <ListNote label="Loading changes" />
+            ) : changes.length === 0 ? (
+              <ListNote label="No changes" />
+            ) : (
+              <ChangedFilesList
+                changes={changes}
+                workspace={workspace}
+                expanded={expanded}
+                onToggle={toggleFile}
+              />
+            )}
+          </GitSection>
+          <GitSection
+            title="Commits"
+            count={commitsLoading ? undefined : commits.length}
+            open={commitsOpen}
+            onToggle={() => setCommitsOpen((v) => !v)}
+          >
+            {commitsLoading ? (
+              <ListNote label="Loading commits" />
+            ) : commits.length === 0 ? (
+              <ListNote label="No commits on this branch" />
+            ) : (
+              <CommitsList commits={commits} />
+            )}
+          </GitSection>
         </div>
       )}
     </section>
   )
 }
 
-/** The selected file's diff, rendered below the changed-file list in the git
- * pane. `DiffView` carries its own header (the file path), so this is just the
- * fetch + the view — no separate pane chrome. */
-function GitFileDiff({ workspace, selectedPath }: GitFileDiffProps): JSX.Element {
-  const [diff, setDiff] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | undefined>(undefined)
+/** A collapsible pane section (Changes / Commits). The header toggles it; when
+ * open it grows to fill its share of the pane and scrolls internally, when closed
+ * it collapses to just the header. */
+function GitSection({
+  title,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  readonly title: string
+  readonly count?: number
+  readonly open: boolean
+  readonly onToggle: () => void
+  readonly children: ReactNode
+}): JSX.Element {
+  return (
+    <div className={`flex min-h-0 flex-col border-b border-border ${open ? "flex-1" : "flex-none"}`}>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full flex-none items-center gap-1.5 px-3 py-1.5 text-left font-mono text-[10px] uppercase tracking-[0.06em] text-fg-faint hover:bg-elev focus-visible:bg-elev focus-visible:outline-none"
+      >
+        {open ? <CaretDown size={11} weight="bold" /> : <CaretRight size={11} weight="bold" />}
+        <span>{title}</span>
+        {count !== undefined && <span className="text-fg-dim">{count}</span>}
+      </button>
+      {open && <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>}
+    </div>
+  )
+}
 
-  useEffect(() => {
-    if (!workspace || !selectedPath) {
-      setDiff("")
-      setError(undefined)
-      return
-    }
-    setLoading(true)
-    setError(undefined)
-    rpc("GetWorkspaceGitFileDiff", { workspaceId: workspace.id, path: selectedPath })
-      .then((result) => setDiff(result.diff))
-      .catch((e) => {
-        setError(errorMessage(e))
-        setDiff("")
-      })
-      .finally(() => setLoading(false))
-  }, [workspace, selectedPath])
+/** One file's diff, fetched lazily and rendered inline beneath its row in the
+ * changes list. No header — the file row above it is the header. */
+function InlineDiff({ workspace, path }: { readonly workspace: Workspace; readonly path: string }): JSX.Element {
+  const result = useAtomValue(gitFileDiffAtomFor(workspace.id, path))
+  const error = Option.match(AsyncResult.error(result), { onNone: () => undefined, onSome: (e) => e.message })
+  const diff = AsyncResult.isSuccess(result) ? result.value.diff : undefined
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {error && <div className={ERROR_BANNER}>{error}</div>}
-      <DiffView path={selectedPath} diff={diff} loading={loading} />
+    <div className="border-b border-border bg-elev/40 px-3 py-2">
+      {error ? (
+        <span className="text-[12px] text-danger">{error}</span>
+      ) : diff === undefined ? (
+        <span className="text-[12px] text-fg-dim">Loading diff…</span>
+      ) : diff === "" ? (
+        <span className="text-[12px] text-fg-dim">No diff available</span>
+      ) : (
+        <DiffBody diff={diff} />
+      )}
     </div>
+  )
+}
+
+/** The diff content itself — a syntax-highlighted patch when it parses as one,
+ * else a plain monospace fallback. Renders at natural height; the changes list
+ * scrolls. */
+function DiffBody({ diff }: { readonly diff: string }): JSX.Element {
+  if (isPatch(diff)) {
+    return (
+      <PatchDiff
+        patch={diff}
+        disableWorkerPool
+        className="min-w-0 text-[11px]"
+        options={{
+          theme: "vitesse-dark",
+          themeType: "dark",
+          diffStyle: "unified",
+          disableLineNumbers: false,
+          disableFileHeader: true,
+          overflow: "wrap",
+          preferredHighlighter: "shiki-js",
+        }}
+      />
+    )
+  }
+  const lines = diff.split("\n").slice(0, 4000)
+  return (
+    <pre className="m-0 whitespace-pre-wrap font-mono text-[11.5px] leading-[1.45] text-fg-dim">
+      {lines.join("\n")}
+    </pre>
   )
 }
 
 function EmptyState({ label }: { readonly label: string }): JSX.Element {
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-[12px] text-fg-dim">
+    <div className="flex min-h-0 flex-1 items-center justify-center px-3 text-center text-[12px] text-fg-dim">
       {label}
     </div>
   )
 }
 
-function ChangedFilesList({
-  loading,
-  grouped,
-  selectedPath,
-  onSelect,
-}: {
-  readonly loading: boolean
-  readonly grouped: ReadonlyArray<{ readonly status: GitChangeStatus; readonly files: ReadonlyArray<GitFileChange> }>
-  readonly selectedPath?: string
-  readonly onSelect: (path: string) => void
-}): JSX.Element {
-  if (loading) return <EmptyState label="Loading changes" />
+/** A top-aligned note inside a list box. Shares the list rows' horizontal padding
+ * so a placeholder → list transition doesn't shift the content (the load jank). */
+function ListNote({ label }: { readonly label: string }): JSX.Element {
+  return <div className="px-3 py-2 text-[12px] text-fg-dim">{label}</div>
+}
 
+/** The changed files, flat and already status-sorted. Each row toggles its own
+ * diff inline beneath it; the leading glyph (its colour) is the status cue, so
+ * rows carry no textual status label. */
+function ChangedFilesList({
+  changes,
+  workspace,
+  expanded,
+  onToggle,
+}: {
+  readonly changes: ReadonlyArray<GitFileChange>
+  readonly workspace: Workspace
+  readonly expanded: ReadonlySet<string>
+  readonly onToggle: (path: string) => void
+}): JSX.Element {
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto py-2">
-      {grouped.map((group) => (
-        <div key={group.status}>
-          <div className="px-3 pb-1 pt-2 font-mono text-[10px] uppercase tracking-[0.06em] text-fg-faint">
-            {STATUS_LABEL[group.status]}
-          </div>
-          {group.files.map((file) => (
-            <FileRow
-              key={`${file.originalPath ?? ""}:${file.path}`}
-              file={file}
-              selected={selectedPath === file.path}
-              onSelect={() => onSelect(file.path)}
-            />
-          ))}
-        </div>
+    <div className="py-1">
+      {changes.map((file) => (
+        <Fragment key={`${file.originalPath ?? ""}:${file.path}`}>
+          <FileRow file={file} expanded={expanded.has(file.path)} onToggle={() => onToggle(file.path)} />
+          {expanded.has(file.path) && <InlineDiff workspace={workspace} path={file.path} />}
+        </Fragment>
       ))}
     </div>
   )
 }
 
+/** The branch's commits, newest first — a flat list of one-line rows (the
+ * enclosing section supplies the header). */
+function CommitsList({ commits }: { readonly commits: ReadonlyArray<GitCommit> }): JSX.Element {
+  return (
+    <div className="py-1">
+      {commits.map((commit) => (
+        <CommitRow key={commit.sha} commit={commit} />
+      ))}
+    </div>
+  )
+}
+
+function CommitRow({ commit }: { readonly commit: GitCommit }): JSX.Element {
+  return (
+    <div className="flex items-baseline gap-2 px-3 py-[3px]" title={`${commit.shortSha} · ${commit.author}`}>
+      <span className="flex-none font-mono text-[11px] text-accent">{commit.shortSha}</span>
+      <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">{commit.subject}</span>
+      <span className="flex-none font-mono text-[10px] text-fg-faint">{formatCommitDate(commit.authoredAt)}</span>
+    </div>
+  )
+}
+
+/** ISO author date → a compact `MMM D` / `MMM D, YYYY` label for the row's right
+ * edge. Falls back to the raw string if it doesn't parse. */
+function formatCommitDate(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const sameYear = date.getFullYear() === new Date().getFullYear()
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  })
+}
+
 function FileRow({
   file,
-  selected,
-  onSelect,
+  expanded,
+  onToggle,
 }: {
   readonly file: GitFileChange
-  readonly selected: boolean
-  readonly onSelect: () => void
+  readonly expanded: boolean
+  readonly onToggle: () => void
 }): JSX.Element {
   const stat = file.isBinary
     ? "binary"
@@ -262,8 +325,13 @@ function FileRow({
         .filter(Boolean)
         .join(" ")
   return (
-    <Row active={selected} className="gap-2 px-3" onClick={onSelect}>
-      <span className={`w-3 flex-none font-mono text-[11px] font-semibold ${STATUS_COLOR[file.status]}`}>
+    <Row active={expanded} className="gap-1.5 px-3" onClick={onToggle}>
+      {expanded ? (
+        <CaretDown size={10} weight="bold" className="flex-none text-fg-faint" />
+      ) : (
+        <CaretRight size={10} weight="bold" className="flex-none text-fg-faint" />
+      )}
+      <span className={`w-3 flex-none text-center font-mono text-[11px] font-semibold ${STATUS_COLOR[file.status]}`}>
         {STATUS_GLYPH[file.status]}
       </span>
       <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground">
@@ -272,54 +340,6 @@ function FileRow({
       {file.staged && <span className="flex-none text-[10px] text-fg-dim">staged</span>}
       {stat && <span className="flex-none font-mono text-[10px] text-fg-dim">{stat}</span>}
     </Row>
-  )
-}
-
-function DiffView({
-  path,
-  diff,
-  loading,
-}: {
-  readonly path?: string
-  readonly diff: string
-  readonly loading: boolean
-}): JSX.Element {
-  const lines = diff.split("\n").slice(0, 4000)
-  return (
-    <div className="flex min-h-0 flex-col">
-      <div className="flex h-9 flex-none items-center gap-2 border-b border-border px-3">
-        <span className="text-[13px] font-medium">Diff</span>
-        {path && <span className="min-w-0 truncate font-mono text-[11px] text-fg-dim">{path}</span>}
-      </div>
-      {!path ? (
-        <EmptyState label="Select a file to view its diff" />
-      ) : loading ? (
-        <EmptyState label="Loading diff" />
-      ) : isPatch(diff) ? (
-        <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
-          <PatchDiff
-            patch={diff}
-            disableWorkerPool
-            className="min-w-0 text-[11px]"
-            options={{
-              theme: "vitesse-dark",
-              themeType: "dark",
-              diffStyle: "unified",
-              disableLineNumbers: false,
-              disableFileHeader: true,
-              overflow: "wrap",
-              preferredHighlighter: "shiki-js",
-            }}
-          />
-        </div>
-      ) : (
-        <div className="min-h-0 flex-1 overflow-auto px-3 py-2">
-          <pre className="m-0 whitespace-pre-wrap font-mono text-[11.5px] leading-[1.45] text-fg-dim">
-            {lines.join("\n")}
-          </pre>
-        </div>
-      )}
-    </div>
   )
 }
 

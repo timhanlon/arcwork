@@ -39,6 +39,10 @@ import { tracePtyChunk } from "./pty-trace.js"
 export interface LaunchRequest {
   readonly provider: string
   readonly chatId: ChatId
+  /** Diff endpoint to run in; defaults to the chat's own workspace. Letting it
+   * differ is what makes the comm/diff cross-product expressible — a worker can
+   * talk via one provider while writing into a workspace other than the chat's. */
+  readonly workspaceId?: string
   readonly preset?: string
   readonly prompt?: string
   /**
@@ -437,11 +441,6 @@ export const TargetSessionManagerLive = Layer.effect(
     const launch = (req: LaunchRequest) =>
       Effect.gen(function* () {
         const key = `${req.chatId}:${req.provider}`
-        const existing = (yield* SubscriptionRef.get(store)).get(key)
-        // one-per-(chat, provider) — but only if the PTY is actually alive. A
-        // persisted-but-dead row (reloaded after restart, or exited) must be
-        // relaunchable, not returned as a corpse that blocks a fresh spawn.
-        if (existing && ptys.has(existing.id)) return existing
 
         const spec = yield* registry.get(req.provider)
         if (!spec?.interactive) {
@@ -457,13 +456,36 @@ export const TargetSessionManagerLive = Layer.effect(
           return yield* Effect.fail(arcRequestError(`Unknown chat "${req.chatId}"`))
         }
         const wsList = yield* workspaces.list
-        const ws = wsList.find((w) => w.id === chat.workspaceId)
+        const wsId = req.workspaceId ?? chat.workspaceId
+        const ws = wsList.find((w) => w.id === wsId)
         if (!ws) {
           return yield* Effect.fail(
-            arcRequestError(`Unknown workspace "${chat.workspaceId}" for chat "${req.chatId}"`),
+            arcRequestError(`Unknown workspace "${wsId}" for chat "${req.chatId}"`),
           )
         }
         const cwd = ws.path
+
+        const existing = (yield* SubscriptionRef.get(store)).get(key)
+        // The live key is (chat, provider) — cwd is NOT part of it, and the DB's
+        // UNIQUE(chat_id, provider) enforces the same one-per-pair rule. Reuse a
+        // live PTY only when it's already running in the workspace the caller
+        // asked for: relaunching the same provider against a *different*
+        // workspace would otherwise hand back the PTY still rooted in the old
+        // cwd, silently defeating the comm/diff split. Reject that — the caller
+        // must stop the live session before retargeting its workspace. A
+        // persisted-but-dead row (reloaded after restart, or exited) holds no
+        // live PTY, so it never blocks a fresh spawn; it is relaunched below.
+        if (existing && ptys.has(existing.id)) {
+          if (existing.cwd !== cwd) {
+            return yield* Effect.fail(
+              arcRequestError(
+                `Chat "${req.chatId}" already has a live ${req.provider} session in ${existing.cwd}; ` +
+                  `stop it before launching into ${cwd}`,
+              ),
+            )
+          }
+          return existing
+        }
         const id = existing?.id ?? newArcId("target")
 
         // Arm native-session capture BEFORE spawn: bring the hook socket up (so

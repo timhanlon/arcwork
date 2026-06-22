@@ -1,0 +1,95 @@
+import type { PullRequest, Repository, WorkspaceGitContext } from "../../../shared/git.js"
+import { arcId } from "../../../shared/ids.js"
+import { RepoContextBar } from "./RepoContextBar.js"
+
+export default {
+  title: "Git / RepoContextBar",
+}
+
+const repository: Repository = {
+  id: arcId("repo", "repo_1"),
+  rootPath: "/Users/tim/dev/aux",
+  defaultBranch: "main",
+  githubOwner: "twofutures",
+  githubRepo: "arc-electron",
+}
+
+const pr = (overrides: Partial<PullRequest>): PullRequest => ({
+  id: arcId("pr", "pr_1"),
+  number: 128,
+  title: "Make GitHub PRs and Git worktrees first-class",
+  state: "open",
+  isDraft: false,
+  author: "tim",
+  headRef: "feat/git",
+  baseRef: "main",
+  reviewState: null,
+  checksState: null,
+  mergeable: "mergeable",
+  url: "https://github.com/twofutures/arc-electron/pull/128",
+  updatedAt: "2026-06-19T12:00:00.000Z",
+  ...overrides,
+})
+
+const context = (overrides: Partial<WorkspaceGitContext>): WorkspaceGitContext => ({
+  workspaceId: arcId("workspace", "workspace_1"),
+  branch: "feat/git",
+  repository,
+  worktrees: [],
+  currentPullRequest: null,
+  ...overrides,
+})
+
+const Frame = ({ children }: { children: React.ReactNode }) => (
+  <div style={{ width: 520, background: "var(--background)" }}>{children}</div>
+)
+
+/** Open PR, checks passing, approved — the happy path. */
+export const OpenApprovedPassing = () => (
+  <Frame>
+    <RepoContextBar
+      context={context({ currentPullRequest: pr({ checksState: "passing", reviewState: "approved" }) })}
+    />
+  </Frame>
+)
+
+/** Checks failing, changes requested. */
+export const FailingChangesRequested = () => (
+  <Frame>
+    <RepoContextBar
+      context={context({
+        currentPullRequest: pr({ checksState: "failing", reviewState: "changes_requested" }),
+      })}
+    />
+  </Frame>
+)
+
+/** Draft PR with checks still running. */
+export const DraftPending = () => (
+  <Frame>
+    <RepoContextBar context={context({ currentPullRequest: pr({ isDraft: true, checksState: "pending" }) })} />
+  </Frame>
+)
+
+/** On a branch with no PR yet. */
+export const NoPullRequest = () => (
+  <Frame>
+    <RepoContextBar context={context({ currentPullRequest: null })} />
+  </Frame>
+)
+
+/** A local repo with no GitHub remote — slug omitted, no PR. */
+export const NoGitHubRemote = () => (
+  <Frame>
+    <RepoContextBar
+      context={context({ repository: { ...repository, githubOwner: null, githubRepo: null } })}
+    />
+  </Frame>
+)
+
+/** Not a git repository — renders nothing. */
+export const NotARepo = () => (
+  <Frame>
+    <RepoContextBar context={context({ repository: null })} />
+  </Frame>
+)

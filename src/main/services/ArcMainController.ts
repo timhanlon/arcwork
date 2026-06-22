@@ -12,6 +12,7 @@ import { RawHookSignalService } from "./RawHookSignalService.js"
 import { ArtifactIngestService } from "./ArtifactIngestService.js"
 import { ingestHookSignal } from "./HookSignalIngestion.js"
 import { WorkService } from "../work/service.js"
+import { GitService } from "./GitService.js"
 import {
   commitCitationNote,
   commitFromSignal,
@@ -165,6 +166,7 @@ export const launchArcMainController = (
   | LiveTargetStateService
   | ArtifactIngestService
   | WorkService
+  | GitService
 > =>
   Effect.gen(function* () {
     const sessions = yield* TargetSessionManager
@@ -175,6 +177,7 @@ export const launchArcMainController = (
     const liveStates = yield* LiveTargetStateService
     const artifactIngest = yield* ArtifactIngestService
     const work = yield* WorkService
+    const git = yield* GitService
 
     // Per-target artifact pollers. A FiberMap is a scoped resource: each poller
     // is keyed by target session id, replacing or removing one interrupts its
@@ -441,6 +444,25 @@ export const launchArcMainController = (
         Effect.ignore,
       )
 
+    // Git-provider hook events are opportunistic read-model refresh triggers,
+    // not chat/turn events — each terminates the signal handler. Returns null
+    // when the signal isn't a handled git event, so it falls through to the
+    // chat/turn projection. post-checkout/pre-push are keyed by the worktree cwd
+    // the hook ran in; commit citation carries its sha in the hook input.
+    const gitHookEffect = (signal: HookSignal): Effect.Effect<void> | null => {
+      if (signal.provider !== "git") return null
+      if (isCommitSignal(signal)) return stampCommitCitation(signal)
+      if (!signal.cwd) return null
+      switch (signal.declaredEvent) {
+        case "post-checkout":
+          return git.notifyCheckout(signal.cwd)
+        case "pre-push":
+          return git.notifyPrePush(signal.cwd)
+        default:
+          return null
+      }
+    }
+
     // Persist/project each signal, then drive artifact polling: providers that
     // can't backfill on Stop (cursor) get polled while a turn is open; a
     // terminal event backfills once and stops that target's poller.
@@ -458,10 +480,12 @@ export const launchArcMainController = (
             { raw: rawHookSignals, activity: activityEvents, chat: chatMessages },
             signal,
           )
-          // Commit signals don't drive the chat/turn projections below; they
-          // resolve to a typed citation on the chat's work and then stop here.
-          if (isCommitSignal(signal)) {
-            yield* stampCommitCitation(signal)
+          // Git-provider events (commit citation, branch remap, debounced PR
+          // sync) resolve to a read-model refresh and stop here; everything else
+          // falls through to the chat/turn projection below.
+          const gitEffect = gitHookEffect(signal)
+          if (gitEffect) {
+            yield* gitEffect
             return
           }
           // Drive the live "generating" activity: a prompt submit opens the

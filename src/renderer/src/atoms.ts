@@ -3,7 +3,7 @@ import * as Atom from "effect/unstable/reactivity/Atom"
 import { AtomRpc } from "effect/unstable/reactivity"
 import { rpc, sharedFlatRpcClient } from "./rpc-client.js"
 import { ArcRpcs } from "../../shared/rpc.js"
-import { arcId, type ChatId } from "../../shared/ids.js"
+import { arcId, type ChatId, type WorkspaceId } from "../../shared/ids.js"
 import type { Work, WorkStatus } from "../../shared/work.js"
 
 /**
@@ -124,6 +124,86 @@ const chatActivitySignalAtom = Atom.family((chatId: string) =>
     { initialValue: 0 },
   )
 )
+
+/**
+ * Per-workspace git read-model refresh signal. `WatchGitChanges` ticks whenever
+ * a hook-driven branch remap (`post-checkout`) or PR sync (`pre-push`) touched
+ * that workspace's repo/PR state; the Git pane re-pulls its context on each
+ * increment. Seed `0` matches `initialValue` so the pane's own first pull on
+ * mount isn't doubled by a boot tick.
+ */
+export const gitChangesSignalAtom = Atom.family((workspaceId: WorkspaceId) =>
+  ArcRpcAtomClient.runtime.atom(
+    Stream.unwrap(
+      ArcRpcAtomClient.use((client) =>
+        Effect.succeed(
+          signalCount(
+            client("WatchGitChanges", undefined).pipe(Stream.filter((c) => c.workspaceId === workspaceId)),
+          ),
+        ),
+      ),
+    ),
+    { initialValue: 0 },
+  )
+)
+
+/**
+ * The per-workspace git read model as shared, signal-refreshed atoms: working-tree
+ * status, the repo/branch→PR context, and the branch's commits. Hoisting these out
+ * of the Git pane's local state lets the data survive the pane's mount/unmount and
+ * be warmed before the pane opens (a subscriber keeps the active workspace's atoms
+ * live). Each refreshes on {@link gitChangesSignalAtom} and retains its prior value
+ * while re-pulling, so a refresh never flashes the pane empty.
+ *
+ * The idle TTL keeps a workspace's value (and its live signal refresh) for a window
+ * after you switch away, so switching back is instant instead of a cold re-pull —
+ * while still releasing workspaces you haven't touched in a while.
+ */
+const GIT_ATOM_TTL = Duration.minutes(5)
+
+export const gitStatusAtom = Atom.family((workspaceId: WorkspaceId) =>
+  ArcRpcAtomClient.query("GetWorkspaceGitStatus", { workspaceId }).pipe(
+    Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.setIdleTTL(GIT_ATOM_TTL),
+  )
+)
+
+export const gitContextAtom = Atom.family((workspaceId: WorkspaceId) =>
+  ArcRpcAtomClient.query("GetWorkspaceGitContext", { workspaceId }).pipe(
+    Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.setIdleTTL(GIT_ATOM_TTL),
+  )
+)
+
+export const gitCommitsAtom = Atom.family((workspaceId: WorkspaceId) =>
+  ArcRpcAtomClient.query("GetWorkspaceGitCommits", { workspaceId }).pipe(
+    Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.setIdleTTL(GIT_ATOM_TTL),
+  )
+)
+
+/**
+ * One changed file's diff, keyed on `(workspaceId, path)` so an expanded row
+ * reads its own cached value and refreshes on the same git signal as the rest of
+ * the pane (an inline diff no longer goes stale beside its live-updating row).
+ * Composite string key because `Atom.family` memoizes by `Equal`, which treats
+ * plain-object args as reference-unique; a workspace id and a path never contain
+ * a newline, so it is an unambiguous separator.
+ */
+const gitFileDiffKey = (workspaceId: WorkspaceId, path: string): string => `${workspaceId}\n${path}`
+
+export const gitFileDiffAtom = Atom.family((key: string) => {
+  const sep = key.indexOf("\n")
+  const workspaceId = arcId("workspace", key.slice(0, sep))
+  const path = key.slice(sep + 1)
+  return ArcRpcAtomClient.query("GetWorkspaceGitFileDiff", { workspaceId, path }).pipe(
+    Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.setIdleTTL(GIT_ATOM_TTL),
+  )
+})
+
+export const gitFileDiffAtomFor = (workspaceId: WorkspaceId, path: string) =>
+  gitFileDiffAtom(gitFileDiffKey(workspaceId, path))
 
 /**
  * The work navigator/comments refresh signal. Work has two change sources folded

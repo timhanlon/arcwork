@@ -6,7 +6,7 @@ import { Preset } from "./preset.js"
 import { Chat } from "./chat.js"
 import { ActivityEvent } from "./activity-event.js"
 import { ChatMessage } from "./chat-message.js"
-import { GitFileDiff, GitStatus } from "./git.js"
+import { GitCommit, GitFileDiff, GitStatus, PullRequest, Worktree, WorkspaceGitContext } from "./git.js"
 import { PendingRequest } from "./chat-request.js"
 import { Instance, TargetSession } from "./instance.js"
 import { LiveTargetState } from "./live-target-state.js"
@@ -114,6 +114,7 @@ const IngestKinds = Schema.Literals(["all", "claude", "codex", "cursor"])
  */
 const ChatChange = Schema.Struct({ chatId: ChatId })
 const WorkChangeWire = Schema.Struct({ refId: WorkId, chatId: Schema.NullOr(ChatId) })
+const GitChange = Schema.Struct({ workspaceId: WorkspaceId })
 
 /**
  * The contract. Each `Rpc.make` carries its own payload + success + error, so
@@ -144,6 +145,87 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("GetWorkspaceGitFileDiff", {
     payload: { workspaceId: WorkspaceId, path: Schema.String },
     success: GitFileDiff,
+    error: RpcError,
+  }),
+  /** Recent commits on the workspace's current branch (newest first), for the Git
+   * pane's history list. Local read; `limit` caps the count (default applied in
+   * the service). */
+  Rpc.make("GetWorkspaceGitCommits", {
+    payload: { workspaceId: WorkspaceId, limit: Schema.optional(Schema.Number) },
+    success: Schema.Array(GitCommit),
+    error: RpcError,
+  }),
+  /**
+   * The workspace's git context — clone identity, worktrees, current branch, and
+   * the PR that branch maps to. Read-only and local: it runs repo detection (git
+   * plumbing) to populate the read model but does NOT hit the network, so it's
+   * safe to call on Git-pane open. `SyncWorkspacePullRequests` is the explicit
+   * network refresh.
+   */
+  Rpc.make("GetWorkspaceGitContext", {
+    payload: { workspaceId: WorkspaceId },
+    success: WorkspaceGitContext,
+    error: RpcError,
+  }),
+  /** Refresh the repository's pull requests from GitHub via `gh` and return the
+   * persisted rows. The one network call in the git surface — caller-triggered. */
+  Rpc.make("SyncWorkspacePullRequests", {
+    payload: { workspaceId: WorkspaceId },
+    success: Schema.Array(PullRequest),
+    error: RpcError,
+  }),
+  /** Create an arc-managed worktree for a branch under the workspace's repo.
+   * `createBranch` cuts a new branch off `baseRef` (default branch when omitted). */
+  Rpc.make("CreateWorktree", {
+    payload: {
+      workspaceId: WorkspaceId,
+      branch: Schema.String,
+      baseRef: Schema.optional(Schema.String),
+      createBranch: Schema.optional(Schema.Boolean),
+    },
+    success: Worktree,
+    error: RpcError,
+  }),
+  /** Open an existing worktree path as a workspace (no dialog). */
+  Rpc.make("OpenWorktree", {
+    payload: { worktreePath: Schema.String },
+    success: Workspace,
+    error: RpcError,
+  }),
+  /** Remove a worktree (`git worktree remove`); `force` overrides a dirty tree. */
+  Rpc.make("RemoveWorktree", {
+    payload: {
+      workspaceId: WorkspaceId,
+      worktreePath: Schema.String,
+      force: Schema.optional(Schema.Boolean),
+    },
+    success: Schema.Struct({ removed: Schema.Boolean }),
+    error: RpcError,
+  }),
+  /** Prune missing worktrees and reconcile the read model; returns the count. */
+  Rpc.make("PruneWorktrees", {
+    payload: { workspaceId: WorkspaceId },
+    success: Schema.Struct({ removed: Schema.Number }),
+    error: RpcError,
+  }),
+  /** Auto-prune arc-managed worktrees whose branch has a merged PR (safe-only).
+   * Returns the paths actually pruned. */
+  Rpc.make("PruneMergedWorktrees", {
+    payload: { workspaceId: WorkspaceId },
+    success: Schema.Array(Schema.String),
+    error: RpcError,
+  }),
+  /** Open a GitHub PR for the workspace's current branch via `gh pr create`,
+   * then sync it into the read model. */
+  Rpc.make("CreatePullRequest", {
+    payload: {
+      workspaceId: WorkspaceId,
+      title: Schema.optional(Schema.String),
+      body: Schema.optional(Schema.String),
+      base: Schema.optional(Schema.String),
+      draft: Schema.optional(Schema.Boolean),
+    },
+    success: Schema.NullOr(PullRequest),
     error: RpcError,
   }),
   Rpc.make("ListPresets", { success: Schema.Array(Preset), error: RpcError }),
@@ -220,6 +302,9 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("WatchChatMessageChanges", { success: ChatChange, error: RpcError, stream: true }),
   Rpc.make("WatchChatActivityChanges", { success: ChatChange, error: RpcError, stream: true }),
   Rpc.make("WatchWorkChanges", { success: WorkChangeWire, error: RpcError, stream: true }),
+  /** Git read-model invalidation: a hook-driven branch remap or PR sync touched
+   * a workspace's repo/PR state — the Git pane re-pulls `GetWorkspaceGitContext`. */
+  Rpc.make("WatchGitChanges", { success: GitChange, error: RpcError, stream: true }),
   Rpc.make("ReprojectChatMessages", {
     payload: { chatId: ChatId },
     success: ReprojectResult,
@@ -239,6 +324,9 @@ export const ArcRpcs = RpcGroup.make(
     payload: {
       provider: Schema.String,
       chatId: ChatId,
+      /** Diff endpoint to run in — the worker writes here and hooks/file refs
+       * resolve against it. Omit to use the chat's own workspace. */
+      workspaceId: Schema.optional(WorkspaceId),
       /** draft prompt to seed the session (prefill flag / env / stdin per provider) */
       prompt: Schema.optional(Schema.String),
       preset: Schema.optional(Schema.String),

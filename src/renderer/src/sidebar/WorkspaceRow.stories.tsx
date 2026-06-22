@@ -39,6 +39,50 @@ export const Default = () => (
   </Column>
 )
 
+/** A branch with an open PR (right-edge chip) and a draft PR (muted glyph). */
+export const WithPullRequest = () => (
+  <Column>
+    <WorkspaceRow
+      workspace={workspace({
+        id: "w-pr",
+        name: "arc-feat-git",
+        path: "/Users/you/.worktrees/arc-feat-git",
+        branch: "feat/git",
+        isWorktree: true,
+        pullRequest: {
+          number: 128,
+          title: "feat(git): show PR + commits in the git surface",
+          state: "open",
+          isDraft: false,
+          url: "https://github.com/acme/arc/pull/128",
+        },
+      })}
+      selected={false}
+      onSelect={noop}
+      disclosure={chevron}
+    />
+    <WorkspaceRow
+      workspace={workspace({
+        id: "w-pr-draft",
+        name: "arc-spike",
+        path: "/Users/you/.worktrees/arc-spike",
+        branch: "spike/idea",
+        isWorktree: true,
+        pullRequest: {
+          number: 131,
+          title: "wip: exploratory spike",
+          state: "open",
+          isDraft: true,
+          url: "https://github.com/acme/arc/pull/131",
+        },
+      })}
+      selected={false}
+      onSelect={noop}
+      disclosure={chevron}
+    />
+  </Column>
+)
+
 /** A deep path — exercises the subtitle's ellipsis truncation. */
 export const LongPath = () => (
   <Column>

@@ -128,6 +128,50 @@ describe("ReadService.search", () => {
     expect(result.done).toEqual(["finished item"])
   })
 
+  it("scopes search to the whole project: a worktree sees the repo's work, a plain folder stays isolated", async () => {
+    const result = await run(
+      Effect.gen(function* () {
+        const work = yield* WorkService
+        const chats = yield* ChatService
+        const read = yield* ReadService
+        const db = yield* ArcStore
+        yield* db.upsertRepository({
+          id: arcId("repo", "repo_1"),
+          commonGitDir: "/tmp/repo/.git",
+          rootPath: "/tmp/repo",
+          defaultBranch: "main",
+          remotesJson: "[]",
+          githubOwner: null,
+          githubRepo: null,
+          githubNodeId: null,
+          createdAt: "2026-06-08T00:00:00.000Z",
+          lastSeenAt: "2026-06-08T00:00:00.000Z",
+        })
+        yield* insertWorkspace(arcId("workspace", "ws_main"))
+        yield* insertWorkspace(arcId("workspace", "ws_wt"))
+        yield* insertWorkspace(arcId("workspace", "ws_plain"))
+        // main checkout and worktree share the repository; the folder has none.
+        yield* db.setWorkspaceGit(arcId("workspace", "ws_main"), { repositoryId: "repo_1" })
+        yield* db.setWorkspaceGit(arcId("workspace", "ws_wt"), { repositoryId: "repo_1" })
+
+        const mainChat = yield* chats.create(arcId("workspace", "ws_main"), "main chat")
+        yield* work.create({ title: "shared project work", body: "authored in main" }, prov(mainChat.id))
+        const worktreeChat = yield* chats.create(arcId("workspace", "ws_wt"), "worktree chat")
+        const plainChat = yield* chats.create(arcId("workspace", "ws_plain"), "plain chat")
+
+        const fromWorktree = yield* read.search({ filters: { chatId: worktreeChat.id } })
+        const fromPlain = yield* read.search({ filters: { chatId: plainChat.id } })
+        return {
+          fromWorktree: fromWorktree.hits.map((h) => h.title),
+          fromPlain: fromPlain.hits.map((h) => h.title),
+        }
+      }),
+    )
+
+    expect(result.fromWorktree).toContain("shared project work")
+    expect(result.fromPlain).not.toContain("shared project work")
+  })
+
   it("hides a closed work that was commented on while open (comment-row status stays in sync)", async () => {
     // Regression: search_document keeps a `comment:` row per comment, snapshotting
     // the work's status at comment time. A status change must refresh those rows,

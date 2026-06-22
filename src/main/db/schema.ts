@@ -12,7 +12,18 @@
 
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
-import type { ActivityId, ChatId, HookId, MessageId, TargetId, WorkspaceId } from "../../shared/ids.js"
+import { newArcId } from "../../shared/ids.js"
+import type {
+  ActivityId,
+  ChatId,
+  HookId,
+  MessageId,
+  PrId,
+  RepositoryId,
+  TargetId,
+  WorkspaceId,
+  WorktreeId,
+} from "../../shared/ids.js"
 import { sqlMigration, type Migrations } from "./migrator.js"
 
 const addSearchDocumentWorkspaceColumn = Effect.gen(function* () {
@@ -30,13 +41,93 @@ const sqlMigrationAfterWorkspaceColumn = (
     Effect.andThen(sqlMigration(...statements)),
   )
 
-/** One row per workspace (a filesystem root for chats and target cwd). */
+/** One row per workspace (a filesystem root for chats and target cwd).
+ * The git columns are a cached snapshot of the workspace's cwd for fast UI —
+ * `repositoryId`/`worktreeId` bind it into the git domain (sidebar grouping,
+ * branch→PR map), `gitBranch`/`gitHeadSha` are refreshed by the post-checkout
+ * hook. All null until git detection runs; the canonical worktree model lives
+ * in `worktrees`, not here. */
 export interface WorkspaceRow {
   readonly id: WorkspaceId
   readonly path: string
   readonly name: string
   readonly createdAt: string
   readonly lastOpenedAt: string
+  readonly repositoryId: RepositoryId | null
+  readonly worktreeId: WorktreeId | null
+  readonly gitBranch: string | null
+  readonly gitHeadSha: string | null
+}
+
+/** A local clone of a repository — one common git dir on disk. Owns the git
+ * identity (remotes, main worktree) and, when resolved, the GitHub identity.
+ * GitHub columns are null for a clone with no recognized remote; it is still a
+ * valid repository row. Keyed locally by `commonGitDir`. */
+export interface RepositoryRow {
+  readonly id: RepositoryId
+  readonly commonGitDir: string
+  /** the main worktree path (`git rev-parse --show-toplevel` of the clone) */
+  readonly rootPath: string
+  readonly defaultBranch: string | null
+  /** JSON array of `{ name, url }` for the clone's git remotes */
+  readonly remotesJson: string
+  readonly githubOwner: string | null
+  readonly githubRepo: string | null
+  readonly githubNodeId: string | null
+  readonly createdAt: string
+  readonly lastSeenAt: string
+}
+
+/** A concrete git worktree under a repository's common git dir — first-class so
+ * the lifecycle (list/create/open/remove/prune) has somewhere to live, distinct
+ * from an arc workspace (a worktree can exist before arc opens it, or after the
+ * workspace is gone). Keyed by `path`. */
+export interface WorktreeRow {
+  readonly id: WorktreeId
+  readonly repositoryId: RepositoryId
+  readonly path: string
+  readonly branch: string | null
+  readonly headSha: string | null
+  readonly isDetached: number
+  readonly isBare: number
+  readonly isLocked: number
+  readonly lockedReason: string | null
+  readonly isPrunable: number
+  readonly prunableReason: string | null
+  readonly createdAt: string
+  readonly lastSeenAt: string
+}
+
+/** The GitHub PR read model — a synced mirror of remote state, never authored
+ * locally. Carries its own id so a work item can cite it via a graph edge.
+ * Keyed `(repositoryId, number)`; `(repositoryId, headRef)` is the branch→PR
+ * map. `checksState` is a JSON summary; `lastSyncedAt` stamps the last sync. */
+export interface PullRequestRow {
+  readonly id: PrId
+  readonly repositoryId: RepositoryId
+  readonly number: number
+  readonly githubNodeId: string | null
+  readonly title: string
+  readonly body: string
+  readonly state: string
+  readonly isDraft: number
+  readonly author: string | null
+  readonly headRef: string
+  readonly headSha: string | null
+  /** The PR head's repository identity (GitHub owner/name). Needed because
+   * `headRef` is just a branch name and a fork can reuse it — see the
+   * branch→PR mapping in store.ts. Null for rows synced before this column. */
+  readonly headRepositoryOwner: string | null
+  readonly headRepositoryName: string | null
+  readonly baseRef: string
+  readonly reviewState: string | null
+  readonly checksState: string | null
+  readonly mergeable: string | null
+  readonly mergeStateStatus: string | null
+  readonly url: string | null
+  readonly lastSyncedAt: string
+  readonly createdAt: string
+  readonly updatedAt: string
 }
 
 /** One row per chat (a conversation thread). */
@@ -47,13 +138,39 @@ export interface ChatRow {
   readonly createdAt: string
 }
 
-/** One row per interactive PTY target session, keyed `(chatId, provider)`. */
+/** A communication endpoint — the "where turns flow" half of a worker: the
+ * harness/provider, the (eventually selectable) model, and a preset. `kind` is
+ * `'local'` today; the remote tier adds `'remote'`/`'cloudflare-sandbox'`
+ * without a model change. Distinct from the diff endpoint (`workspaces`), which
+ * is the "where code state lives" half; a `target_sessions` row binds the two.
+ * `id` is a TypeID (`channel_…`) like every other arc id; identity/dedup is the
+ * `(kind, provider, model, preset)` tuple, enforced by a unique index (model
+ * null = "harness default"). */
+export interface ChannelRow {
+  readonly id: string
+  readonly kind: string
+  readonly provider: string
+  readonly model: string | null
+  readonly preset: string | null
+  readonly createdAt: string
+  readonly lastUsedAt: string
+}
+
+/** One row per interactive PTY target session, keyed `(chatId, provider)` — the
+ * worker, i.e. the bound pair of a comm endpoint (`channelId` → `channels`) and
+ * a diff endpoint (`workspaceId` → `workspaces`). `provider`/`preset`/`cwd` are
+ * the pre-split inlined values, kept dual-written until the launch path reads
+ * the refs; `channelId`/`workspaceId` are null only for backfill orphans. */
 export interface TargetSessionRow {
   readonly id: TargetId
   readonly chatId: ChatId
   readonly provider: string
   readonly preset: string | null
   readonly cwd: string
+  /** comm endpoint: the `channels` row this worker talks through */
+  readonly channelId: string | null
+  /** diff endpoint: the `workspaces` row this worker writes into */
+  readonly workspaceId: string | null
   /** discovered after launch via the SessionStart hook; null until bound */
   readonly nativeSessionId: string | null
   readonly nativeTranscriptPath: string | null
@@ -554,5 +671,151 @@ export const arcMigrations: Migrations = {
       updated_at = excluded.updated_at;
   END`,
     `INSERT INTO search_document_fts(search_document_fts) VALUES ('rebuild')`,
+  ),
+  // Git/GitHub domain read model (work_01kve8w6: PRs + worktrees first-class).
+  // Three flat read-model tables in the domain store — repo/worktree state is a
+  // cache of local git, PRs a cache of GitHub; neither is authored content, so
+  // none of it belongs in the work-graph substrate. A work→PR link is a
+  // `graph_edge` to the pr id (to_kind='external'), needing no work-schema
+  // change. `repositories` collapses GitHub identity and local clone into one
+  // row (github_* null until a remote is resolved); the speculative repo↔clone
+  // 1:N split is deferred until a real multi-clone-of-one-repo need appears.
+  // `workspaces` gains nullable git columns (a cached cwd snapshot for fast UI),
+  // added with default NULL so the REFERENCES clause is legal under an
+  // ALTER (and so existing rows stay valid). search_document projection deferred.
+  "0006_git_repositories": sqlMigration(
+    `CREATE TABLE IF NOT EXISTS repositories (
+    id TEXT PRIMARY KEY,
+    common_git_dir TEXT NOT NULL UNIQUE,
+    root_path TEXT NOT NULL,
+    default_branch TEXT,
+    remotes_json TEXT NOT NULL DEFAULT '[]',
+    github_owner TEXT,
+    github_repo TEXT,
+    github_node_id TEXT,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+  )`,
+    `CREATE TABLE IF NOT EXISTS worktrees (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    path TEXT NOT NULL UNIQUE,
+    branch TEXT,
+    head_sha TEXT,
+    is_detached INTEGER NOT NULL DEFAULT 0,
+    is_bare INTEGER NOT NULL DEFAULT 0,
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    locked_reason TEXT,
+    is_prunable INTEGER NOT NULL DEFAULT 0,
+    prunable_reason TEXT,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+  )`,
+    `CREATE TABLE IF NOT EXISTS pull_requests (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    number INTEGER NOT NULL,
+    github_node_id TEXT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL,
+    is_draft INTEGER NOT NULL DEFAULT 0,
+    author TEXT,
+    head_ref TEXT NOT NULL,
+    head_sha TEXT,
+    base_ref TEXT NOT NULL,
+    review_state TEXT,
+    checks_state TEXT,
+    mergeable TEXT,
+    merge_state_status TEXT,
+    url TEXT,
+    last_synced_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(repository_id, number)
+  )`,
+    `CREATE INDEX IF NOT EXISTS worktrees_repo ON worktrees(repository_id, path)`,
+    `CREATE INDEX IF NOT EXISTS pull_requests_repo_head ON pull_requests(repository_id, head_ref)`,
+    `ALTER TABLE workspaces ADD COLUMN repository_id TEXT REFERENCES repositories(id)`,
+    `ALTER TABLE workspaces ADD COLUMN worktree_id TEXT REFERENCES worktrees(id)`,
+    `ALTER TABLE workspaces ADD COLUMN git_branch TEXT`,
+    `ALTER TABLE workspaces ADD COLUMN git_head_sha TEXT`,
+    `CREATE INDEX IF NOT EXISTS workspaces_repository ON workspaces(repository_id)`,
+  ),
+  // Unweld the worker into its two transports (work_01kvnz9h). A target session
+  // had welded the comm endpoint (harness `provider`/`preset`) and the diff
+  // endpoint (`cwd`) into one row, so neither could be selected independently.
+  // Split them: `channels` is the comm endpoint (the only new table); the diff
+  // endpoint is the existing `workspaces`. `target_sessions` gains `channel_id`
+  // + `workspace_id` refs alongside the still-inlined `provider`/`preset`/`cwd`,
+  // which stay dual-written alongside. Backfill: one local channel per distinct
+  // `(provider, preset)` in use (model null = "harness default"), and each
+  // session points at the workspace whose path equals its cwd. A cwd with no
+  // matching workspace row leaves `workspace_id` null and falls back to the
+  // `cwd` column.
+  //
+  // Channel ids are minted TypeIDs; identity/dedup is the `(kind, provider,
+  // model, preset)` tuple, held by a unique index over `COALESCE(model,'')`/
+  // `COALESCE(preset,'')` so the nullable columns still dedupe (SQLite treats
+  // NULL as distinct in a plain UNIQUE).
+  "0007_worker_comm_diff_endpoints": Effect.gen(function* () {
+    const sql = yield* SqlClient
+    yield* sql.unsafe(`CREATE TABLE channels (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT,
+      preset TEXT,
+      created_at TEXT NOT NULL,
+      last_used_at TEXT NOT NULL
+    )`)
+    yield* sql.unsafe(
+      `CREATE UNIQUE INDEX channels_identity ON channels(kind, provider, COALESCE(model, ''), COALESCE(preset, ''))`,
+    )
+    yield* sql.unsafe(`ALTER TABLE target_sessions ADD COLUMN channel_id TEXT REFERENCES channels(id)`)
+    yield* sql.unsafe(`ALTER TABLE target_sessions ADD COLUMN workspace_id TEXT REFERENCES workspaces(id)`)
+
+    // One local channel per distinct (provider, preset) in use, each with a
+    // freshly minted TypeID; timestamps span the sessions that used it.
+    const groups = yield* sql.unsafe<{
+      provider: string
+      preset: string | null
+      firstAt: string
+      lastAt: string
+    }>(`SELECT provider, preset, MIN(started_at) AS firstAt, MAX(started_at) AS lastAt
+        FROM target_sessions GROUP BY provider, preset`)
+    for (const g of groups) {
+      yield* sql`INSERT INTO channels ${sql.insert({
+        id: newArcId("channel"),
+        kind: "local",
+        provider: g.provider,
+        model: null,
+        preset: g.preset,
+        createdAt: g.firstAt,
+        lastUsedAt: g.lastAt,
+      })} ON CONFLICT (kind, provider, COALESCE(model, ''), COALESCE(preset, '')) DO NOTHING`
+    }
+
+    yield* sql.unsafe(`UPDATE target_sessions
+      SET channel_id = (
+        SELECT id FROM channels c
+        WHERE c.kind = 'local'
+          AND c.provider = target_sessions.provider
+          AND COALESCE(c.preset, '') = COALESCE(target_sessions.preset, '')
+      )`)
+    yield* sql.unsafe(`UPDATE target_sessions
+      SET workspace_id = (SELECT id FROM workspaces WHERE workspaces.path = target_sessions.cwd)`)
+    yield* sql.unsafe(`CREATE INDEX target_sessions_channel ON target_sessions(channel_id)`)
+    yield* sql.unsafe(`CREATE INDEX target_sessions_workspace ON target_sessions(workspace_id)`)
+  }),
+  // Fork-safe branch→PR mapping. `head_ref` alone collides across forks — a
+  // fork's `feature/foo` and a local `feature/foo` share a branch name — so a
+  // local branch could resolve to someone else's fork PR. Capture the PR head's
+  // repo identity (owner/name) so the branch→PR lookup can require the head to
+  // live in the repository itself, not a fork. Nullable + default NULL so
+  // existing rows stay valid; they backfill on the next `gh pr list` sync.
+  "0008_pr_head_repository": sqlMigration(
+    `ALTER TABLE pull_requests ADD COLUMN head_repository_owner TEXT`,
+    `ALTER TABLE pull_requests ADD COLUMN head_repository_name TEXT`,
   ),
 }

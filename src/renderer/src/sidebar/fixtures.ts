@@ -13,7 +13,18 @@ export const REFERENCE_NOW = "2026-06-07T17:00:00.000Z"
 export function workspace(
   over: Partial<Omit<Workspace, "id">> & { readonly id: string },
 ): Workspace {
-  return { path: "/Users/you/dev/arc-test", name: "arc-test", ...over, id: arcId("workspace", over.id) }
+  return {
+    path: "/Users/you/dev/arc-test",
+    name: "arc-test",
+    repositoryId: null,
+    repoLabel: null,
+    defaultBranch: null,
+    branch: null,
+    isWorktree: false,
+    pullRequest: null,
+    ...over,
+    id: arcId("workspace", over.id),
+  }
 }
 
 export function chat(
@@ -92,7 +103,32 @@ export const LIVE_ACTIVITIES: ReadonlyArray<LiveTargetActivity> = [
 
 /** A populated two-workspace tree used by the integration stories. */
 export const workspacesFixture: ReadonlyArray<Workspace> = [
-  workspace({ id: "workspace_arc", name: "arc-test", path: "/Users/you/dev/arc-test" }),
+  workspace({
+    id: "workspace_arc",
+    name: "arc-test",
+    path: "/Users/you/dev/arc-test",
+    repositoryId: "repo_arc",
+    repoLabel: "acme/arc",
+    defaultBranch: "main",
+    branch: "main",
+  }),
+  workspace({
+    id: "workspace_arc_feat",
+    name: "arc-feat-git",
+    path: "/Users/you/.worktrees/arc-feat-git",
+    repositoryId: "repo_arc",
+    repoLabel: "acme/arc",
+    defaultBranch: "main",
+    branch: "feat/git",
+    isWorktree: true,
+    pullRequest: {
+      number: 42,
+      title: "feat(git): carry repo identity on the workspace DTO",
+      state: "open",
+      isDraft: false,
+      url: "https://github.com/acme/arc/pull/42",
+    },
+  }),
   workspace({
     id: "workspace_long",
     name: "compound-engineering",

@@ -5,6 +5,7 @@ import { ElectronRpcServerProtocol } from "./rpc-transport.js"
 import { WorkspaceService } from "./services/WorkspaceService.js"
 import { WorkspaceFilesService } from "./services/WorkspaceFilesService.js"
 import { GitService } from "./services/GitService.js"
+import { toWirePullRequest, toWireWorktree } from "./services/git/wire.js"
 import { ProviderRegistry } from "./services/ProviderRegistry.js"
 import { PresetRegistry } from "./services/PresetRegistry.js"
 import { ChatService } from "./services/ChatService.js"
@@ -75,6 +76,75 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
         "GetWorkspaceGitFileDiff",
         Effect.flatMap(GitService, (_) => _.diff(req.workspaceId, req.path)),
       ),
+    GetWorkspaceGitCommits: (req) =>
+      rpcEffect(
+        "GetWorkspaceGitCommits",
+        Effect.flatMap(GitService, (_) => _.commits(req.workspaceId, req.limit)),
+      ),
+    GetWorkspaceGitContext: (req) =>
+      rpcEffect("GetWorkspaceGitContext", Effect.flatMap(GitService, (_) => _.gitContext(req.workspaceId))),
+    SyncWorkspacePullRequests: (req) =>
+      rpcEffect(
+        "SyncWorkspacePullRequests",
+        Effect.map(
+          Effect.flatMap(GitService, (_) => _.syncPullRequests(req.workspaceId)),
+          (rows) => rows.map(toWirePullRequest),
+        ),
+      ),
+    CreateWorktree: (req) =>
+      rpcEffect(
+        "CreateWorktree",
+        Effect.map(
+          Effect.flatMap(GitService, (_) =>
+            _.createWorktree(req.workspaceId, {
+              branch: req.branch,
+              baseRef: req.baseRef,
+              createBranch: req.createBranch,
+            }),
+          ),
+          toWireWorktree,
+        ),
+      ),
+    OpenWorktree: (req) =>
+      rpcEffect("OpenWorktree", Effect.flatMap(GitService, (_) => _.openWorktree(req.worktreePath))),
+    RemoveWorktree: (req) =>
+      rpcEffect(
+        "RemoveWorktree",
+        Effect.as(
+          Effect.flatMap(GitService, (_) =>
+            _.removeWorktree(req.workspaceId, req.worktreePath, { force: req.force }),
+          ),
+          { removed: true },
+        ),
+      ),
+    PruneWorktrees: (req) =>
+      rpcEffect(
+        "PruneWorktrees",
+        Effect.map(
+          Effect.flatMap(GitService, (_) => _.pruneWorktrees(req.workspaceId)),
+          (removed) => ({ removed }),
+        ),
+      ),
+    PruneMergedWorktrees: (req) =>
+      rpcEffect(
+        "PruneMergedWorktrees",
+        Effect.flatMap(GitService, (_) => _.pruneMergedWorktrees(req.workspaceId)),
+      ),
+    CreatePullRequest: (req) =>
+      rpcEffect(
+        "CreatePullRequest",
+        Effect.map(
+          Effect.flatMap(GitService, (_) =>
+            _.createPullRequest(req.workspaceId, {
+              title: req.title,
+              body: req.body,
+              base: req.base,
+              draft: req.draft,
+            }),
+          ),
+          (pr) => (pr ? toWirePullRequest(pr) : null),
+        ),
+      ),
     ListPresets: () => rpcEffect("ListPresets", Effect.flatMap(PresetRegistry, (_) => _.list)),
     ListInstances: () => rpcEffect("ListInstances", Effect.flatMap(TargetSessionManager, (_) => _.list)),
     ListSessions: () => rpcEffect("ListSessions", Effect.flatMap(TargetSessionManager, (_) => _.list)),
@@ -96,6 +166,7 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     WatchChatMessageChanges: () => Stream.unwrap(Effect.map(ChatMessageService, (_) => _.changes)),
     WatchChatActivityChanges: () => Stream.unwrap(Effect.map(ActivityEventService, (_) => _.changes)),
     WatchWorkChanges: () => Stream.unwrap(Effect.map(WorkService, (_) => _.changes)),
+    WatchGitChanges: () => Stream.unwrap(Effect.map(GitService, (_) => _.changes)),
     ListChats: () => rpcEffect("ListChats", Effect.flatMap(ChatService, (_) => _.list)),
     TestLocalModel: () => rpcEffect("TestLocalModel", Effect.flatMap(LocalModelService, (_) => _.status)),
     ListPendingRequests: () =>
