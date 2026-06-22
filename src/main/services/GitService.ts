@@ -260,13 +260,15 @@ const runGitCapture = (cwd: string, args: ReadonlyArray<string>): Promise<GitCap
  * when the workspace is on a non-default branch and the base ref resolves (the
  * local name, else `origin/<base>`); an empty range — i.e. full history — when on
  * the default branch, detached, or the base can't be found. */
-const resolveBranchRange = async (
+export const resolveBranchRange = async (
   cwd: string,
   branch: string | undefined,
   base: string | null,
+  remote: string | null = "origin",
 ): Promise<ReadonlyArray<string>> => {
   if (!branch || !base || branch === base) return []
-  for (const ref of [base, `origin/${base}`]) {
+  const refs = [base, ...(remote ? [`${remote}/${base}`] : [])]
+  for (const ref of refs) {
     const check = await runGit(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])
     if (check.exitCode === 0) return [`${ref}..HEAD`]
   }
@@ -390,6 +392,26 @@ const parseRemotes = (stdout: string): ReadonlyArray<GitRemote> => {
     if (match && match[1] && match[2] && !byName.has(match[1])) byName.set(match[1], match[2])
   }
   return [...byName].map(([name, url]) => ({ name, url }))
+}
+
+const parseRemotesJson = (json: string): ReadonlyArray<GitRemote> => {
+  try {
+    const raw = JSON.parse(json) as unknown
+    if (!Array.isArray(raw)) return []
+    return raw.flatMap((entry) => {
+      if (
+        typeof entry === "object" &&
+        entry !== null &&
+        typeof (entry as { name?: unknown }).name === "string" &&
+        typeof (entry as { url?: unknown }).url === "string"
+      ) {
+        return [{ name: (entry as { name: string }).name, url: (entry as { url: string }).url }]
+      }
+      return []
+    })
+  } catch {
+    return []
+  }
 }
 
 /** Resolve the GitHub owner/repo for a clone: the first remote whose URL is a
@@ -925,8 +947,15 @@ export const GitServiceLive = Layer.effect(
         // history so the pane is never mysteriously empty. Branch + default branch
         // come from the cached workspace DTO (populated by repo detection elsewhere),
         // so the history read costs one `git log` and never triggers detection.
+        const repository = workspace.repositoryId
+          ? yield* store
+              .repositoryById(workspace.repositoryId)
+              .pipe(Effect.mapError((e) => arcRequestError(`repository load failed: ${e}`)))
+          : null
+        const remotes = repository ? parseRemotesJson(repository.remotesJson) : []
+        const baseRemote = defaultBranchRemote(remotes, repository?.githubOwner ? githubIdentity(remotes) : null)
         const range = yield* Effect.promise(() =>
-          resolveBranchRange(workspace.path, workspace.branch ?? undefined, workspace.defaultBranch),
+          resolveBranchRange(workspace.path, workspace.branch ?? undefined, workspace.defaultBranch, baseRemote),
         )
 
         // One commit per line; fields split by US (0x1f), which never appears in a
