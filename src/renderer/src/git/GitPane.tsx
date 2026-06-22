@@ -1,10 +1,13 @@
 import { PatchDiff } from "@pierre/diffs/react"
 import { CaretDown, CaretRight } from "@phosphor-icons/react"
-import { Fragment, type JSX, type ReactNode, useEffect, useState } from "react"
+import { Fragment, type JSX, type ReactNode, useState } from "react"
+import { useAtomValue } from "@effect/atom-react"
+import { Option } from "effect"
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import type { GitChangeStatus, GitCommit, GitFileChange } from "../../../shared/git.js"
 import type { Workspace } from "../../../shared/workspace.js"
 import { Row } from "../ui/Row.js"
-import { rpc } from "../rpc-client.js"
+import { gitFileDiffAtomFor } from "../atoms.js"
 import { RepoContextBar } from "./RepoContextBar.js"
 import { useWorkspaceGit } from "./useWorkspaceGit.js"
 
@@ -40,8 +43,6 @@ const STATUS_COLOR: Record<GitChangeStatus, string> = {
 
 const ERROR_BANNER =
   "mx-3 mt-2.5 flex-none rounded-[var(--radius)] border border-danger px-2 py-1.5 text-[12px] text-danger"
-
-const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps): JSX.Element {
   if (!workspace) {
@@ -185,24 +186,9 @@ function GitSection({
 /** One file's diff, fetched lazily and rendered inline beneath its row in the
  * changes list. No header — the file row above it is the header. */
 function InlineDiff({ workspace, path }: { readonly workspace: Workspace; readonly path: string }): JSX.Element {
-  const [diff, setDiff] = useState<string | undefined>(undefined)
-  const [error, setError] = useState<string | undefined>(undefined)
-
-  useEffect(() => {
-    let cancelled = false
-    setDiff(undefined)
-    setError(undefined)
-    rpc("GetWorkspaceGitFileDiff", { workspaceId: workspace.id, path })
-      .then((result) => {
-        if (!cancelled) setDiff(result.diff)
-      })
-      .catch((e) => {
-        if (!cancelled) setError(errorMessage(e))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [workspace.id, path])
+  const result = useAtomValue(gitFileDiffAtomFor(workspace.id, path))
+  const error = Option.match(AsyncResult.error(result), { onNone: () => undefined, onSome: (e) => e.message })
+  const diff = AsyncResult.isSuccess(result) ? result.value.diff : undefined
 
   return (
     <div className="border-b border-border bg-elev/40 px-3 py-2">

@@ -182,6 +182,29 @@ export const gitCommitsAtom = Atom.family((workspaceId: string) =>
 )
 
 /**
+ * One changed file's diff, keyed on `(workspaceId, path)` so an expanded row
+ * reads its own cached value and refreshes on the same git signal as the rest of
+ * the pane (an inline diff no longer goes stale beside its live-updating row).
+ * Composite string key because `Atom.family` memoizes by `Equal`, which treats
+ * plain-object args as reference-unique; a workspace id and a path never contain
+ * a newline, so it is an unambiguous separator.
+ */
+const gitFileDiffKey = (workspaceId: string, path: string): string => `${workspaceId}\n${path}`
+
+export const gitFileDiffAtom = Atom.family((key: string) => {
+  const sep = key.indexOf("\n")
+  const workspaceId = key.slice(0, sep)
+  const path = key.slice(sep + 1)
+  return ArcRpcAtomClient.query("GetWorkspaceGitFileDiff", { workspaceId, path }).pipe(
+    Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.setIdleTTL(GIT_ATOM_TTL),
+  )
+})
+
+export const gitFileDiffAtomFor = (workspaceId: string, path: string) =>
+  gitFileDiffAtom(gitFileDiffKey(workspaceId, path))
+
+/**
  * The work navigator/comments refresh signal. Work has two change sources folded
  * here: the in-app `WatchWorkChanges` stream (every real mutation, RPC or MCP,
  * runs through the same in-process `WorkService`), plus the chat activity/message
