@@ -31,7 +31,7 @@ export function RepoContextBar({ context }: RepoContextBarProps): JSX.Element | 
         {branch && (
           <span className="flex-none truncate font-mono text-[11px] text-fg-dim">{branch}</span>
         )}
-        {pr ? <PullRequestSummary pr={pr} /> : <span className="text-fg-faint">No PR for this branch</span>}
+        {pr && <PullRequestSummary pr={pr} />}
       </div>
     </div>
   )
