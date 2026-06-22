@@ -232,18 +232,18 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
       readonly gitBranch?: string | null
       readonly gitHeadSha?: string | null
     },
-  ) =>
-    // COALESCE(${maybe undefined → null}, column) is wrong for clearing a
-    // value, so we only touch a column when its argument was supplied. A
-    // numeric 1/0 sentinel (node:sqlite won't bind a JS boolean) keeps the SQL
-    // a single statement while leaving omitted fields untouched and still
-    // allowing an explicit null to clear.
-    sql`UPDATE workspaces SET
-      repository_id = CASE WHEN ${git.repositoryId !== undefined ? 1 : 0} = 1 THEN ${git.repositoryId ?? null} ELSE repository_id END,
-      worktree_id = CASE WHEN ${git.worktreeId !== undefined ? 1 : 0} = 1 THEN ${git.worktreeId ?? null} ELSE worktree_id END,
-      git_branch = CASE WHEN ${git.gitBranch !== undefined ? 1 : 0} = 1 THEN ${git.gitBranch ?? null} ELSE git_branch END,
-      git_head_sha = CASE WHEN ${git.gitHeadSha !== undefined ? 1 : 0} = 1 THEN ${git.gitHeadSha ?? null} ELSE git_head_sha END
-      WHERE id = ${workspaceId}`.pipe(Effect.asVoid)
+  ) => {
+    // Assign only the columns whose argument was supplied: an explicit null
+    // clears (COALESCE couldn't), an omitted field is left untouched. Building
+    // the SET list from the present keys keeps each column one bound assignment.
+    const sets = []
+    if (git.repositoryId !== undefined) sets.push(sql`repository_id = ${git.repositoryId}`)
+    if (git.worktreeId !== undefined) sets.push(sql`worktree_id = ${git.worktreeId}`)
+    if (git.gitBranch !== undefined) sets.push(sql`git_branch = ${git.gitBranch}`)
+    if (git.gitHeadSha !== undefined) sets.push(sql`git_head_sha = ${git.gitHeadSha}`)
+    if (sets.length === 0) return Effect.void
+    return sql`UPDATE workspaces SET ${sql.csv(sets)} WHERE id = ${workspaceId}`.pipe(Effect.asVoid)
+  }
 
   return {
     loadRepositories,
