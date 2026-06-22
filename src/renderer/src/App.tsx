@@ -314,6 +314,33 @@ export function App(): JSX.Element {
     combo: bindingFor(id)?.combo,
     run: shortcutHandlers[id],
   })
+  // The worktree commands act on the active workspace, so they only appear when
+  // one is selected — otherwise selecting them would silently do nothing.
+  const worktreeCommands: ReadonlyArray<Command> = vm.workspaceId
+    ? [
+        {
+          id: "newWorktree",
+          title: "New worktree…",
+          promptPlaceholder: "new branch name",
+          onSubmit: (branch) => void newWorktreeChat(branch),
+        },
+        {
+          id: "openWorktree",
+          title: "Open worktree…",
+          choosePlaceholder: "choose a worktree",
+          loadChoices: async () => {
+            if (!vm.workspaceId) return []
+            const context = await rpc("GetWorkspaceGitContext", { workspaceId: vm.workspaceId })
+            return context.worktrees.map((worktree) => ({
+              id: worktree.path,
+              title: worktree.branch ?? (worktree.path.split("/").pop() ?? worktree.path),
+              subtitle: worktree.path,
+            }))
+          },
+          onChoose: (worktreePath) => void openWorktreeChat(worktreePath),
+        },
+      ]
+    : []
   const paletteCommands: ReadonlyArray<Command> = [
     {
       id: "newChatInWorkspace",
@@ -322,27 +349,7 @@ export function App(): JSX.Element {
       choices: workspaces.map((w) => ({ id: w.id, title: w.name, subtitle: w.path })),
       onChoose: (workspaceId) => void createChat(arcId("workspace", workspaceId)),
     },
-    {
-      id: "newWorktree",
-      title: "New worktree…",
-      promptPlaceholder: "new branch name",
-      onSubmit: (branch) => void newWorktreeChat(branch),
-    },
-    {
-      id: "openWorktree",
-      title: "Open worktree…",
-      choosePlaceholder: "choose a worktree",
-      loadChoices: async () => {
-        if (!vm.workspaceId) return []
-        const context = await rpc("GetWorkspaceGitContext", { workspaceId: vm.workspaceId })
-        return context.worktrees.map((worktree) => ({
-          id: worktree.path,
-          title: worktree.branch ?? (worktree.path.split("/").pop() ?? worktree.path),
-          subtitle: worktree.path,
-        }))
-      },
-      onChoose: (worktreePath) => void openWorktreeChat(worktreePath),
-    },
+    ...worktreeCommands,
     leafCommand("createChat", "New chat"),
     leafCommand("createWork", "New work item"),
     leafCommand("showChatView", "Show chat"),
