@@ -149,9 +149,16 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
       WHERE repository_id = ${repositoryId}
       ORDER BY number DESC`
 
-  const loadSidebarPullRequests = sql<PullRequestRow>`SELECT * FROM pull_requests
-    WHERE state IN ('open', 'merged')
-    ORDER BY (state = 'open') DESC, number DESC`
+  // Same fork-safety as pullRequestForBranch: a PR only maps onto a local
+  // workspace row when its head lives in the repository itself, not a fork that
+  // reused the branch name. The owner/name join also drops rows with a NULL head
+  // repo (synced before the column existed) — surface no PR over a fork's.
+  const loadSidebarPullRequests = sql<PullRequestRow>`SELECT pr.* FROM pull_requests pr
+    JOIN repositories r ON r.id = pr.repository_id
+    WHERE pr.state IN ('open', 'merged')
+      AND pr.head_repository_owner = r.github_owner
+      AND pr.head_repository_name = r.github_repo
+    ORDER BY (pr.state = 'open') DESC, pr.number DESC`
 
   const upsertPullRequest = (row: PullRequestRow) =>
     Effect.gen(function* () {
