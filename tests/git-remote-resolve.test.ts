@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process"
 import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
-import { defaultBranchRemote, githubIdentity, resolveBranchRange } from "../src/main/services/GitService.js"
+import { defaultBranchRemote, githubIdentity, resolveBranchRange } from "../src/main/services/git/parse.js"
 
 describe("githubIdentity", () => {
   it("prefers origin and reports the resolving remote name", () => {

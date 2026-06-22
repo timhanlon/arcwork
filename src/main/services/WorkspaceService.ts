@@ -3,6 +3,7 @@ import { dialog } from "electron"
 import * as path from "node:path"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import type { Workspace, WorkspacePullRequest } from "../../shared/workspace.js"
+import { toPrState } from "../../shared/git.js"
 import { ArcStore } from "../db/store.js"
 import type { PullRequestRow, RepositoryRow, WorkspaceRow } from "../db/schema.js"
 import { newArcId } from "../../shared/ids.js"
@@ -22,7 +23,7 @@ const prKey = (repositoryId: string, headRef: string): string => `${repositoryId
 const toWorkspacePullRequest = (row: PullRequestRow): WorkspacePullRequest => ({
   number: row.number,
   title: row.title,
-  state: row.state,
+  state: toPrState(row.state) ?? "open",
   isDraft: row.isDraft === 1,
   url: row.url,
 })

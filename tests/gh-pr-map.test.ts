@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { mapGhPullRequest, summarizeChecks, type GhPullRequest } from "../src/main/services/GitService.js"
+import { summarizeChecks, type GhPullRequest } from "../src/main/services/git/parse.js"
+import { mapGhPullRequest } from "../src/main/services/git/wire.js"
 
 describe("summarizeChecks", () => {
   it("returns null when there are no checks", () => {

@@ -75,12 +75,22 @@ export const Worktree = Schema.Struct({
 })
 export type Worktree = typeof Worktree.Type
 
+/** A pull request's lifecycle state, as GitHub models it. */
+export const PrState = Schema.Literals(["open", "merged", "closed"])
+export type PrState = typeof PrState.Type
+
+/** Narrow an arbitrary (already-lowercased) GitHub PR state to a `PrState`, or
+ * null when it isn't one of the three. The wire projection coerces here so the
+ * renderer never re-validates per call site. */
+export const toPrState = (state: string): PrState | null =>
+  state === "open" || state === "merged" || state === "closed" ? state : null
+
 /** The GitHub PR read model as the renderer sees it. */
 export const PullRequest = Schema.Struct({
   id: Schema.String,
   number: Schema.Number,
   title: Schema.String,
-  state: Schema.String,
+  state: PrState,
   isDraft: Schema.Boolean,
   author: Schema.NullOr(Schema.String),
   headRef: Schema.String,

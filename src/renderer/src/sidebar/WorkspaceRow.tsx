@@ -2,7 +2,7 @@ import type { JSX, ReactNode } from "react"
 import { Button } from "@base-ui/react/button"
 import { GitBranch } from "@phosphor-icons/react"
 import type { Workspace, WorkspacePullRequest } from "../../../shared/workspace.js"
-import { PrStateIcon, prStateColor, toPrState } from "../git/PrStateIcon.js"
+import { PrStateIcon, prStateColor } from "../git/PrStateIcon.js"
 import { ROW_ACTIVE, ROW_BASE, ROW_GRID, TREE_LABEL, TREE_MAIN, TREE_SUBTITLE } from "./row-styles.js"
 
 export interface WorkspaceRowProps {
@@ -55,12 +55,11 @@ export function WorkspaceRow({ workspace, selected, onSelect, disclosure }: Work
 /** A compact link to the branch's open PR: state-coloured octicon + `#number`.
  * Opens the PR (routed to the system browser by the main window-open handler). */
 function PullRequestChip({ pr }: { readonly pr: WorkspacePullRequest }): JSX.Element {
-  const state = toPrState(pr.state)
-  const tone = state ? prStateColor(state, pr.isDraft) : "text-fg-dim"
+  const tone = prStateColor(pr.state, pr.isDraft)
   const label = `#${pr.number} ${pr.title}`
   const inner = (
     <span className={`flex flex-none items-center gap-1 font-mono text-[10px] font-semibold ${tone}`}>
-      {state ? <PrStateIcon state={state} isDraft={pr.isDraft} size={11} /> : null}#{pr.number}
+      <PrStateIcon state={pr.state} isDraft={pr.isDraft} size={11} />#{pr.number}
     </span>
   )
   return pr.url ? (

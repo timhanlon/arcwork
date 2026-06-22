@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { PrState } from "./git.js"
 
 /**
  * The slice of a branch's open pull request the sidebar needs: enough to render
@@ -9,7 +10,7 @@ import { Schema } from "effect"
 export const WorkspacePullRequest = Schema.Struct({
   number: Schema.Number,
   title: Schema.String,
-  state: Schema.String,
+  state: PrState,
   isDraft: Schema.Boolean,
   url: Schema.NullOr(Schema.String),
 })

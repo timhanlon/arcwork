@@ -1,7 +1,7 @@
 import type { JSX } from "react"
 import { CheckIcon, DotFillIcon, XIcon, type Icon } from "@primer/octicons-react"
 import type { PullRequest, WorkspaceGitContext } from "../../../shared/git.js"
-import { PrStateIcon, prStateColor, toPrState } from "./PrStateIcon.js"
+import { PrStateIcon, prStateColor } from "./PrStateIcon.js"
 
 export interface RepoContextBarProps {
   readonly context?: WorkspaceGitContext
@@ -38,12 +38,11 @@ export function RepoContextBar({ context }: RepoContextBarProps): JSX.Element | 
 }
 
 function PullRequestSummary({ pr }: { readonly pr: PullRequest }): JSX.Element {
-  const prState = toPrState(pr.state)
-  const stateColor = prState ? prStateColor(prState, pr.isDraft) : "text-fg-dim"
+  const stateColor = prStateColor(pr.state, pr.isDraft)
   const body = (
     <span className="flex min-w-0 items-center gap-1.5">
       <span className={`flex-none inline-flex items-center gap-[3px] font-mono text-[11px] font-semibold ${stateColor}`}>
-        {prState && <PrStateIcon state={prState} isDraft={pr.isDraft} />}#{pr.number}
+        <PrStateIcon state={pr.state} isDraft={pr.isDraft} />#{pr.number}
       </span>
       <span className="min-w-0 truncate text-foreground">{pr.title}</span>
       {pr.checksState &&

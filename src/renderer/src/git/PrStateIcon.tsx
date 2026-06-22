@@ -6,9 +6,9 @@ import {
   GitPullRequestIcon,
   type Icon,
 } from "@primer/octicons-react"
+import type { PrState } from "../../../shared/git.js"
 
-/** A pull request's lifecycle state, as GitHub models it. */
-export type PrState = "open" | "merged" | "closed"
+export type { PrState }
 
 const STATE_ICON: Record<PrState, Icon> = {
   open: GitPullRequestIcon,
@@ -24,11 +24,6 @@ export const PR_STATE_COLOR: Record<PrState, string> = {
   closed: "text-danger",
 }
 const PR_DRAFT_COLOR = "text-fg-dim"
-
-/** Narrow an arbitrary (already-lowercased) GitHub PR state to a `PrState`, or
- * null when it isn't one of the three. */
-export const toPrState = (state: string): PrState | null =>
-  state === "open" || state === "merged" || state === "closed" ? state : null
 
 /** The tone for a PR's state + draft, for colouring the icon and number together. */
 export const prStateColor = (state: PrState, isDraft = false): string =>
