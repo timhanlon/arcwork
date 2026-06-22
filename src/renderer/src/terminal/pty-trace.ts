@@ -1,3 +1,4 @@
+import type { TargetId } from "../../../shared/ids.js"
 /**
  * Dev-only renderer half of PTY tracing — the counterpart to
  * main/services/pty-trace.ts. Gated on `window.arc.ptyTrace` (main stamps
@@ -24,7 +25,7 @@ interface Burst {
 
 const bursts = new Map<string, Burst>()
 
-const get = (sessionId: string): Burst => {
+const get = (sessionId: TargetId): Burst => {
   let b = bursts.get(sessionId)
   if (!b) {
     b = { writes: 0, bytes: 0, startedAt: performance.now(), lastDrainMs: 0, timer: null }
@@ -33,7 +34,7 @@ const get = (sessionId: string): Burst => {
   return b
 }
 
-const flush = (sessionId: string): void => {
+const flush = (sessionId: TargetId): void => {
   const b = bursts.get(sessionId)
   if (!b) return
   bursts.delete(sessionId)
@@ -50,7 +51,7 @@ const flush = (sessionId: string): void => {
  * Wrap a `term.write`. Returns the data to pass through plus an optional callback
  * the caller hands to `term.write(data, cb)` so we can time the parser drain.
  */
-export const traceWrite = (sessionId: string, data: string): (() => void) | undefined => {
+export const traceWrite = (sessionId: TargetId, data: string): (() => void) | undefined => {
   if (!enabled()) return undefined
   const b = get(sessionId)
   b.writes += 1
@@ -65,7 +66,7 @@ export const traceWrite = (sessionId: string, data: string): (() => void) | unde
 }
 
 /** Log a `ptyResize` call site so launch-time SIGWINCH volume is visible. */
-export const traceResize = (sessionId: string | undefined, label: string): void => {
+export const traceResize = (sessionId: TargetId | undefined, label: string): void => {
   if (!enabled()) return
   // eslint-disable-next-line no-console -- dev-only opt-in trace
   console.log(`[pty-trace] renderer resize session=${sessionId ?? "<unbound>"} site=${label}`)

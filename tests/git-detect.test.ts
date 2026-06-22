@@ -9,6 +9,7 @@ import { WorkspaceService } from "../src/main/services/WorkspaceService.js"
 import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
 import type { Workspace } from "../src/shared/workspace.js"
+import { arcId } from "../src/shared/ids.js"
 
 // Real GitService over a real on-disk git repo + the production sqlite store
 // (vitest aliases native better-sqlite3 to node:sqlite). WorkspaceService is a
@@ -34,7 +35,7 @@ const createRepoFixture = (): RepoFixture => {
   git(repoDir, "commit", "-m", "initial")
   return {
     workspace: {
-      id: "workspace_test",
+      id: arcId("workspace", "workspace_test"),
       path: fs.realpathSync(repoDir),
       name: "widgets",
       repositoryId: null,

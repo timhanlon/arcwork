@@ -8,6 +8,7 @@ import {
 import type { HookSignal } from "../src/main/hooks/signals.js"
 import { toSignal } from "../src/main/hooks/signals.js"
 import type { RawHookSignalRow } from "../src/main/db/schema.js"
+import { arcId } from "../src/shared/ids.js"
 
 const CHAT = "chat_1"
 const TARGET = "target_1"
@@ -81,9 +82,9 @@ describe("chat-message signal projection", () => {
 
   describe("rawHookSignalFromRow", () => {
     const baseRow = (over: Partial<RawHookSignalRow>): RawHookSignalRow => ({
-      id: "raw_1",
-      chatId: CHAT,
-      targetSessionId: TARGET,
+      id: arcId("hook", "raw_1"),
+      chatId: arcId("chat", CHAT),
+      targetSessionId: arcId("target", TARGET),
       targetProvider: "claude",
       resolvedProvider: "claude",
       declaredProvider: "claude",

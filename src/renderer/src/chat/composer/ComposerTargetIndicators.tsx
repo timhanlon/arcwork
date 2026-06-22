@@ -1,4 +1,5 @@
 import type { JSX } from "react"
+import type { TargetId } from "../../../../shared/ids.js"
 import type { TargetSession } from "../../../../shared/instance.js"
 import { targetStatusDisplay } from "../session-status-display.js"
 import { SessionDot } from "../../sidebar/SessionDot.js"
@@ -27,7 +28,7 @@ export interface ComposerTargetIndicatorsProps {
   /** the session the composer would send to — gets the accent halo */
   readonly addresseeId?: string
   /** focus a session's terminal pane */
-  readonly onFocusSession: (sessionId: string) => void
+  readonly onFocusSession: (sessionId: TargetId) => void
   /** drop the status word, leaving just the dot + name — the dot's colour still
    * carries status, and the chip's title surfaces it on hover */
   readonly compact?: boolean

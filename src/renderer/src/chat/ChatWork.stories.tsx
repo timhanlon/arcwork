@@ -1,4 +1,5 @@
 import type { Work, WorkPriority } from "../../../shared/work.js"
+import { arcId } from "../../../shared/ids.js"
 import { ChatWork } from "./ChatWork.js"
 import { WORK_STATUSES } from "../work/work-status-display.js"
 
@@ -9,18 +10,20 @@ export default {
 const REFERENCE_NOW = "2026-06-07T17:00:00.000Z"
 
 function work(
-  partial: Pick<Work, "id" | "title" | "status" | "labels" | "updatedAt"> & {
+  partial: Pick<Work, "title" | "status" | "labels" | "updatedAt"> & {
+    readonly id: string
     readonly priority?: WorkPriority
   },
 ): Work {
   return {
     _tag: "Work",
-    nodeId: `${partial.id}_rev`,
     body: "",
     createdAt: REFERENCE_NOW,
     provenance: { source: "cli" },
     citations: [],
     ...partial,
+    id: arcId("work", partial.id),
+    nodeId: arcId("work_rev", `${partial.id}_rev`),
     priority: partial.priority ?? null,
   }
 }

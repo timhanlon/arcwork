@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { rowToWorkspace } from "../src/main/services/WorkspaceService.js"
 import type { RepositoryRow, WorkspaceRow } from "../src/main/db/schema.js"
+import { arcId } from "../src/shared/ids.js"
 
 const repo = (over: Partial<RepositoryRow> & Pick<RepositoryRow, "id" | "rootPath">): RepositoryRow => ({
   commonGitDir: `${over.rootPath}/.git`,
@@ -14,7 +15,9 @@ const repo = (over: Partial<RepositoryRow> & Pick<RepositoryRow, "id" | "rootPat
   ...over,
 })
 
-const wsRow = (over: Partial<WorkspaceRow> & Pick<WorkspaceRow, "id" | "path">): WorkspaceRow => ({
+const wsRow = (
+  over: Partial<Omit<WorkspaceRow, "id">> & { readonly id: string; readonly path: string },
+): WorkspaceRow => ({
   name: "ws",
   createdAt: "2026-01-01T00:00:00Z",
   lastOpenedAt: "2026-01-01T00:00:00Z",
@@ -23,6 +26,7 @@ const wsRow = (over: Partial<WorkspaceRow> & Pick<WorkspaceRow, "id" | "path">):
   gitBranch: null,
   gitHeadSha: null,
   ...over,
+  id: arcId("workspace", over.id),
 })
 
 describe("rowToWorkspace", () => {

@@ -2,14 +2,17 @@ import type { Workspace } from "../../../shared/workspace.js"
 import type { Chat } from "../../../shared/chat.js"
 import type { TargetSession } from "../../../shared/instance.js"
 import type { LiveTargetActivity } from "../../../shared/live-target-state.js"
-import type { Work, WorkPriority } from "../../../shared/work.js"
+import type { Work, WorkPriority, WorkProvenance } from "../../../shared/work.js"
+import { arcId } from "../../../shared/ids.js"
 import type { LiveStateById } from "./grouping.js"
 import type { ChatScopedWork } from "./WorkspaceTree.js"
 
 /** Stable reference clock so createdAt ordering in stories is deterministic. */
 export const REFERENCE_NOW = "2026-06-07T17:00:00.000Z"
 
-export function workspace(over: Partial<Workspace> & Pick<Workspace, "id">): Workspace {
+export function workspace(
+  over: Partial<Omit<Workspace, "id">> & { readonly id: string },
+): Workspace {
   return {
     path: "/Users/you/dev/arc-test",
     name: "arc-test",
@@ -20,32 +23,61 @@ export function workspace(over: Partial<Workspace> & Pick<Workspace, "id">): Wor
     isWorktree: false,
     pullRequest: null,
     ...over,
+    id: arcId("workspace", over.id),
   }
 }
 
-export function chat(over: Partial<Chat> & Pick<Chat, "id" | "workspaceId" | "title">): Chat {
-  return { _tag: "Chat", createdAt: REFERENCE_NOW, ...over }
+export function chat(
+  over: Partial<Omit<Chat, "id" | "workspaceId">> & {
+    readonly id: string
+    readonly workspaceId: string
+    readonly title: string
+  },
+): Chat {
+  return {
+    _tag: "Chat",
+    createdAt: REFERENCE_NOW,
+    ...over,
+    id: arcId("chat", over.id),
+    workspaceId: arcId("workspace", over.workspaceId),
+  }
 }
 
 export function workItem(
-  over: Partial<Work> & Pick<Work, "id" | "title" | "status"> & { readonly priority?: WorkPriority },
+  over: Partial<Omit<Work, "id" | "nodeId" | "provenance">> & {
+    readonly id: string
+    readonly title: string
+    readonly status: Work["status"]
+    readonly priority?: WorkPriority
+    readonly provenance?: Omit<WorkProvenance, "chatId"> & { readonly chatId?: string }
+  },
 ): Work {
+  const { provenance, ...rest } = over
   return {
     _tag: "Work",
-    nodeId: `${over.id}_rev`,
     body: "",
     labels: [],
     createdAt: REFERENCE_NOW,
     updatedAt: REFERENCE_NOW,
-    provenance: { source: "cli" },
     citations: [],
-    ...over,
+    ...rest,
+    id: arcId("work", over.id),
+    nodeId: arcId("work_rev", `${over.id}_rev`),
+    provenance: {
+      source: provenance?.source ?? "cli",
+      ...provenance,
+      chatId: provenance?.chatId == null ? undefined : arcId("chat", provenance.chatId),
+    },
     priority: over.priority ?? null,
   }
 }
 
 export function session(
-  over: Partial<TargetSession> & Pick<TargetSession, "id" | "chatId" | "provider">,
+  over: Partial<Omit<TargetSession, "id" | "chatId">> & {
+    readonly id: string
+    readonly chatId: string
+    readonly provider: string
+  },
 ): TargetSession {
   return {
     _tag: "TargetSession",
@@ -54,6 +86,8 @@ export function session(
     attached: true,
     startedAt: REFERENCE_NOW,
     ...over,
+    id: arcId("target", over.id),
+    chatId: arcId("chat", over.chatId),
   }
 }
 

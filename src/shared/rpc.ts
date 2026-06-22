@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
+import { ChatId, TargetId, WorkId, WorkspaceId } from "./ids.js"
 import { ProviderSpec } from "./provider.js"
 import { Preset } from "./preset.js"
 import { Chat } from "./chat.js"
@@ -111,8 +112,8 @@ const IngestKinds = Schema.Literals(["all", "claude", "codex", "cursor"])
  * signal tiny is the point: a high-frequency channel (chat messages during a
  * turn) must not re-stream a whole list on every tick.
  */
-const ChatChange = Schema.Struct({ chatId: Schema.String })
-const WorkChangeWire = Schema.Struct({ refId: Schema.String, chatId: Schema.NullOr(Schema.String) })
+const ChatChange = Schema.Struct({ chatId: ChatId })
+const WorkChangeWire = Schema.Struct({ refId: WorkId, chatId: Schema.NullOr(ChatId) })
 const GitChange = Schema.Struct({ workspaceId: Schema.String })
 
 /**
@@ -132,7 +133,7 @@ export const ArcRpcs = RpcGroup.make(
    * trusting a path off the wire.
    */
   Rpc.make("ListWorkspaceFiles", {
-    payload: { workspaceId: Schema.String },
+    payload: { workspaceId: WorkspaceId },
     success: WorkspaceFiles,
     error: RpcError,
   }),
@@ -272,22 +273,22 @@ export const ArcRpcs = RpcGroup.make(
     error: RpcError,
   }),
   Rpc.make("CreateChat", {
-    payload: { workspaceId: Schema.String, title: Schema.optional(Schema.String) },
+    payload: { workspaceId: WorkspaceId, title: Schema.optional(Schema.String) },
     success: Chat,
     error: RpcError,
   }),
   Rpc.make("UpdateChatTitle", {
-    payload: { chatId: Schema.String, title: Schema.String },
+    payload: { chatId: ChatId, title: Schema.String },
     success: Chat,
     error: RpcError,
   }),
   Rpc.make("ListChatActivity", {
-    payload: { chatId: Schema.String },
+    payload: { chatId: ChatId },
     success: Schema.Array(ActivityEvent),
     error: RpcError,
   }),
   Rpc.make("ListChatMessages", {
-    payload: { chatId: Schema.String },
+    payload: { chatId: ChatId },
     success: Schema.Array(ChatMessage),
     error: RpcError,
   }),
@@ -305,7 +306,7 @@ export const ArcRpcs = RpcGroup.make(
    * a workspace's repo/PR state — the Git pane re-pulls `GetWorkspaceGitContext`. */
   Rpc.make("WatchGitChanges", { success: GitChange, error: RpcError, stream: true }),
   Rpc.make("ReprojectChatMessages", {
-    payload: { chatId: Schema.String },
+    payload: { chatId: ChatId },
     success: ReprojectResult,
     error: RpcError,
   }),
@@ -315,14 +316,14 @@ export const ArcRpcs = RpcGroup.make(
     error: RpcError,
   }),
   Rpc.make("ReingestAndReprojectChatMessages", {
-    payload: { chatId: Schema.String, provider: Schema.optional(IngestKinds) },
+    payload: { chatId: ChatId, provider: Schema.optional(IngestKinds) },
     success: Schema.Struct({ ingest: Schema.Array(IngestSummary), reproject: ReprojectResult }),
     error: RpcError,
   }),
   Rpc.make("LaunchTarget", {
     payload: {
       provider: Schema.String,
-      chatId: Schema.String,
+      chatId: ChatId,
       /** Diff endpoint to run in — the worker writes here and hooks/file refs
        * resolve against it. Omit to use the chat's own workspace. */
       workspaceId: Schema.optional(Schema.String),
@@ -338,7 +339,7 @@ export const ArcRpcs = RpcGroup.make(
   }),
   Rpc.make("ResumeTarget", {
     payload: {
-      sessionId: Schema.String,
+      sessionId: TargetId,
       cols: Schema.optional(Schema.Number),
       rows: Schema.optional(Schema.Number),
     },
@@ -352,17 +353,17 @@ export const ArcRpcs = RpcGroup.make(
    * no-op (`stopped: false`) for a session that's already exited or detached.
    */
   Rpc.make("StopTarget", {
-    payload: { sessionId: Schema.String },
+    payload: { sessionId: TargetId },
     success: Schema.Struct({ stopped: Schema.Boolean }),
     error: RpcError,
   }),
   Rpc.make("SubmitPrompt", {
-    payload: { instanceId: Schema.String, text: Schema.String },
+    payload: { instanceId: TargetId, text: Schema.String },
     success: Schema.Struct({ accepted: Schema.Boolean }),
     error: RpcError,
   }),
   Rpc.make("SendChatPrompt", {
-    payload: { chatId: Schema.String, targetSessionId: Schema.String, text: Schema.String },
+    payload: { chatId: ChatId, targetSessionId: TargetId, text: Schema.String },
     success: ChatMessage,
     error: RpcError,
   }),
@@ -374,32 +375,32 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("ListWork", { success: Schema.Array(Work), error: RpcError }),
   Rpc.make("ListAllWork", { success: Schema.Array(Work), error: RpcError }),
   Rpc.make("ListWorkForChat", {
-    payload: { chatId: Schema.String },
+    payload: { chatId: ChatId },
     success: Schema.Array(Work),
     error: RpcError,
   }),
   Rpc.make("ListWorkComments", {
-    payload: { id: Schema.String, allRevisions: Schema.optional(Schema.Boolean) },
+    payload: { id: WorkId, allRevisions: Schema.optional(Schema.Boolean) },
     success: WorkCommentListing,
     error: RpcError,
   }),
   Rpc.make("CreateWork", {
-    payload: { input: WorkCreateInput, chatId: Schema.optional(Schema.String) },
+    payload: { input: WorkCreateInput, chatId: Schema.optional(ChatId) },
     success: Work,
     error: RpcError,
   }),
   Rpc.make("UpdateWorkStatus", {
-    payload: { id: Schema.String, status: WorkStatus },
+    payload: { id: WorkId, status: WorkStatus },
     success: Work,
     error: RpcError,
   }),
   Rpc.make("UpdateWorkPriority", {
-    payload: { id: Schema.String, priority: WorkPriority },
+    payload: { id: WorkId, priority: WorkPriority },
     success: Work,
     error: RpcError,
   }),
   Rpc.make("ReviseWork", {
-    payload: { id: Schema.String, edits: WorkReviseInput },
+    payload: { id: WorkId, edits: WorkReviseInput },
     success: Work,
     error: RpcError,
   }),

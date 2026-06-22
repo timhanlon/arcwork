@@ -13,6 +13,7 @@
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
 import { newArcId } from "../../shared/ids.js"
+import type { ActivityId, ChatId, HookId, MessageId, TargetId, WorkspaceId } from "../../shared/ids.js"
 import { sqlMigration, type Migrations } from "./migrator.js"
 
 const addSearchDocumentWorkspaceColumn = Effect.gen(function* () {
@@ -37,7 +38,7 @@ const sqlMigrationAfterWorkspaceColumn = (
  * hook. All null until git detection runs; the canonical worktree model lives
  * in `worktrees`, not here. */
 export interface WorkspaceRow {
-  readonly id: string
+  readonly id: WorkspaceId
   readonly path: string
   readonly name: string
   readonly createdAt: string
@@ -121,8 +122,8 @@ export interface PullRequestRow {
 
 /** One row per chat (a conversation thread). */
 export interface ChatRow {
-  readonly id: string
-  readonly workspaceId: string
+  readonly id: ChatId
+  readonly workspaceId: WorkspaceId
   readonly title: string
   readonly createdAt: string
 }
@@ -151,8 +152,8 @@ export interface ChannelRow {
  * the pre-split inlined values, kept dual-written until the launch path reads
  * the refs; `channelId`/`workspaceId` are null only for backfill orphans. */
 export interface TargetSessionRow {
-  readonly id: string
-  readonly chatId: string
+  readonly id: TargetId
+  readonly chatId: ChatId
   readonly provider: string
   readonly preset: string | null
   readonly cwd: string
@@ -169,9 +170,9 @@ export interface TargetSessionRow {
 
 /** Hook-projected chat transcript row (upserted by dedup key). */
 export interface ChatMessageRow {
-  readonly id: string
-  readonly chatId: string
-  readonly targetSessionId: string | null
+  readonly id: MessageId
+  readonly chatId: ChatId
+  readonly targetSessionId: TargetId | null
   readonly role: string
   readonly turnId: string | null
   readonly messageId: string | null
@@ -190,9 +191,9 @@ export interface ChatMessageRow {
 
 /** Append-only raw hook signal before activity/chat projection. */
 export interface RawHookSignalRow {
-  readonly id: string
-  readonly chatId: string | null
-  readonly targetSessionId: string | null
+  readonly id: HookId
+  readonly chatId: ChatId | null
+  readonly targetSessionId: TargetId | null
   readonly targetProvider: string | null
   readonly resolvedProvider: string
   readonly declaredProvider: string
@@ -211,11 +212,11 @@ export interface RawHookSignalRow {
 
 /** Append-only normalized observable facts derived from hook signals. */
 export interface ActivityEventRow {
-  readonly id: string
+  readonly id: ActivityId
   readonly workspaceRoot: string
-  readonly workContextId: string | null
+  readonly workContextId: ChatId | null
   readonly userActionId: string | null
-  readonly targetSessionId: string | null
+  readonly targetSessionId: TargetId | null
   readonly source: string
   readonly kind: string
   readonly actor: string | null

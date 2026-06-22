@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest"
 import { groupByProject, type WorkspaceGroup } from "../src/renderer/src/sidebar/grouping.js"
 import type { Workspace } from "../src/shared/workspace.js"
+import { arcId } from "../src/shared/ids.js"
 
-const ws = (over: Partial<Workspace> & Pick<Workspace, "id">): Workspace => ({
+const ws = (over: Partial<Omit<Workspace, "id">> & { readonly id: string }): Workspace => ({
   path: `/dev/${over.id}`,
   name: over.id,
   repositoryId: null,
@@ -12,6 +13,7 @@ const ws = (over: Partial<Workspace> & Pick<Workspace, "id">): Workspace => ({
   isWorktree: false,
   pullRequest: null,
   ...over,
+  id: arcId("workspace", over.id),
 })
 
 const group = (workspace: Workspace): WorkspaceGroup => ({
@@ -31,7 +33,7 @@ describe("groupByProject", () => {
     expect(projects).toHaveLength(1)
     expect(projects[0]!.repositoryId).toBe("repo_1")
     expect(projects[0]!.label).toBe("acme/arc")
-    expect(projects[0]!.members.map((m) => m.workspace.id)).toEqual(["main", "feat", "spike"])
+    expect(projects[0]!.members.map((m): string => m.workspace.id)).toEqual(["main", "feat", "spike"])
   })
 
   it("still gives a single-workspace repo its own project (header always shows)", () => {

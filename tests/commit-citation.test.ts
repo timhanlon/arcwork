@@ -4,6 +4,7 @@ import { type WorkStore, WorkStoreLive } from "../src/main/work/store.js"
 import { WorkService, WorkServiceLive } from "../src/main/work/service.js"
 import { type ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
+import { arcId } from "../src/shared/ids.js"
 
 /**
  * `WorkService.addCitation` is the post-creation form of create's `citations`:
@@ -26,7 +27,7 @@ const run = async <A, E>(
   }
 }
 
-const gitProvenance = { source: "git-hook" as const, chatId: "chat_c" }
+const gitProvenance = { source: "git-hook" as const, chatId: arcId("chat", "chat_c") }
 
 describe("WorkService.addCitation (commit → work)", () => {
   it("stamps a commit citation onto an existing work", async () => {
@@ -87,7 +88,7 @@ describe("WorkService.addCitation (commit → work)", () => {
       Effect.gen(function* () {
         const svc = yield* WorkService
         return yield* Effect.exit(
-          svc.addCitation("work_ghost", { kind: "commit", target: "x" }, gitProvenance),
+          svc.addCitation(arcId("work", "work_ghost"), { kind: "commit", target: "x" }, gitProvenance),
         )
       }),
     )

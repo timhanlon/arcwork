@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from "effect"
+import type { ChatId } from "../../shared/ids.js"
 import type { Provider } from "../ingest/db/schema.js"
 import { IngestStore } from "../ingest/db/store.js"
 import { makeProviders } from "../ingest/layers.js"
@@ -32,7 +33,7 @@ export class ArtifactIngestService extends Context.Service<
       nativeSessionId?: string,
     ) => Effect.Effect<ReadonlyArray<ProviderIngestSummary>, never>
     readonly reingestAndReprojectChat: (
-      chatId: string,
+      chatId: ChatId,
       provider?: Provider | "all",
     ) => Effect.Effect<{
       readonly ingest: ReadonlyArray<ProviderIngestSummary>
@@ -188,7 +189,7 @@ export const ArtifactIngestServiceLive = Layer.effect(
         bestEffort<ReadonlyArray<ProviderIngestSummary>>("artifact ingest failed", []),
       )
 
-    const reingestAndReprojectChat = (chatId: string, filter: Provider | "all" = "all") =>
+    const reingestAndReprojectChat = (chatId: ChatId, filter: Provider | "all" = "all") =>
       Effect.gen(function* () {
         const workspace = yield* arc.workspacePathForChat(chatId)
         if (!workspace) {

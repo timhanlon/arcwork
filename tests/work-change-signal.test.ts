@@ -5,6 +5,7 @@ import { WorkService, WorkServiceLive } from "../src/main/work/service.js"
 import { type ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
 import type { WorkChange } from "../src/shared/work.js"
+import { arcId } from "../src/shared/ids.js"
 
 /**
  * Part (A) of the `arc:work` push channel: `WorkService.changes` must fire once
@@ -30,7 +31,7 @@ const run = async <A, E>(
   }
 }
 
-const prov = { source: "rpc" as const, chatId: "chat_sig" }
+const prov = { source: "rpc" as const, chatId: arcId("chat", "chat_sig") }
 
 describe("WorkService change signal", () => {
   it("fires per real mutation, carrying the ref + chat, and stays silent on no-ops", async () => {

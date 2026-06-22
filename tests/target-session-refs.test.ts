@@ -3,6 +3,7 @@ import { SqlClient } from "effect/unstable/sql/SqlClient"
 import { describe, expect, it } from "vitest"
 import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
+import { arcId } from "../src/shared/ids.js"
 
 // ArcStore over a fresh in-memory DB (migrations run on layer build); the
 // vitest shim aliases better-sqlite3 → node:sqlite. provideMerge keeps SqlClient
@@ -31,8 +32,8 @@ describe("target session reads resolve through the comm + diff endpoints", () =>
 
         // Create a worker; the store derives its channel + workspace refs.
         yield* db.upsertTargetSession({
-          id: "tsX",
-          chatId: "chatX",
+          id: arcId("target", "tsX"),
+          chatId: arcId("chat", "chatX"),
           provider: "claude",
           preset: null,
           cwd: "/repo/main",
@@ -73,8 +74,8 @@ describe("target session reads resolve through the comm + diff endpoints", () =>
 
         // cwd points outside any known workspace → workspace_id stays null.
         yield* db.upsertTargetSession({
-          id: "tsO",
-          chatId: "chatX",
+          id: arcId("target", "tsO"),
+          chatId: arcId("chat", "chatX"),
           provider: "codex",
           preset: null,
           cwd: "/nowhere",

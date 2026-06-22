@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
 import type { ChatMessageRow } from "../src/main/db/schema.js"
+import { arcId, type MessageId } from "../src/shared/ids.js"
 
 // Runs the real ArcStore + production sqliteLayer; vitest aliases the native
 // `better-sqlite3` to a `node:sqlite` drop-in (see vitest.config.ts), so this
@@ -27,18 +28,18 @@ const NOW = "2026-06-06T00:00:00.000Z"
 const seed = Effect.gen(function* () {
   const db = yield* ArcStore
   yield* db.upsertWorkspace({
-    id: "ws_1",
+    id: arcId("workspace", "ws_1"),
     path: "/tmp/arc-test-ws",
     name: "ws",
     createdAt: NOW,
     lastOpenedAt: NOW,
   })
-  yield* db.insertChat({ id: "chat_1", workspaceId: "ws_1", title: "t", createdAt: NOW })
+  yield* db.insertChat({ id: arcId("chat", "chat_1"), workspaceId: arcId("workspace", "ws_1"), title: "t", createdAt: NOW })
 })
 
-const msg = (over: Partial<ChatMessageRow> & { id: string; dedupKey: string }): ChatMessageRow => ({
-  chatId: "chat_1",
-  targetSessionId: "target_1",
+const msg = (over: Partial<ChatMessageRow> & { id: MessageId; dedupKey: string }): ChatMessageRow => ({
+  chatId: arcId("chat", "chat_1"),
+  targetSessionId: arcId("target", "target_1"),
   role: "request",
   turnId: null,
   messageId: null,
@@ -74,7 +75,7 @@ describe("pending request lifecycle (in-memory store)", () => {
         yield* seed
         const db = yield* ArcStore
         yield* db.upsertChatMessage(
-          msg({ id: "m1", dedupKey: "target_1:request:tool_1", requestJson: questionJson("pending") }),
+          msg({ id: arcId("message", "m1"), dedupKey: "target_1:request:tool_1", requestJson: questionJson("pending") }),
           "insert",
         )
 
@@ -101,17 +102,17 @@ describe("pending request lifecycle (in-memory store)", () => {
         const db = yield* ArcStore
         // hook projects the pending request
         yield* db.upsertChatMessage(
-          msg({ id: "m1", dedupKey: key, requestJson: questionJson("pending") }),
+          msg({ id: arcId("message", "m1"), dedupKey: key, requestJson: questionJson("pending") }),
           "replace",
         )
         // artifact re-projection (same tool id => same key) carries the answer
         yield* db.upsertChatMessage(
-          msg({ id: "m2", dedupKey: key, status: "final", requestJson: questionJson("answered", { answer: "Cats" }) }),
+          msg({ id: arcId("message", "m2"), dedupKey: key, status: "final", requestJson: questionJson("answered", { answer: "Cats" }) }),
           "replace_keep_time",
         )
         // a later artifact lacking tool output must NOT reopen the answered request
         yield* db.upsertChatMessage(
-          msg({ id: "m3", dedupKey: key, requestJson: questionJson("pending") }),
+          msg({ id: arcId("message", "m3"), dedupKey: key, requestJson: questionJson("pending") }),
           "replace_keep_time",
         )
 
@@ -133,11 +134,11 @@ describe("pending request lifecycle (in-memory store)", () => {
       Effect.gen(function* () {
         yield* seed
         const db = yield* ArcStore
-        yield* db.upsertChatMessage(msg({ id: "m1", dedupKey: key, requestJson: questionJson("pending") }), "insert")
+        yield* db.upsertChatMessage(msg({ id: arcId("message", "m1"), dedupKey: key, requestJson: questionJson("pending") }), "insert")
         yield* db.supersedePendingRequestsForTarget("target_1")
         // resume re-ingest: the question is genuinely still open (no answer yet)
         yield* db.upsertChatMessage(
-          msg({ id: "m2", dedupKey: key, requestJson: questionJson("pending") }),
+          msg({ id: arcId("message", "m2"), dedupKey: key, requestJson: questionJson("pending") }),
           "replace_keep_time",
         )
 
@@ -159,11 +160,11 @@ describe("pending request lifecycle (in-memory store)", () => {
         yield* seed
         const db = yield* ArcStore
         yield* db.upsertChatMessage(
-          msg({ id: "p1", dedupKey: "target_1:request:p1", requestJson: permissionJson("pending") }),
+          msg({ id: arcId("message", "p1"), dedupKey: "target_1:request:p1", requestJson: permissionJson("pending") }),
           "insert",
         )
         yield* db.upsertChatMessage(
-          msg({ id: "q1", dedupKey: "target_1:request:q1", requestJson: questionJson("pending") }),
+          msg({ id: arcId("message", "q1"), dedupKey: "target_1:request:q1", requestJson: questionJson("pending") }),
           "insert",
         )
 
@@ -188,20 +189,20 @@ describe("pending request lifecycle (in-memory store)", () => {
         const db = yield* ArcStore
         // pre-resume
         yield* db.upsertChatMessage(
-          msg({ id: "u1", role: "user", dedupKey: userKey, body: "do the thing", status: "final" }),
+          msg({ id: arcId("message", "u1"), role: "user", dedupKey: userKey, body: "do the thing", status: "final" }),
           "insert",
         )
         yield* db.upsertChatMessage(
-          msg({ id: "r1", dedupKey: requestKey, requestJson: questionJson("pending") }),
+          msg({ id: arcId("message", "r1"), dedupKey: requestKey, requestJson: questionJson("pending") }),
           "replace",
         )
         // post-resume re-ingest: same keys, new ids, request now answered
         yield* db.upsertChatMessage(
-          msg({ id: "u2", role: "user", dedupKey: userKey, body: "do the thing", status: "final" }),
+          msg({ id: arcId("message", "u2"), role: "user", dedupKey: userKey, body: "do the thing", status: "final" }),
           "insert",
         )
         yield* db.upsertChatMessage(
-          msg({ id: "r2", dedupKey: requestKey, status: "final", requestJson: questionJson("answered", { answer: "Cats" }) }),
+          msg({ id: arcId("message", "r2"), dedupKey: requestKey, status: "final", requestJson: questionJson("answered", { answer: "Cats" }) }),
           "replace_keep_time",
         )
 
@@ -226,7 +227,7 @@ describe("pending request lifecycle (in-memory store)", () => {
         const db = yield* ArcStore
         yield* db.upsertChatMessage(
           msg({
-            id: "t1",
+            id: arcId("message", "t1"),
             role: "tool",
             dedupKey: key,
             body: "[Tool: Bash]",
@@ -237,7 +238,7 @@ describe("pending request lifecycle (in-memory store)", () => {
         )
         yield* db.upsertChatMessage(
           msg({
-            id: "t2",
+            id: arcId("message", "t2"),
             role: "tool",
             dedupKey: key,
             body: "[Tool: Bash]",

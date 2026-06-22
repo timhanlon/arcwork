@@ -11,11 +11,13 @@
  * Like `arc:pty-data`, this rides the raw broadcast plane without Schema decode —
  * a dropped/garbled delta only affects a transient visual, never stored state.
  */
+import type { ChatId, TargetId } from "./ids.js"
+
 export interface AssistantStreamDelta {
   /** chat this delta belongs to (null only if the hook lacked arc env) */
-  readonly chatId: string | null
+  readonly chatId: ChatId | null
   /** target session producing the stream */
-  readonly targetSessionId: string | null
+  readonly targetSessionId: TargetId | null
   /** provider stream id for the message being streamed (coalesces deltas) */
   readonly messageId: string | null
   /** the incremental text chunk */

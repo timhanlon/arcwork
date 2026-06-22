@@ -386,7 +386,7 @@ export const GitServiceLive = Layer.effect(
           const isRepo = isRepoResult.stdout.trim() === "true"
           if (!isRepo) {
             return {
-              workspaceId,
+              workspaceId: workspace.id,
               workspaceName: workspace.name,
               isRepo: false,
               changes: [],
@@ -418,7 +418,7 @@ export const GitServiceLive = Layer.effect(
           )
 
           return {
-            workspaceId,
+            workspaceId: workspace.id,
             workspaceName: workspace.name,
             branch: trimmedOrUndefined(branch.stdout),
             head: trimmedOrUndefined(head.stdout),

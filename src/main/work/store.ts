@@ -10,6 +10,7 @@ import {
   type WorkRefRow,
   type WorkRefUpdateRow,
 } from "./schema.js"
+import type { TargetId } from "../../shared/ids.js"
 import { runMigrations } from "../db/migrator.js"
 
 /**
@@ -35,7 +36,7 @@ import { runMigrations } from "../db/migrator.js"
  * model. */
 export interface DelegatedWorkRow extends WorkProjectionRow {
   /** The target-session id of the latest `delegated_to` edge. */
-  readonly targetSessionId: string
+  readonly targetSessionId: TargetId
   /** When that delegation edge was written. */
   readonly delegatedAt: string
 }

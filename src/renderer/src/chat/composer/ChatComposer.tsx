@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react"
+import { arcId, type TargetId } from "../../../../shared/ids.js"
 import { Combobox } from "@base-ui/react/combobox"
 import type { BaseUIEvent } from "@base-ui/react/types"
 import { comboFor, matchesCombo, REFERENCE_TRIGGER } from "../../shell/keybindings.js"
@@ -39,7 +40,7 @@ export interface ChatComposerProps {
    * the composer to that session id (the "to <target>" footer) and leaves the
    * draft body clean. Called with the chosen session's id.
    */
-  readonly onSelectTarget?: (sessionId: string) => void
+  readonly onSelectTarget?: (sessionId: TargetId) => void
   /** Called when an `@`-mention becomes active — the cue to lazily load files. */
   readonly onMention?: () => void
   /** True when the workspace file list was capped, surfaced as a popup footer. */
@@ -128,7 +129,7 @@ export const ChatComposer = forwardRef<ComposerHandle, ChatComposerProps>(functi
         candidate.kind === "session"
           ? removeMention(value, mention, REFERENCE_TRIGGER)
           : applyReference(value, mention, candidate, REFERENCE_TRIGGER)
-      if (candidate.kind === "session") onSelectTarget?.(candidate.insertText)
+      if (candidate.kind === "session") onSelectTarget?.(arcId("target", candidate.insertText))
       // We own the draft: splice it directly. Base UI's own input-value pushes
       // (the fill it does on select) never reach the draft — it's driven only by
       // the textarea's onChange — so there's nothing here to guard against.

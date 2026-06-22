@@ -22,7 +22,7 @@ import { withSqlOperation } from "../db/sql-operation.js"
 import { resolveArcDb, resolveProfile } from "../db/paths.js"
 import type { TargetSessionRow } from "../db/schema.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
-import { newArcId } from "../../shared/ids.js"
+import { type ChatId, newArcId } from "../../shared/ids.js"
 import { PTY_SUBMIT_SEQUENCE, writePromptWithDelayedSubmit } from "../pty-submit.js"
 import { tracePtyChunk } from "./pty-trace.js"
 
@@ -38,7 +38,7 @@ import { tracePtyChunk } from "./pty-trace.js"
 
 export interface LaunchRequest {
   readonly provider: string
-  readonly chatId: string
+  readonly chatId: ChatId
   /** Diff endpoint to run in; defaults to the chat's own workspace. Letting it
    * differ is what makes the comm/diff cross-product expressible — a worker can
    * talk via one provider while writing into a workspace other than the chat's. */

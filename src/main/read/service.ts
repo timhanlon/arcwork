@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import { WorkService } from "../work/service.js"
@@ -7,6 +7,7 @@ import { ChatMessageService } from "../services/ChatMessageService.js"
 import { ArcStore } from "../db/store.js"
 import type { ArcRequestError } from "../errors.js"
 import type { ChatMessage } from "../../shared/chat-message.js"
+import { WorkId } from "../../shared/ids.js"
 import type {
   ArcEntity,
   ArcGetParams,
@@ -117,10 +118,12 @@ const hasEveryLabel = (labelsJson: string, expected: ReadonlyArray<string>): boo
   }
 }
 
-/** A work ref is `work_…` but not the substrate's `work_rev_…`/`work_edge_…`
- * (which share the textual prefix and are not independently hydratable). */
-const isWorkRef = (ref: string): boolean =>
-  ref.startsWith("work_") && !ref.startsWith("work_rev_") && !ref.startsWith("work_edge_")
+/** A work ref is a full `work_…` TypeID — validated through the {@link WorkId}
+ * schema, so the `ref is WorkId` narrowing is honest (a prefix-only string like
+ * `work_short` is rejected). Its pattern also excludes the substrate's
+ * `work_rev_…`/`work_edge_…`, which share the textual prefix but aren't
+ * independently hydratable. */
+const isWorkRef: (ref: string) => ref is WorkId = Schema.is(WorkId)
 
 /** A chat-message row ref (`message_…`) — both conversational rows and tool
  * calls share this id space (the `chat_messages` table). */

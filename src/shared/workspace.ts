@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { PullRequest } from "./git.js"
+import { WorkspaceId } from "./ids.js"
 
 /**
  * The slice of a branch's open pull request the sidebar needs: enough to render
@@ -25,7 +26,7 @@ export type WorkspacePullRequest = typeof WorkspacePullRequest.Type
  * Multiple workspaces can be open concurrently; chats are scoped to one.
  */
 export const Workspace = Schema.Struct({
-  id: Schema.String, // TypeID prefix: workspace
+  id: WorkspaceId,
   path: Schema.String,
   name: Schema.String, // basename, for display
   // Repository identity — the grouping key for the sidebar's project tier.

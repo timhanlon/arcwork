@@ -1,4 +1,5 @@
 import { Fragment, type JSX, useMemo } from "react"
+import type { ChatId, TargetId, WorkspaceId } from "../../../shared/ids.js"
 import { Collapsible } from "@base-ui/react/collapsible"
 import { Button } from "@base-ui/react/button"
 import { CaretDown, CaretRight } from "@phosphor-icons/react"
@@ -53,9 +54,9 @@ function ProjectHeader({ label }: { readonly label: string }): JSX.Element {
 }
 
 export interface ArcSidebarSelection {
-  readonly workspaceId?: string
-  readonly chatId?: string
-  readonly sessionId?: string
+  readonly workspaceId?: WorkspaceId
+  readonly chatId?: ChatId
+  readonly sessionId?: TargetId
 }
 
 export interface LaunchableProvider {
@@ -67,7 +68,7 @@ export interface ArcSidebarTreeProps {
   readonly workspaces: ReadonlyArray<Workspace>
   readonly chats: ReadonlyArray<Chat>
   readonly sessions: ReadonlyArray<TargetSession>
-  readonly activeSessionId?: string
+  readonly activeSessionId?: TargetId
   /** session id → live activity, from the `arc:live-target-states` projection */
   readonly liveStateById?: LiveStateById
   /** session ids with a target-originated request still awaiting the user */
@@ -76,14 +77,14 @@ export interface ArcSidebarTreeProps {
   readonly requestSlots?: ReadonlyMap<string, number>
   readonly selectedWorkspaceId?: string
   readonly selectedChatId?: string
-  readonly onSelectChat: (workspaceId: string, chatId: string) => void
-  readonly onSelectSession: (provider: string, chatId: string, sessionId: string) => void
+  readonly onSelectChat: (workspaceId: WorkspaceId, chatId: ChatId) => void
+  readonly onSelectSession: (provider: string, chatId: ChatId, sessionId: TargetId) => void
   /** stop a session's live process (only attached sessions render the control) */
-  readonly onStopSession?: (sessionId: string) => void
+  readonly onStopSession?: (sessionId: TargetId) => void
   /** re-attach a detached, resumable session (only those rows render the control) */
-  readonly onResumeSession?: (sessionId: string) => void
-  readonly onCreateChat: (workspaceId: string) => void
-  readonly onRenameChat?: (chatId: string, title: string) => Promise<void>
+  readonly onResumeSession?: (sessionId: TargetId) => void
+  readonly onCreateChat: (workspaceId: WorkspaceId) => void
+  readonly onRenameChat?: (chatId: ChatId, title: string) => Promise<void>
   readonly onSelectionChange?: (selection: ArcSidebarSelection) => void
 }
 
@@ -96,20 +97,20 @@ export function ArcSidebarTree(props: ArcSidebarTreeProps): JSX.Element {
     [props.workspaces, props.chats, props.sessions],
   )
 
-  const selectWorkspace = (workspaceId: string): void => {
+  const selectWorkspace = (workspaceId: WorkspaceId): void => {
     props.onSelectionChange?.({ workspaceId })
   }
 
-  const selectChat = (workspaceId: string, chatId: string): void => {
+  const selectChat = (workspaceId: WorkspaceId, chatId: ChatId): void => {
     props.onSelectChat(workspaceId, chatId)
     props.onSelectionChange?.({ workspaceId, chatId })
   }
 
   const selectSession = (
-    workspaceId: string,
+    workspaceId: WorkspaceId,
     provider: string,
-    chatId: string,
-    sessionId: string,
+    chatId: ChatId,
+    sessionId: TargetId,
   ): void => {
     props.onSelectSession(provider, chatId, sessionId)
     props.onSelectionChange?.({ workspaceId, chatId, sessionId })

@@ -5,6 +5,7 @@ import { WorkService, WorkServiceLive } from "../src/main/work/service.js"
 import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
 import type { ChatMessageRow } from "../src/main/db/schema.js"
+import { arcId } from "../src/shared/ids.js"
 
 /**
  * Execution provenance: a work write through Arc MCP carries only trusted ids
@@ -34,8 +35,8 @@ const run = async <A, E>(
 }
 
 const message = (over: Partial<ChatMessageRow> & Pick<ChatMessageRow, "id" | "occurredAt">): ChatMessageRow => ({
-  chatId: "chat_exec",
-  targetSessionId: "target_exec",
+  chatId: arcId("chat", "chat_exec"),
+  targetSessionId: arcId("target", "target_exec"),
   role: "assistant",
   turnId: null,
   messageId: null,
@@ -53,21 +54,21 @@ const message = (over: Partial<ChatMessageRow> & Pick<ChatMessageRow, "id" | "oc
 const seedSession = Effect.gen(function* () {
   const arc = yield* ArcStore
   yield* arc.upsertWorkspace({
-    id: "workspace_exec",
+    id: arcId("workspace", "workspace_exec"),
     path: "/tmp/exec",
     name: "exec",
     createdAt: "2026-06-17T00:00:00.000Z",
     lastOpenedAt: "2026-06-17T00:00:00.000Z",
   })
   yield* arc.insertChat({
-    id: "chat_exec",
-    workspaceId: "workspace_exec",
+    id: arcId("chat", "chat_exec"),
+    workspaceId: arcId("workspace", "workspace_exec"),
     title: "exec",
     createdAt: "2026-06-17T00:00:00.000Z",
   })
   yield* arc.upsertTargetSession({
-    id: "target_exec",
-    chatId: "chat_exec",
+    id: arcId("target", "target_exec"),
+    chatId: arcId("chat", "chat_exec"),
     provider: "codex",
     preset: null,
     cwd: "/tmp/exec",
@@ -88,11 +89,11 @@ describe("work execution provenance (resolved from the trusted session)", () => 
         const arc = yield* ArcStore
         // Two observed models on the session; the newer one is the live model.
         yield* arc.upsertChatMessage(
-          message({ id: "msg_old", occurredAt: "2026-06-17T01:00:00.000Z", model: "gpt-5" }),
+          message({ id: arcId("message", "msg_old"), occurredAt: "2026-06-17T01:00:00.000Z", model: "gpt-5" }),
           "insert",
         )
         yield* arc.upsertChatMessage(
-          message({ id: "msg_new", occurredAt: "2026-06-17T02:00:00.000Z", model: "gpt-5.4" }),
+          message({ id: arcId("message", "msg_new"), occurredAt: "2026-06-17T02:00:00.000Z", model: "gpt-5.4" }),
           "insert",
         )
         const svc = yield* WorkService
@@ -130,7 +131,7 @@ describe("work execution provenance (resolved from the trusted session)", () => 
         yield* seedSession
         const arc = yield* ArcStore
         yield* arc.upsertChatMessage(
-          message({ id: "msg_x", occurredAt: "2026-06-17T01:00:00.000Z", model: "gpt-5.4" }),
+          message({ id: arcId("message", "msg_x"), occurredAt: "2026-06-17T01:00:00.000Z", model: "gpt-5.4" }),
           "insert",
         )
         const svc = yield* WorkService
@@ -147,7 +148,7 @@ describe("work execution provenance (resolved from the trusted session)", () => 
         yield* seedSession
         const arc = yield* ArcStore
         yield* arc.upsertChatMessage(
-          message({ id: "msg_c", occurredAt: "2026-06-17T01:00:00.000Z", model: "gpt-5.4" }),
+          message({ id: arcId("message", "msg_c"), occurredAt: "2026-06-17T01:00:00.000Z", model: "gpt-5.4" }),
           "insert",
         )
         const svc = yield* WorkService
@@ -164,14 +165,14 @@ describe("work execution provenance (resolved from the trusted session)", () => 
         yield* seedSession
         const arc = yield* ArcStore
         yield* arc.upsertChatMessage(
-          message({ id: "msg_1", occurredAt: "2026-06-17T01:00:00.000Z", model: "gpt-5" }),
+          message({ id: arcId("message", "msg_1"), occurredAt: "2026-06-17T01:00:00.000Z", model: "gpt-5" }),
           "insert",
         )
         const svc = yield* WorkService
         const created = yield* svc.create({ title: "evolves", body: "old" }, execProvenance)
         // Session switches models, then revises the work — the new model is observed.
         yield* arc.upsertChatMessage(
-          message({ id: "msg_2", occurredAt: "2026-06-17T03:00:00.000Z", model: "gpt-5.4" }),
+          message({ id: arcId("message", "msg_2"), occurredAt: "2026-06-17T03:00:00.000Z", model: "gpt-5.4" }),
           "insert",
         )
         return yield* svc.revise(created.id, { body: "new" }, execProvenance)

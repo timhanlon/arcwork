@@ -20,7 +20,7 @@ import type {
   WorkStatus,
   WorkSummary,
 } from "../../shared/work.js"
-import { newArcId } from "../../shared/ids.js"
+import { arcId, type ChatId, newArcId, type TargetId, type WorkId } from "../../shared/ids.js"
 import { arcRequestError, type ArcRequestError } from "../errors.js"
 import { ArcStore } from "../db/store.js"
 import {
@@ -49,7 +49,7 @@ import { WorkStore, type WorkCreateSpec, type WorkRevisionSpec } from "./store.j
  * the hydrated form of {@link DelegatedWorkRow} the monitoring projection reads. */
 export interface DelegatedWork {
   readonly work: Work
-  readonly targetSessionId: string
+  readonly targetSessionId: TargetId
   readonly delegatedAt: string
 }
 
@@ -64,7 +64,7 @@ export class WorkService extends Context.Service<
      * ref, not content: no new node, no ref move. `ArcRequestError` on unknown
      * work. */
     readonly updateStatus: (
-      refId: string,
+      refId: WorkId,
       status: WorkStatus,
       provenance: WorkProvenance,
     ) => Effect.Effect<Work, SqlError | ArcRequestError>
@@ -73,7 +73,7 @@ export class WorkService extends Context.Service<
      * no new node, no ref move. A no-op when the priority is unchanged.
      * `ArcRequestError` on unknown work. */
     readonly updatePriority: (
-      refId: string,
+      refId: WorkId,
       priority: WorkPriority,
       provenance: WorkProvenance,
     ) => Effect.Effect<Work, SqlError | ArcRequestError>
@@ -82,7 +82,7 @@ export class WorkService extends Context.Service<
      * status is untouched. `ArcRequestError` on unknown work or a concurrent
      * edit (the ref drifted). */
     readonly revise: (
-      refId: string,
+      refId: WorkId,
       edits: WorkReviseInput,
       provenance: WorkProvenance,
     ) => Effect.Effect<Work, SqlError | ArcRequestError>
@@ -93,7 +93,7 @@ export class WorkService extends Context.Service<
      * commit watcher to record commit→work without an agent writing a note.
      * `ArcRequestError` on unknown work. */
     readonly addCitation: (
-      refId: string,
+      refId: WorkId,
       citation: Citation,
       provenance: WorkProvenance,
       note?: string,
@@ -105,8 +105,8 @@ export class WorkService extends Context.Service<
      * a handoff leaves, distinct from a prose comment. Idempotent for the same
      * (work, session). `ArcRequestError` on unknown work. */
     readonly linkTargetSession: (
-      refId: string,
-      targetSessionId: string,
+      refId: WorkId,
+      targetSessionId: TargetId,
       provenance: WorkProvenance,
       note?: string,
     ) => Effect.Effect<Work, SqlError | ArcRequestError>
@@ -122,7 +122,7 @@ export class WorkService extends Context.Service<
     readonly listAll: Effect.Effect<ReadonlyArray<Work>, SqlError>
     /** All work authored in a given chat (any status), newest first — the
      * context-scoped view shown when that chat is selected. */
-    readonly listForChat: (chatId: string) => Effect.Effect<ReadonlyArray<Work>, SqlError>
+    readonly listForChat: (chatId: ChatId) => Effect.Effect<ReadonlyArray<Work>, SqlError>
     /** Every delegated unit of work paired with its current implementer target
      * session — the typed reverse of {@link linkTargetSession}, so the monitoring
      * read model answers "what is delegated where?" from the graph, not comments.
@@ -134,18 +134,18 @@ export class WorkService extends Context.Service<
      * of reading comments or scrollback. Only work whose *latest* `delegated_to`
      * edge points at `targetSessionId` is returned; newest delegation first. */
     readonly listDelegatedTo: (
-      targetSessionId: string,
+      targetSessionId: TargetId,
     ) => Effect.Effect<ReadonlyArray<DelegatedWork>, SqlError>
     /** Content search across title/body/labels, spanning every status by default
      * so resolved work stays findable. See {@link WorkSearchQuery}. */
     readonly search: (query: WorkSearchQuery) => Effect.Effect<ReadonlyArray<Work>, SqlError>
-    readonly get: (refId: string) => Effect.Effect<Work | null, SqlError>
+    readonly get: (refId: WorkId) => Effect.Effect<Work | null, SqlError>
     /** Attach a comment to a unit of work. By default it anchors to the work's
      * *current revision node* (so the remark stays with the text it discussed);
      * `input.ref` anchors it to the durable ref instead. Provenance flows the
      * same path as create/revise/status/link. `ArcRequestError` on unknown work. */
     readonly comment: (
-      refId: string,
+      refId: WorkId,
       input: WorkCommentInput,
       provenance: WorkProvenance,
     ) => Effect.Effect<WorkComment, SqlError | ArcRequestError>
@@ -155,7 +155,7 @@ export class WorkService extends Context.Service<
      * `olderRevisionCommentCount` so a caller can indicate older comments exist.
      * `ArcRequestError` on unknown work. */
     readonly listComments: (
-      refId: string,
+      refId: WorkId,
       opts?: { readonly allRevisions?: boolean },
     ) => Effect.Effect<WorkCommentListing, SqlError | ArcRequestError>
     /** Fires once per *real* mutation (no-op edits don't emit) so the renderer's
@@ -211,7 +211,7 @@ export const WorkServiceLive = Layer.effect(
     // Invalidation bus for the `arc:work` push channel. Unbounded so a publish
     // never blocks a mutation; consumers that fall behind just coalesce reads.
     const updates = yield* PubSub.unbounded<WorkChange>()
-    const publishChange = (refId: string, chatId: string | null | undefined) =>
+    const publishChange = (refId: WorkId, chatId: ChatId | null | undefined) =>
       PubSub.publish(updates, { refId, chatId: chatId ?? null })
 
     const scopedProvenance = (provenance: WorkProvenance) =>
@@ -448,7 +448,7 @@ export const WorkServiceLive = Layer.effect(
       return yield* Effect.forEach(rows, toWork)
     })
 
-    const listForChat = (chatId: string) =>
+    const listForChat = (chatId: ChatId) =>
       Effect.gen(function* () {
         const rows = yield* store.loadWorkForChat(chatId)
         return yield* Effect.forEach(rows, toWork)
@@ -465,7 +465,7 @@ export const WorkServiceLive = Layer.effect(
       )
     })
 
-    const listDelegatedTo = (targetSessionId: string) =>
+    const listDelegatedTo = (targetSessionId: TargetId) =>
       Effect.gen(function* () {
         const rows = yield* store.loadDelegatedWorkForTarget(targetSessionId)
         return yield* Effect.forEach(rows, (row) =>
@@ -493,7 +493,7 @@ export const WorkServiceLive = Layer.effect(
       })
 
     const updateStatus = Effect.fn("WorkService.updateStatus")(
-      (refId: string, status: WorkStatus, provenance: WorkProvenance) =>
+      (refId: WorkId, status: WorkStatus, provenance: WorkProvenance) =>
         Effect.gen(function* () {
           provenance = yield* scopedProvenance(provenance)
           const current = yield* store.loadWork(refId)
@@ -533,7 +533,7 @@ export const WorkServiceLive = Layer.effect(
     )
 
     const updatePriority = Effect.fn("WorkService.updatePriority")(
-      (refId: string, priority: WorkPriority, provenance: WorkProvenance) =>
+      (refId: WorkId, priority: WorkPriority, provenance: WorkProvenance) =>
         Effect.gen(function* () {
           provenance = yield* scopedProvenance(provenance)
           const current = yield* store.loadWork(refId)
@@ -571,7 +571,7 @@ export const WorkServiceLive = Layer.effect(
     )
 
     const addCitation = Effect.fn("WorkService.addCitation")(
-      (refId: string, citation: Citation, provenance: WorkProvenance, note?: string) =>
+      (refId: WorkId, citation: Citation, provenance: WorkProvenance, note?: string) =>
         Effect.gen(function* () {
           provenance = yield* scopedProvenance(provenance)
           const current = yield* store.loadWork(refId)
@@ -615,7 +615,7 @@ export const WorkServiceLive = Layer.effect(
     )
 
     const linkTargetSession = Effect.fn("WorkService.linkTargetSession")(
-      (refId: string, targetSessionId: string, provenance: WorkProvenance, note?: string) =>
+      (refId: WorkId, targetSessionId: TargetId, provenance: WorkProvenance, note?: string) =>
         Effect.gen(function* () {
           provenance = yield* scopedProvenance(provenance)
           const current = yield* store.loadWork(refId)
@@ -659,7 +659,7 @@ export const WorkServiceLive = Layer.effect(
     )
 
     const revise = Effect.fn("WorkService.revise")(
-      (refId: string, edits: WorkReviseInput, provenance: WorkProvenance) =>
+      (refId: WorkId, edits: WorkReviseInput, provenance: WorkProvenance) =>
         Effect.gen(function* () {
           provenance = yield* scopedProvenance(provenance)
           const current = yield* store.loadWork(refId)
@@ -752,7 +752,7 @@ export const WorkServiceLive = Layer.effect(
         }),
     )
 
-    const get = (refId: string) =>
+    const get = (refId: WorkId) =>
       Effect.gen(function* () {
         const row = yield* store.loadWork(refId)
         return row ? yield* toWork(row) : null
@@ -766,7 +766,9 @@ export const WorkServiceLive = Layer.effect(
         id: row.id,
         workRefId: row.workRefId,
         subjectKind: row.subjectKind as WorkCommentSubjectKind,
-        subjectId: row.subjectId,
+        // node comments anchor to a work_rev_… node, ref comments to the work_… ref
+        subjectId:
+          row.subjectKind === "ref" ? arcId("work", row.subjectId) : arcId("work_rev", row.subjectId),
         body: row.body,
         createdAt: row.createdAt,
         provenance: {
@@ -781,7 +783,7 @@ export const WorkServiceLive = Layer.effect(
     }
 
     const comment = Effect.fn("WorkService.comment")(
-      (refId: string, input: WorkCommentInput, provenance: WorkProvenance) =>
+      (refId: WorkId, input: WorkCommentInput, provenance: WorkProvenance) =>
         Effect.gen(function* () {
           provenance = yield* scopedProvenance(provenance)
           const current = yield* store.loadWork(refId)
@@ -815,7 +817,7 @@ export const WorkServiceLive = Layer.effect(
     )
 
     const listComments = Effect.fn("WorkService.listComments")(
-      (refId: string, opts?: { readonly allRevisions?: boolean }) =>
+      (refId: WorkId, opts?: { readonly allRevisions?: boolean }) =>
         Effect.gen(function* () {
           const current = yield* store.loadWork(refId)
           if (!current) return yield* Effect.fail(arcRequestError(`unknown work: ${refId}`))

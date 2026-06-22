@@ -1,5 +1,7 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
+import { arcId } from "../../../shared/ids.js"
+import type { TargetId } from "../../../shared/ids.js"
 import { WorkspaceTree, type WorkspaceTreeSelection } from "./WorkspaceTree.js"
 import {
   chatsFixture,
@@ -28,7 +30,7 @@ const noop = (): void => {}
 /** Interactive prototype: work + targets, collapse-all, phosphor new-chat. */
 export const Populated = () => {
   const [sel, setSel] = useState<WorkspaceTreeSelection>({})
-  const [activeSessionId, setActiveSessionId] = useState<string | undefined>("target_run")
+  const [activeSessionId, setActiveSessionId] = useState<TargetId | undefined>(arcId("target", "target_run"))
   return (
     <Column>
       <WorkspaceTree

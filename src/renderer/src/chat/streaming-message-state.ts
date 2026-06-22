@@ -1,9 +1,10 @@
 import type { AssistantStreamDelta } from "../../../shared/assistant-stream.js"
+import type { TargetId } from "../../../shared/ids.js"
 import type { ChatMessage } from "../../../shared/chat-message.js"
 
 /** One in-flight assistant block being streamed live for a target session. */
 export interface StreamingBuffer {
-  readonly targetSessionId: string
+  readonly targetSessionId: TargetId
   readonly messageId: string | null
   readonly text: string
   readonly model?: string

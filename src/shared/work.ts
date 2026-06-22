@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { ChatId, CommentId, WorkId, WorkRevId, WorkspaceId } from "./ids.js"
 
 /**
  * **work** — arc's durable unit of intent: something to investigate, decide, fix,
@@ -113,9 +114,13 @@ export type WorkExecution = typeof WorkExecution.Type
  */
 export const WorkProvenance = Schema.Struct({
   actor: Schema.optional(Schema.String),
+  // Deliberately unbranded: an authoring session is either an interactive target
+  // (`target_…`) or a batch run (`run_…`) — the two Instance subtypes — so no single
+  // ArcId prefix fits. (Today's resolvers assume a target; a run author would reuse
+  // this same field.) Same reasoning as `Citation.target`.
   sessionId: Schema.optional(Schema.String),
-  chatId: Schema.optional(Schema.String),
-  workspaceId: Schema.optional(Schema.String),
+  chatId: Schema.optional(ChatId),
+  workspaceId: Schema.optional(WorkspaceId),
   source: Schema.String,
   execution: Schema.optional(WorkExecution),
 })
@@ -124,8 +129,8 @@ export type WorkProvenance = typeof WorkProvenance.Type
 /** A unit of work, projected to what a queue/detail view needs. */
 export const Work = Schema.Struct({
   _tag: Schema.Literal("Work"),
-  id: Schema.String, // ref identity — TypeID prefix: work
-  nodeId: Schema.String, // current revision node — TypeID prefix: work_rev
+  id: WorkId, // ref identity
+  nodeId: WorkRevId, // current revision node
   title: Schema.String,
   body: Schema.String,
   labels: Schema.Array(Schema.String),
@@ -149,7 +154,7 @@ export type Work = typeof Work.Type
  */
 export const WorkSummary = Schema.Struct({
   _tag: Schema.Literal("WorkSummary"),
-  id: Schema.String, // ref identity — TypeID prefix: work
+  id: WorkId, // ref identity
   title: Schema.String,
   labels: Schema.Array(Schema.String),
   status: WorkStatus,
@@ -226,10 +231,11 @@ export type WorkCommentSubjectKind = typeof WorkCommentSubjectKind.Type
  */
 export const WorkComment = Schema.Struct({
   _tag: Schema.Literal("WorkComment"),
-  id: Schema.String, // TypeID prefix: comment
-  workRefId: Schema.String, // the durable work ref this comment belongs to
+  id: CommentId,
+  workRefId: WorkId, // the durable work ref this comment belongs to
   subjectKind: WorkCommentSubjectKind,
-  subjectId: Schema.String, // a work_rev_… node (subjectKind 'node') or work_… ref ('ref')
+  // a work_rev_… node (subjectKind 'node') or a work_… ref ('ref'), per subjectKind
+  subjectId: Schema.Union([WorkRevId, WorkId]),
   body: Schema.String,
   createdAt: Schema.String,
   provenance: WorkProvenance,
@@ -257,7 +263,7 @@ export type WorkCommentInput = typeof WorkCommentInput.Type
  * omitted from the list.
  */
 export const WorkCommentListing = Schema.Struct({
-  currentNodeId: Schema.String,
+  currentNodeId: WorkRevId,
   comments: Schema.Array(WorkComment),
   olderRevisionCommentCount: Schema.Number,
 })
@@ -273,7 +279,7 @@ export type WorkCommentListing = typeof WorkCommentListing.Type
  */
 export interface WorkChange {
   /** The mutated work ref. */
-  readonly refId: string
+  readonly refId: WorkId
   /** The work's authoring chat, when known — lets a consumer scope its refetch. */
-  readonly chatId: string | null
+  readonly chatId: ChatId | null
 }

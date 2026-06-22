@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import type { ChatId } from "../../../shared/ids.js"
 import type { ChatMessage } from "../../../shared/chat-message.js"
 import { subscribeWhenReady } from "../bridge.js"
 import { applyAssistantStreamDelta, dropHandedOffStreams, type StreamingBuffer } from "./streaming-message-state.js"
@@ -14,7 +15,7 @@ export type { StreamingBuffer } from "./streaming-message-state.js"
  * text.
  */
 export function useStreamingMessages(
-  chatId: string | undefined,
+  chatId: ChatId | undefined,
   messages: ReadonlyArray<ChatMessage>,
 ): ReadonlyArray<StreamingBuffer> {
   const [streams, setStreams] = useState<ReadonlyArray<StreamingBuffer>>([])

@@ -4,6 +4,7 @@ import { WorkStore, WorkStoreLive } from "../src/main/work/store.js"
 import { WorkService, WorkServiceLive } from "../src/main/work/service.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
 import type { WorkProvenance } from "../src/shared/work.js"
+import { arcId } from "../src/shared/ids.js"
 
 // Runs the real WorkService + WorkStore + production sqliteLayer; vitest aliases
 // native `better-sqlite3` to a `node:sqlite` drop-in (see vitest.config.ts), so
@@ -28,7 +29,7 @@ const cliProvenance: WorkProvenance = {
   source: "cli",
   actor: "claude",
   sessionId: "target_abc",
-  chatId: "chat_abc",
+  chatId: arcId("chat", "chat_abc"),
 }
 
 describe("work create + projection (in-memory graph store)", () => {
@@ -91,8 +92,8 @@ describe("work create + projection (in-memory graph store)", () => {
         const store = yield* WorkStore
         const created = yield* work.create({ title: "delegate me", body: "x" }, cliProvenance)
         // Link the same (work, session) twice — the second is a no-op, not a dup edge.
-        yield* work.linkTargetSession(created.id, "target_impl", cliProvenance)
-        yield* work.linkTargetSession(created.id, "target_impl", cliProvenance)
+        yield* work.linkTargetSession(created.id, arcId("target", "target_impl"), cliProvenance)
+        yield* work.linkTargetSession(created.id, arcId("target", "target_impl"), cliProvenance)
         const edges = yield* store.loadEdges(created.id, "delegated_to")
         return edges
       }),
@@ -111,15 +112,15 @@ describe("work create + projection (in-memory graph store)", () => {
         const onA = yield* work.create({ title: "stays on A", body: "x" }, cliProvenance)
         const movedToB = yield* work.create({ title: "moved to B", body: "x" }, cliProvenance)
         const onB = yield* work.create({ title: "only on B", body: "x" }, cliProvenance)
-        yield* work.linkTargetSession(onA.id, "target_A", cliProvenance)
-        yield* work.linkTargetSession(movedToB.id, "target_A", cliProvenance)
+        yield* work.linkTargetSession(onA.id, arcId("target", "target_A"), cliProvenance)
+        yield* work.linkTargetSession(movedToB.id, arcId("target", "target_A"), cliProvenance)
         // Re-delegate: movedToB's *latest* delegated_to edge now points at B.
-        yield* work.linkTargetSession(movedToB.id, "target_B", cliProvenance)
-        yield* work.linkTargetSession(onB.id, "target_B", cliProvenance)
+        yield* work.linkTargetSession(movedToB.id, arcId("target", "target_B"), cliProvenance)
+        yield* work.linkTargetSession(onB.id, arcId("target", "target_B"), cliProvenance)
         return {
-          a: yield* work.listDelegatedTo("target_A"),
-          b: yield* work.listDelegatedTo("target_B"),
-          none: yield* work.listDelegatedTo("target_missing"),
+          a: yield* work.listDelegatedTo(arcId("target", "target_A")),
+          b: yield* work.listDelegatedTo(arcId("target", "target_B")),
+          none: yield* work.listDelegatedTo(arcId("target", "target_missing")),
         }
       }),
     )
@@ -262,7 +263,7 @@ describe("work create + projection (in-memory graph store)", () => {
     const exit = await run(
       Effect.gen(function* () {
         const work = yield* WorkService
-        return yield* Effect.exit(work.revise("work_nope", { title: "x" }, { source: "cli" }))
+        return yield* Effect.exit(work.revise(arcId("work", "work_nope"), { title: "x" }, { source: "cli" }))
       }),
     )
     expect(exit._tag).toBe("Failure")
@@ -273,11 +274,11 @@ describe("work create + projection (in-memory graph store)", () => {
       Effect.gen(function* () {
         const work = yield* WorkService
         // two chats' worth of work via provenance.chatId
-        const a1 = yield* work.create({ title: "a-open", body: "x" }, { source: "cli", chatId: "chat_a" })
-        const a2 = yield* work.create({ title: "a-done", body: "x" }, { source: "cli", chatId: "chat_a" })
-        yield* work.updateStatus(a2.id, "done", { source: "cli", chatId: "chat_a" })
-        yield* work.create({ title: "b-open", body: "x" }, { source: "cli", chatId: "chat_b" })
-        const forA = yield* work.listForChat("chat_a")
+        const a1 = yield* work.create({ title: "a-open", body: "x" }, { source: "cli", chatId: arcId("chat", "chat_a") })
+        const a2 = yield* work.create({ title: "a-done", body: "x" }, { source: "cli", chatId: arcId("chat", "chat_a") })
+        yield* work.updateStatus(a2.id, "done", { source: "cli", chatId: arcId("chat", "chat_a") })
+        yield* work.create({ title: "b-open", body: "x" }, { source: "cli", chatId: arcId("chat", "chat_b") })
+        const forA = yield* work.listForChat(arcId("chat", "chat_a"))
         return { ids: forA.map((w) => w.id), titles: forA.map((w) => w.title), a1, a2 }
       }),
     )
@@ -291,10 +292,10 @@ describe("work create + projection (in-memory graph store)", () => {
     const result = await run(
       Effect.gen(function* () {
         const work = yield* WorkService
-        const a = yield* work.create({ title: "still-open", body: "x" }, { source: "cli", chatId: "chat_a" })
-        const b = yield* work.create({ title: "shipped", body: "x" }, { source: "cli", chatId: "chat_b" })
+        const a = yield* work.create({ title: "still-open", body: "x" }, { source: "cli", chatId: arcId("chat", "chat_a") })
+        const b = yield* work.create({ title: "shipped", body: "x" }, { source: "cli", chatId: arcId("chat", "chat_b") })
         yield* work.updateStatus(b.id, "done", { source: "cli" })
-        const c = yield* work.create({ title: "retired", body: "x" }, { source: "cli", chatId: "chat_b" })
+        const c = yield* work.create({ title: "retired", body: "x" }, { source: "cli", chatId: arcId("chat", "chat_b") })
         yield* work.updateStatus(c.id, "superseded", { source: "cli" })
         const all = yield* work.listAll
         const open = yield* work.listOpen
@@ -387,7 +388,7 @@ describe("work create + projection (in-memory graph store)", () => {
     const exit = await run(
       Effect.gen(function* () {
         const work = yield* WorkService
-        return yield* Effect.exit(work.updateStatus("work_does_not_exist", "done", { source: "cli" }))
+        return yield* Effect.exit(work.updateStatus(arcId("work", "work_does_not_exist"), "done", { source: "cli" }))
       }),
     )
     expect(exit._tag).toBe("Failure")
@@ -509,7 +510,7 @@ describe("work create + projection (in-memory graph store)", () => {
     const exit = await run(
       Effect.gen(function* () {
         const work = yield* WorkService
-        return yield* Effect.exit(work.updatePriority("work_nope", "p0", { source: "cli" }))
+        return yield* Effect.exit(work.updatePriority(arcId("work", "work_nope"), "p0", { source: "cli" }))
       }),
     )
     expect(exit._tag).toBe("Failure")
@@ -611,9 +612,9 @@ describe("work create + projection (in-memory graph store)", () => {
       Effect.gen(function* () {
         const work = yield* WorkService
         const commentExit = yield* Effect.exit(
-          work.comment("work_nope", { body: "x" }, { source: "cli" }),
+          work.comment(arcId("work", "work_nope"), { body: "x" }, { source: "cli" }),
         )
-        const listExit = yield* Effect.exit(work.listComments("work_nope"))
+        const listExit = yield* Effect.exit(work.listComments(arcId("work", "work_nope")))
         return { comment: commentExit._tag, list: listExit._tag }
       }),
     )

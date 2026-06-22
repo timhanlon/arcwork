@@ -1,4 +1,5 @@
 import type { JSX } from "react"
+import type { PaneId, TargetId } from "../../../shared/ids.js"
 import type { TargetSession } from "../../../shared/instance.js"
 import { bindingFor } from "../shell/keybindings.js"
 import { Button } from "../ui/Button.js"
@@ -9,13 +10,13 @@ const RESUME_BINDING = bindingFor("resumeDetachedSession")
 
 export interface TargetSessionPanePane {
   readonly id: string
-  readonly sessionId?: string
-  readonly resumeSessionId?: string
+  readonly sessionId?: TargetId
+  readonly resumeSessionId?: TargetId
 }
 
 export interface TargetSessionPaneProps {
   readonly panes: ReadonlyArray<TargetSessionPanePane>
-  readonly activePaneId?: string
+  readonly activePaneId?: PaneId
   readonly detachedSession?: TargetSession
   readonly hasWorkspaces: boolean
   readonly onResumeDetached: () => void

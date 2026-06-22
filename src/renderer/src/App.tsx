@@ -19,6 +19,8 @@ import {
   workspacesAtom,
 } from "./atoms.js"
 import type { LiveTargetActivity } from "../../shared/live-target-state.js"
+import type { ChatId, PaneId, TargetId, WorkspaceId } from "../../shared/ids.js"
+import { arcId } from "../../shared/ids.js"
 import { ArcSidebarTree } from "./sidebar/ArcSidebarTree.js"
 import { orderedPendingSessionIds } from "./sidebar/grouping.js"
 import { TargetSessionPane } from "./chat/TargetSessionPane.js"
@@ -274,7 +276,7 @@ export function App(): JSX.Element {
   }, [shell.actions, pendingOrder, vm.detachedSession, vm.workId, vm.workspaceId, workspaces, runCreateChat])
   useKeyboardShortcuts(shortcutHandlers)
 
-  const createChat = async (workspaceId: string): Promise<void> => {
+  const createChat = async (workspaceId: WorkspaceId): Promise<void> => {
     const exit = await runCreateChat({ payload: { workspaceId } })
     if (Exit.isSuccess(exit)) shell.actions.selectChat(workspaceId, exit.value.id)
   }
@@ -299,7 +301,7 @@ export function App(): JSX.Element {
     await openWorktreeChat(worktree.path)
   }
 
-  const renameChat = async (chatId: string, title: string): Promise<void> => {
+  const renameChat = async (chatId: ChatId, title: string): Promise<void> => {
     await rpc("UpdateChatTitle", { chatId, title })
   }
 
@@ -318,7 +320,7 @@ export function App(): JSX.Element {
       title: "New chat in workspace…",
       choosePlaceholder: "choose a workspace",
       choices: workspaces.map((w) => ({ id: w.id, title: w.name, subtitle: w.path })),
-      onChoose: (workspaceId) => void createChat(workspaceId),
+      onChoose: (workspaceId) => void createChat(arcId("workspace", workspaceId)),
     },
     {
       id: "newWorktree",
@@ -352,11 +354,11 @@ export function App(): JSX.Element {
     leafCommand("openSearchPalette", "Search…"),
   ]
 
-  const selectChat = (workspaceId: string, chatId: string): void => {
+  const selectChat = (workspaceId: WorkspaceId, chatId: ChatId): void => {
     shell.actions.selectChat(workspaceId, chatId)
   }
 
-  const onLaunch = (provider: string, chatId: string): void => {
+  const onLaunch = (provider: string, chatId: ChatId): void => {
     shell.actions.launchTarget(provider, chatId)
   }
 
@@ -367,7 +369,7 @@ export function App(): JSX.Element {
     runOpenWorkspace({ payload: undefined })
   }
 
-  const onMeasured = async (paneId: string, cols: number, rows: number): Promise<void> => {
+  const onMeasured = async (paneId: PaneId, cols: number, rows: number): Promise<void> => {
     const pane = panes.find((p) => p.id === paneId)
     if (!pane || (pane.sessionId && !pane.resumeSessionId)) return
     const exit = await (pane.resumeSessionId
@@ -402,7 +404,7 @@ export function App(): JSX.Element {
   // Bring a target session to the foreground from anywhere (sidebar pick, or a
   // pending-question action in the chat). Selects the owning chat, then either
   // surfaces the detached-resume prompt or activates the live pane.
-  const focusSession = (sessionId: string): void => {
+  const focusSession = (sessionId: TargetId): void => {
     shell.actions.focusSession(sessionId)
   }
 
@@ -410,7 +412,7 @@ export function App(): JSX.Element {
   // the child, and the resulting pty exit flows back through `onPtyExit` (pane
   // close) and the `arc:sessions` push (row → detached), so there's no local
   // state to update here.
-  const onStopSession = (sessionId: string): void => {
+  const onStopSession = (sessionId: TargetId): void => {
     shell.actions.stopSession(sessionId)
     runStopTarget({ payload: { sessionId } })
   }
@@ -421,7 +423,7 @@ export function App(): JSX.Element {
 
   // Re-attach a detached but resumable session straight from its sidebar row —
   // the live re-attach flows back through the same ResumeTarget pane path.
-  const onResumeSession = (sessionId: string): void => {
+  const onResumeSession = (sessionId: TargetId): void => {
     shell.actions.resumeSession(sessionId)
   }
 
