@@ -39,22 +39,18 @@ export function RepoContextBar({ context }: RepoContextBarProps): JSX.Element | 
 
 function PullRequestSummary({ pr }: { readonly pr: PullRequest }): JSX.Element {
   const stateColor = prStateColor(pr.state, pr.isDraft)
+  const checks = pr.checksState ? CHECKS[pr.checksState] : undefined
   const body = (
     <span className="flex min-w-0 items-center gap-1.5">
       <span className={`flex-none inline-flex items-center gap-[3px] font-mono text-[11px] font-semibold ${stateColor}`}>
         <PrStateIcon state={pr.state} isDraft={pr.isDraft} />#{pr.number}
       </span>
       <span className="min-w-0 truncate text-foreground">{pr.title}</span>
-      {pr.checksState &&
-        CHECKS[pr.checksState] &&
-        (() => {
-          const { Icon, color } = CHECKS[pr.checksState]!
-          return (
-            <span className={`flex-none ${color}`} aria-label={`checks ${pr.checksState}`}>
-              <Icon size={13} />
-            </span>
-          )
-        })()}
+      {checks && (
+        <span className={`flex-none ${checks.color}`} aria-label={`checks ${pr.checksState}`}>
+          <checks.Icon size={13} />
+        </span>
+      )}
       {pr.reviewState && (
         <span className="flex-none font-mono text-[10px] uppercase tracking-[0.04em] text-fg-dim">
           {pr.reviewState.replace(/_/g, " ")}
