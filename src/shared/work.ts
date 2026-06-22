@@ -114,6 +114,10 @@ export type WorkExecution = typeof WorkExecution.Type
  */
 export const WorkProvenance = Schema.Struct({
   actor: Schema.optional(Schema.String),
+  // Deliberately unbranded: an authoring session is either an interactive target
+  // (`target_…`) or a batch run (`run_…`) — the two Instance subtypes — so no single
+  // ArcId prefix fits. (Today's resolvers assume a target; a run author would reuse
+  // this same field.) Same reasoning as `Citation.target`.
   sessionId: Schema.optional(Schema.String),
   chatId: Schema.optional(ChatId),
   workspaceId: Schema.optional(WorkspaceId),
