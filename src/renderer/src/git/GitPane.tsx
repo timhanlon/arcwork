@@ -2,7 +2,13 @@ import { PatchDiff } from "@pierre/diffs/react"
 import { useAtomValue } from "@effect/atom-react"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import { type JSX, useEffect, useMemo, useState } from "react"
-import type { GitChangeStatus, GitFileChange, GitStatus, WorkspaceGitContext } from "../../../shared/git.js"
+import type {
+  GitChangeStatus,
+  GitCommit,
+  GitFileChange,
+  GitStatus,
+  WorkspaceGitContext,
+} from "../../../shared/git.js"
 import type { Workspace } from "../../../shared/workspace.js"
 import { gitChangesSignalAtom } from "../atoms.js"
 import { Button } from "../ui/Button.js"
@@ -82,6 +88,7 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
   const [error, setError] = useState<string | undefined>(undefined)
   const [gitContext, setGitContext] = useState<WorkspaceGitContext | undefined>(undefined)
   const [syncing, setSyncing] = useState(false)
+  const [commits, setCommits] = useState<ReadonlyArray<GitCommit>>([])
 
   // Hook-driven refresh: a `post-checkout` branch remap or `pre-push` PR sync
   // ticks this counter for the open workspace (empty key when none, never ticks).
@@ -135,6 +142,15 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
       .catch(() => setGitContext(undefined))
   }
 
+  // The branch's recent history, a local read alongside the status pull. Empty on
+  // any failure (non-repo, unborn branch) — the commits section just stays empty.
+  const loadCommits = (): void => {
+    if (!workspace) return
+    rpc("GetWorkspaceGitCommits", { workspaceId: workspace.id })
+      .then(setCommits)
+      .catch(() => setCommits([]))
+  }
+
   // The one network refresh: pull PRs from GitHub via gh, then re-read context
   // so the current-branch PR reflects the sync.
   const syncPullRequests = (): void => {
@@ -149,8 +165,10 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
   useEffect(() => {
     setStatus(undefined)
     setGitContext(undefined)
+    setCommits([])
     reload()
     loadContext()
+    loadCommits()
     // Auto-sync PRs on workspace open (a refresh trigger the design calls for):
     // loadContext paints the persisted read model instantly, then this pulls
     // fresh PRs from GitHub in the background so the current-branch PR appears
@@ -165,6 +183,7 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
     if (gitSignal === 0) return
     reload()
     loadContext()
+    loadCommits()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gitSignal])
 
@@ -188,7 +207,15 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
             {status?.branch ?? status?.head?.slice(0, 7) ?? workspace.name}
           </div>
         </div>
-        <Button size="sm" variant="ghost" disabled={loading} onClick={reload}>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={loading}
+          onClick={() => {
+            reload()
+            loadCommits()
+          }}
+        >
           Refresh
         </Button>
       </div>
@@ -196,24 +223,26 @@ export function GitPane({ workspace, selectedPath, onSelectPath }: GitPaneProps)
       {error && <div className={ERROR_BANNER}>{error}</div>}
       {!loading && status?.isRepo === false ? (
         <EmptyState label="This workspace is not a git repository" />
-      ) : !loading && grouped.length === 0 ? (
-        // No changes: a single full-pane empty state, not the master-detail
-        // split — otherwise the message renders inside the capped list box with
-        // nothing to center against, and the stale diff header lingers below.
-        <EmptyState label="No changes" />
       ) : (
-        // Master-detail in one pane: the changed-file list on top (capped so it
-        // never crowds out the diff), the selected file's diff filling the rest.
+        // One pane, stacked: the changed-file list, the branch's commit history,
+        // then the selected file's diff. Changes and commits are each capped so
+        // the diff (when a file is selected) still has room; with no selection the
+        // commit history takes the remaining space.
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="max-h-[45%] flex-none overflow-y-auto border-b border-border">
-            <ChangedFilesList
-              loading={loading}
-              grouped={grouped}
-              selectedPath={effectiveSelectedPath}
-              onSelect={onSelectPath}
-            />
+          <div className="max-h-[35%] flex-none overflow-y-auto border-b border-border">
+            {!loading && grouped.length === 0 ? (
+              <div className="px-3 py-2 text-[12px] text-fg-dim">No changes</div>
+            ) : (
+              <ChangedFilesList
+                loading={loading}
+                grouped={grouped}
+                selectedPath={effectiveSelectedPath}
+                onSelect={onSelectPath}
+              />
+            )}
           </div>
-          <GitFileDiff workspace={workspace} selectedPath={effectiveSelectedPath} />
+          <CommitsList commits={commits} expanded={!effectiveSelectedPath} />
+          {effectiveSelectedPath && <GitFileDiff workspace={workspace} selectedPath={effectiveSelectedPath} />}
         </div>
       )}
     </section>
@@ -293,6 +322,59 @@ function ChangedFilesList({
       ))}
     </div>
   )
+}
+
+/** The branch's recent commits, newest first: a section header and a scrolling
+ * list of one-line rows. `expanded` lets it grow to fill the pane when no file
+ * diff is showing, otherwise it's a capped band above the diff. */
+function CommitsList({
+  commits,
+  expanded,
+}: {
+  readonly commits: ReadonlyArray<GitCommit>
+  readonly expanded: boolean
+}): JSX.Element {
+  return (
+    <div
+      className={`flex min-h-0 flex-col border-b border-border ${expanded ? "flex-1" : "max-h-[30%] flex-none"}`}
+    >
+      <div className="flex-none px-3 pb-1 pt-2 font-mono text-[10px] uppercase tracking-[0.06em] text-fg-faint">
+        Commits
+      </div>
+      {commits.length === 0 ? (
+        <div className="px-3 pb-2 text-[12px] text-fg-dim">No commits on this branch</div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+          {commits.map((commit) => (
+            <CommitRow key={commit.sha} commit={commit} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CommitRow({ commit }: { readonly commit: GitCommit }): JSX.Element {
+  return (
+    <div className="flex items-baseline gap-2 px-3 py-[3px]" title={`${commit.shortSha} · ${commit.author}`}>
+      <span className="flex-none font-mono text-[11px] text-accent">{commit.shortSha}</span>
+      <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">{commit.subject}</span>
+      <span className="flex-none font-mono text-[10px] text-fg-faint">{formatCommitDate(commit.authoredAt)}</span>
+    </div>
+  )
+}
+
+/** ISO author date → a compact `MMM D` / `MMM D, YYYY` label for the row's right
+ * edge. Falls back to the raw string if it doesn't parse. */
+function formatCommitDate(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const sameYear = date.getFullYear() === new Date().getFullYear()
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  })
 }
 
 function FileRow({

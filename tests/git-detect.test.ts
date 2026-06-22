@@ -39,6 +39,7 @@ beforeAll(() => {
     defaultBranch: null,
     branch: null,
     isWorktree: false,
+    pullRequest: null,
   }
 })
 

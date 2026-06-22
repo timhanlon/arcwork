@@ -41,6 +41,17 @@ export const GitFileDiff = Schema.Struct({
 })
 export type GitFileDiff = typeof GitFileDiff.Type
 
+/** One commit on the workspace's current branch, for the Git pane's history
+ * list. `shortSha` is git's abbreviated hash; `authoredAt` is ISO-8601. */
+export const GitCommit = Schema.Struct({
+  sha: Schema.String,
+  shortSha: Schema.String,
+  subject: Schema.String,
+  author: Schema.String,
+  authoredAt: Schema.String,
+})
+export type GitCommit = typeof GitCommit.Type
+
 /** A local clone's identity for the renderer — the durable read-model fields,
  * minus internals (common git dir, remotes blob, timestamps). */
 export const Repository = Schema.Struct({

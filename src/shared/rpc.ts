@@ -5,7 +5,7 @@ import { Preset } from "./preset.js"
 import { Chat } from "./chat.js"
 import { ActivityEvent } from "./activity-event.js"
 import { ChatMessage } from "./chat-message.js"
-import { GitFileDiff, GitStatus, PullRequest, Worktree, WorkspaceGitContext } from "./git.js"
+import { GitCommit, GitFileDiff, GitStatus, PullRequest, Worktree, WorkspaceGitContext } from "./git.js"
 import { PendingRequest } from "./chat-request.js"
 import { Instance, TargetSession } from "./instance.js"
 import { LiveTargetState } from "./live-target-state.js"
@@ -144,6 +144,14 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("GetWorkspaceGitFileDiff", {
     payload: { workspaceId: Schema.String, path: Schema.String },
     success: GitFileDiff,
+    error: RpcError,
+  }),
+  /** Recent commits on the workspace's current branch (newest first), for the Git
+   * pane's history list. Local read; `limit` caps the count (default applied in
+   * the service). */
+  Rpc.make("GetWorkspaceGitCommits", {
+    payload: { workspaceId: Schema.String, limit: Schema.optional(Schema.Number) },
+    success: Schema.Array(GitCommit),
     error: RpcError,
   }),
   /**

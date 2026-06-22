@@ -2,9 +2,9 @@ import { Context, Effect, Layer, type Stream, SubscriptionRef } from "effect"
 import { dialog } from "electron"
 import * as path from "node:path"
 import type { SqlError } from "effect/unstable/sql/SqlError"
-import type { Workspace } from "../../shared/workspace.js"
+import type { Workspace, WorkspacePullRequest } from "../../shared/workspace.js"
 import { ArcStore } from "../db/store.js"
-import type { RepositoryRow, WorkspaceRow } from "../db/schema.js"
+import type { PullRequestRow, RepositoryRow, WorkspaceRow } from "../db/schema.js"
 import { newArcId } from "../../shared/ids.js"
 import { nowIso } from "../clock.js"
 
@@ -15,6 +15,17 @@ const repoLabel = (repo: RepositoryRow | undefined): string | null => {
   if (repo.githubOwner && repo.githubRepo) return `${repo.githubOwner}/${repo.githubRepo}`
   return path.basename(repo.rootPath)
 }
+
+/** The `(repositoryId, headRef)` key used to find a workspace's branch PR. */
+const prKey = (repositoryId: string, headRef: string): string => `${repositoryId}\n${headRef}`
+
+const toWorkspacePullRequest = (row: PullRequestRow): WorkspacePullRequest => ({
+  number: row.number,
+  title: row.title,
+  state: row.state,
+  isDraft: row.isDraft === 1,
+  url: row.url,
+})
 
 /**
  * Owns the persisted workspace list — filesystem roots that scope chats and
@@ -41,6 +52,7 @@ export class WorkspaceService extends Context.Service<
 export const rowToWorkspace = (
   row: WorkspaceRow,
   repoById: ReadonlyMap<string, RepositoryRow>,
+  prByBranch: ReadonlyMap<string, WorkspacePullRequest> = new Map(),
 ): Workspace => {
   const repo = row.repositoryId ? repoById.get(row.repositoryId) : undefined
   return {
@@ -54,6 +66,10 @@ export const rowToWorkspace = (
     // The main checkout lives at the repo root; anything else under the repo is
     // a linked worktree.
     isWorktree: repo !== undefined && row.path !== repo.rootPath,
+    pullRequest:
+      row.repositoryId && row.gitBranch
+        ? prByBranch.get(prKey(row.repositoryId, row.gitBranch)) ?? null
+        : null,
   }
 }
 
@@ -67,15 +83,30 @@ export const WorkspaceServiceLive = Layer.effect(
       Effect.map((repos) => new Map(repos.map((repo) => [repo.id, repo] as const))),
     )
 
+    const loadPrMap = db.loadOpenPullRequests.pipe(
+      Effect.orElseSucceed(() => [] as ReadonlyArray<PullRequestRow>),
+      Effect.map((rows) => {
+        // Keyed `(repositoryId, headRef)`; rows arrive newest-number first, so the
+        // first seen for a branch wins and later (older) PRs don't clobber it.
+        const map = new Map<string, WorkspacePullRequest>()
+        for (const row of rows) {
+          const key = prKey(row.repositoryId, row.headRef)
+          if (!map.has(key)) map.set(key, toWorkspacePullRequest(row))
+        }
+        return map
+      }),
+    )
+
     const loadProjected = Effect.gen(function* () {
-      const [wsRows, repoById] = yield* Effect.all([
+      const [wsRows, repoById, prByBranch] = yield* Effect.all([
         db.loadWorkspaces.pipe(
           Effect.tapError((e) => Effect.logWarning(`workspace load failed; starting empty: ${e}`)),
           Effect.orElseSucceed(() => [] as ReadonlyArray<WorkspaceRow>),
         ),
         loadRepoMap,
+        loadPrMap,
       ])
-      return wsRows.map((row) => rowToWorkspace(row, repoById))
+      return wsRows.map((row) => rowToWorkspace(row, repoById, prByBranch))
     })
 
     const store = yield* SubscriptionRef.make(yield* loadProjected)

@@ -5,6 +5,7 @@ import { realpathSync } from "node:fs"
 import * as path from "node:path"
 import type {
   GitChangeStatus,
+  GitCommit,
   GitFileChange,
   GitFileDiff,
   GitStatus,
@@ -27,6 +28,12 @@ export class GitService extends Context.Service<
   {
     readonly status: (workspaceId: string) => Effect.Effect<GitStatus, ArcRequestError>
     readonly diff: (workspaceId: string, filePath: string) => Effect.Effect<GitFileDiff, ArcRequestError>
+    /** Recent commits on the workspace's current branch (newest first). Empty when
+     * the cwd is not a git repo or the branch is unborn. */
+    readonly commits: (
+      workspaceId: string,
+      limit?: number,
+    ) => Effect.Effect<ReadonlyArray<GitCommit>, ArcRequestError>
     /** Detect the workspace's git identity from its cwd and persist it: upsert
      * the repository (clone identity + resolved GitHub owner/repo), upsert every
      * worktree under its common git dir, and bind the workspace (repository,
@@ -244,6 +251,23 @@ const runGitCapture = (cwd: string, args: ReadonlyArray<string>): Promise<GitCap
       },
     )
   })
+
+/** The `git log` revision range that isolates a branch's own commits: `base..HEAD`
+ * when the workspace is on a non-default branch and the base ref resolves (the
+ * local name, else `origin/<base>`); an empty range — i.e. full history — when on
+ * the default branch, detached, or the base can't be found. */
+const resolveBranchRange = async (
+  cwd: string,
+  branch: string | undefined,
+  base: string | null,
+): Promise<ReadonlyArray<string>> => {
+  if (!branch || !base || branch === base) return []
+  for (const ref of [base, `origin/${base}`]) {
+    const check = await runGit(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`])
+    if (check.exitCode === 0) return [`${ref}..HEAD`]
+  }
+  return []
+}
 
 const trimmedOrUndefined = (value: string): string | undefined => {
   const trimmed = value.trim()
@@ -761,6 +785,9 @@ export const GitServiceLive = Layer.effect(
           rows.push(persisted)
         }
         yield* Effect.logDebug(`PR sync: ${rows.length} PRs for ${slug}`)
+        // Re-project the workspace list so the sidebar's branch→PR chip reflects
+        // the freshly synced PRs (the chip rides the WatchWorkspaces stream).
+        if (rows.length > 0) yield* workspaces.refresh
         return rows
       }).pipe(Effect.withSpan("arc.git.sync_pull_requests", { attributes: { "arc.workspace_id": workspaceId } }))
 
@@ -877,6 +904,45 @@ export const GitServiceLive = Layer.effect(
             }),
           }
         })
+
+    const commits = (
+      workspaceId: string,
+      limit = 50,
+    ): Effect.Effect<ReadonlyArray<GitCommit>, ArcRequestError> =>
+      Effect.gen(function* () {
+        const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
+        if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
+
+        // Scope the log to this branch's own commits — everything reachable from
+        // HEAD but not from the repo's default branch (`base..HEAD`). On the default
+        // branch itself, or when the base ref can't be resolved, fall back to full
+        // history so the pane is never mysteriously empty.
+        const repo = yield* detectRepository(workspaceId).pipe(Effect.orElseSucceed(() => null))
+        const branch = trimmedOrUndefined(
+          (yield* Effect.promise(() => runGit(workspace.path, ["branch", "--show-current"]))).stdout,
+        )
+        const range = yield* Effect.promise(() => resolveBranchRange(workspace.path, branch, repo?.defaultBranch ?? null))
+
+        // One commit per line; fields split by US (0x1f), which never appears in a
+        // subject. `--no-show-signature` keeps GPG output off the stream.
+        const result = yield* Effect.promise(() =>
+          runGit(workspace.path, [
+            "log",
+            "--no-show-signature",
+            `--max-count=${Math.max(1, Math.trunc(limit))}`,
+            "--pretty=format:%H%x1f%h%x1f%an%x1f%aI%x1f%s",
+            ...range,
+          ]),
+        )
+        // Non-zero exit is the normal "not a repo" / "unborn branch" case — return
+        // an empty history rather than surfacing an error to the pane.
+        if (result.exitCode !== 0) return []
+        return result.stdout
+          .split("\n")
+          .map((line) => line.split("\x1f"))
+          .filter((parts): parts is [string, string, string, string, string] => parts.length === 5 && parts[0] !== "")
+          .map(([sha, shortSha, author, authoredAt, subject]) => ({ sha, shortSha, author, authoredAt, subject }))
+      }).pipe(Effect.withSpan("arc.git.commits", { attributes: { "arc.workspace_id": workspaceId } }))
 
     // A git hook runs with cwd = the worktree root. Refresh every workspace that
     // sits in that worktree — its own cwd is the root or a subdirectory of it.
@@ -1163,6 +1229,7 @@ export const GitServiceLive = Layer.effect(
 
     return GitService.of({
       status,
+      commits,
       detectRepository,
       syncPullRequests,
       gitContext,

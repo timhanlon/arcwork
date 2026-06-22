@@ -159,6 +159,9 @@ export class ArcStore extends Context.Service<
     readonly loadPullRequestsForRepository: (
       repositoryId: string,
     ) => Effect.Effect<ReadonlyArray<PullRequestRow>, SqlError>
+    /** Every open PR across all repositories — the source for the sidebar's
+     * per-workspace branch→PR chip, joined in one read rather than per row. */
+    readonly loadOpenPullRequests: Effect.Effect<ReadonlyArray<PullRequestRow>, SqlError>
     /** Upsert a PR keyed `(repositoryId, number)`; returns the canonical row. */
     readonly upsertPullRequest: (row: PullRequestRow) => Effect.Effect<PullRequestRow, SqlError>
     /** The branch→PR map: the open PR whose head ref matches `headRef` in the
@@ -1004,6 +1007,10 @@ export const ArcStoreLive = Layer.effect(
         WHERE repository_id = ${repositoryId}
         ORDER BY number DESC`
 
+    const loadOpenPullRequests = sql<PullRequestRow>`SELECT * FROM pull_requests
+      WHERE state = 'open'
+      ORDER BY number DESC`
+
     const upsertPullRequest = (row: PullRequestRow) =>
       Effect.gen(function* () {
         yield* sql`INSERT INTO pull_requests ${sql.insert({
@@ -1128,6 +1135,7 @@ export const ArcStoreLive = Layer.effect(
       upsertWorktree,
       deleteWorktreeByPath,
       loadPullRequestsForRepository,
+      loadOpenPullRequests,
       upsertPullRequest,
       pullRequestForBranch,
       setWorkspaceGit,

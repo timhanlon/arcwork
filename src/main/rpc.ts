@@ -75,6 +75,11 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
         "GetWorkspaceGitFileDiff",
         Effect.flatMap(GitService, (_) => _.diff(req.workspaceId, req.path)),
       ),
+    GetWorkspaceGitCommits: (req) =>
+      rpcEffect(
+        "GetWorkspaceGitCommits",
+        Effect.flatMap(GitService, (_) => _.commits(req.workspaceId, req.limit)),
+      ),
     GetWorkspaceGitContext: (req) =>
       rpcEffect("GetWorkspaceGitContext", Effect.flatMap(GitService, (_) => _.gitContext(req.workspaceId))),
     SyncWorkspacePullRequests: (req) =>

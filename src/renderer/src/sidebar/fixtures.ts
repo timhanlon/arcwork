@@ -18,6 +18,7 @@ export function workspace(over: Partial<Workspace> & Pick<Workspace, "id">): Wor
     defaultBranch: null,
     branch: null,
     isWorktree: false,
+    pullRequest: null,
     ...over,
   }
 }
@@ -86,6 +87,13 @@ export const workspacesFixture: ReadonlyArray<Workspace> = [
     defaultBranch: "main",
     branch: "feat/git",
     isWorktree: true,
+    pullRequest: {
+      number: 42,
+      title: "feat(git): carry repo identity on the workspace DTO",
+      state: "open",
+      isDraft: false,
+      url: "https://github.com/acme/arc/pull/42",
+    },
   }),
   workspace({
     id: "workspace_long",

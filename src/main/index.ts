@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, shell } from "electron"
 import { Effect, Exit, Scope } from "effect"
 import { existsSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
@@ -75,6 +75,14 @@ function createWindow(onReady?: (win: BrowserWindow) => void): void {
   // streams have already emitted their current value, so re-send the snapshot
   // once the page is ready (otherwise it shows empty until the next change).
   if (onReady) win.webContents.on("did-finish-load", () => onReady(win))
+
+  // An `target=_blank` link (a PR link, say) must reach the user's real browser,
+  // not spawn a bare Electron window with no chrome. Hand http(s)/mailto URLs to
+  // the OS and deny the in-app window; everything else is denied silently.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url)
+    return { action: "deny" }
+  })
 
   const devUrl = process.env["ELECTRON_RENDERER_URL"]
   if (devUrl) {

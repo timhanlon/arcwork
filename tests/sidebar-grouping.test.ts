@@ -10,6 +10,7 @@ const ws = (over: Partial<Workspace> & Pick<Workspace, "id">): Workspace => ({
   defaultBranch: null,
   branch: null,
   isWorktree: false,
+  pullRequest: null,
   ...over,
 })
 
