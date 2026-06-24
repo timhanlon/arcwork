@@ -1,6 +1,6 @@
-import { Context, Duration, Effect, Fiber, Layer, PubSub, Stream } from "effect"
+import { Cause, Context, Duration, Effect, Fiber, Layer, PubSub, Queue, type Scope, Stream } from "effect"
 import * as fs from "node:fs/promises"
-import { realpathSync } from "node:fs"
+import { realpathSync, watch as watchFs, type FSWatcher } from "node:fs"
 import * as path from "node:path"
 import type {
   GitCommit,
@@ -133,10 +133,17 @@ export class GitService extends Context.Service<
   }
 >()("GitService") {}
 
-/** A tiny git-read-model change descriptor: which workspace's repo/PR state
- * moved. Carries no data — the renderer re-pulls `gitContext` for that id. */
+/** Why a workspace's git read model moved. `status` is a working-tree edit (the
+ * tree watcher) — re-pull `git status` only. `repo` is a branch/PR remap from a
+ * hook or worktree op — re-pull context/commits too (and status, which a checkout
+ * also changes). */
+export type GitChangeKind = "status" | "repo"
+
+/** A tiny git-read-model change descriptor: which workspace moved, and why. Carries
+ * no data — the renderer re-pulls the affected reads for that id. */
 export interface GitChange {
   readonly workspaceId: WorkspaceId
+  readonly kind: GitChangeKind
 }
 
 const resolveWorkspace = (workspaces: ReadonlyArray<Workspace>, workspaceId: WorkspaceId): Workspace | undefined =>
@@ -152,11 +159,152 @@ export const GitServiceLive = Layer.effect(
     // (from the hook refresh paths below) never blocks the refreshing fiber.
     const updates = yield* PubSub.unbounded<GitChange>()
     const changes = Stream.fromPubSub(updates)
-    const publishChange = (workspaceId: WorkspaceId) => PubSub.publish(updates, { workspaceId })
+    // Default `repo`: every hook/worktree-lifecycle caller below moves repo state.
+    // The tree watcher is the only `status` publisher.
+    const publishChange = (workspaceId: WorkspaceId, kind: GitChangeKind = "repo") =>
+      PubSub.publish(updates, { workspaceId, kind })
     // The layer's own scope — debounced pre-push syncs fork into it (not the
     // caller's), so a delayed sync outlives the hook signal that scheduled it
     // and is interrupted only on app shutdown.
     const scope = yield* Effect.scope
+
+    // --- Working-tree watcher: turns filesystem edits into `status` signals. ---
+    // A plain edit fires no git hook, so without this the changed-files list would
+    // only refresh on a branch switch / push. Per workspace we watch the working
+    // tree (content edits) plus its index (staging), coalesce the burst with a
+    // debounce, and publish a `status` change; the renderer re-reads the
+    // authoritative `git status`. fs.watch is event-driven, so an idle tree costs
+    // ~nothing.
+    const WATCH_DEBOUNCE = Duration.millis(250)
+
+    // node_modules / build-output churn must never trigger a status read; `.git`
+    // is handled by the dedicated index watch below, not the recursive tree watch.
+    const IGNORED_TREE = /(?:^|\/)(?:\.git|node_modules|dist|out|build|coverage|\.next|\.turbo|\.cache|\.arc)(?:\/|$)/
+    const isTreeEdit = (filename: string | null): boolean => {
+      // A null filename (rare, platform-dependent) carries no path to filter on, so
+      // treat it as a real edit rather than dropping it.
+      if (filename === null) return true
+      return !IGNORED_TREE.test(`/${filename.split(path.sep).join("/")}`)
+    }
+
+    // One scoped fs.watch as an acquire/release resource, normalizing `filename` to
+    // `string | null`. A bad path or a platform without the requested watch mode
+    // degrades to no watcher at acquire time. A *runtime* watch error (EPERM /
+    // ENOSPC after startup) is surfaced through `onError` so the consumer can fail
+    // the stream and log it, rather than being silently swallowed.
+    const acquireWatch = (
+      dir: string,
+      recursive: boolean,
+      onChange: (filename: string | null) => void,
+      onError: (error: Error) => void,
+    ): Effect.Effect<void, never, Scope.Scope> =>
+      Effect.acquireRelease(
+        Effect.sync((): FSWatcher | null => {
+          try {
+            const watcher = watchFs(dir, { recursive, persistent: false })
+            watcher.on("change", (_event, filename) =>
+              onChange(filename == null ? null : typeof filename === "string" ? filename : filename.toString()),
+            )
+            watcher.on("error", onError)
+            return watcher
+          } catch {
+            return null
+          }
+        }),
+        (watcher) => Effect.sync(() => watcher?.close()),
+      ).pipe(Effect.asVoid)
+
+    // The raw edit stream for one workspace: a scoped source that registers the
+    // watchers and pushes a unit ping on every interesting event. Modelled as a
+    // Stream (not a raw callback running Effects) so logging/scope stay intact.
+    const treeChanges = (workspace: Workspace): Stream.Stream<void, Error> =>
+      Stream.callback<void, Error>((queue) =>
+        Effect.gen(function* () {
+          const ping = (): void => {
+            Queue.offerUnsafe(queue, undefined)
+          }
+          // A runtime watch error ends the stream; the consumer logs the cause.
+          // Shared by both watchers below: whichever fails first tears down the
+          // workspace's watch (reconcile re-establishes it). A second failure — both
+          // watchers erroring at once — is a no-op, since failCauseUnsafe only acts
+          // on an Open queue.
+          const fail = (error: Error): void => {
+            Queue.failCauseUnsafe(queue, Cause.fail(error))
+          }
+          // The real index path. In a linked worktree `.git` is a file and the
+          // index lives under the common git dir, so a tree-relative guess would
+          // miss staging entirely — `rev-parse --git-path` resolves it for the main
+          // and linked worktrees alike.
+          const rel = (
+            yield* Effect.promise(() => runGit(workspace.path, ["rev-parse", "--git-path", "index"]))
+          ).stdout.trim()
+          const indexPath = rel ? path.resolve(workspace.path, rel) : null
+
+          yield* acquireWatch(
+            workspace.path,
+            true,
+            (filename) => {
+              if (isTreeEdit(filename)) ping()
+            },
+            fail,
+          )
+          // Watch the index's directory, not the file inode: git writes the index
+          // via a rename-into-place, which silences an inode watch (the repo's
+          // fs.watch audit warning). Filter the dir's events to the index file.
+          if (indexPath) {
+            yield* acquireWatch(
+              path.dirname(indexPath),
+              false,
+              (filename) => {
+                if (filename === null || filename === "index") ping()
+              },
+              fail,
+            )
+          }
+          // Hold the scope open; the watchers live until the consumer is interrupted.
+          yield* Effect.never
+        }),
+        // We only need "something changed", and the debounce collapses bursts — a
+        // size-1 sliding buffer keeps the offers non-blocking and never backs up.
+        { bufferSize: 1, strategy: "sliding" },
+      )
+
+    // Per-workspace watcher fibers, forked into the layer scope (so they outlive
+    // any one caller and are interrupted — closing their fs.watch handles — on app
+    // shutdown). Ownership is per open workspace, reconciled off the workspace list.
+    const watcherFibers = new Map<string, Fiber.Fiber<void>>()
+
+    const reconcileWatchers = (list: ReadonlyArray<Workspace>): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const live = new Set<string>(list.map((w) => w.id))
+        for (const [id, fiber] of watcherFibers) {
+          if (live.has(id)) continue
+          watcherFibers.delete(id)
+          yield* Fiber.interrupt(fiber)
+        }
+        for (const workspace of list) {
+          if (watcherFibers.has(workspace.id)) continue
+          const fiber = yield* treeChanges(workspace).pipe(
+            Stream.debounce(WATCH_DEBOUNCE),
+            Stream.runForEach(() => publishChange(workspace.id, "status")),
+            // A runtime fs.watch error fails the stream; log the cause rather than
+            // swallow it. The workspace then loses live status until reconcile
+            // re-establishes the watcher (its warmed atom can stay cached until the
+            // idle TTL), so the changed-files list is not silently stale-forever.
+            Effect.catchCause((cause) => Effect.logWarning(`git tree watch failed for ${workspace.path}: ${cause}`)),
+            // Drop ourselves from the registry when we end (a failed watch, or an
+            // interruption that didn't pre-delete) so a later reconcile re-creates
+            // the watcher. Identity-guarded against a concurrently-replaced entry.
+            Effect.ensuring(
+              Effect.sync(() => {
+                if (watcherFibers.get(workspace.id) === fiber) watcherFibers.delete(workspace.id)
+              }),
+            ),
+            Effect.forkIn(scope),
+          )
+          watcherFibers.set(workspace.id, fiber)
+        }
+      })
 
     const detectRepository = (
       workspaceId: WorkspaceId,
@@ -362,15 +510,21 @@ export const GitServiceLive = Layer.effect(
     const seen = new Set<string>()
     yield* workspaces.changes.pipe(
       Stream.runForEach((list) =>
-        Effect.forEach(
-          list.filter((w) => !seen.has(w.id)),
-          (w) => {
-            seen.add(w.id)
-            return detectRepository(w.id).pipe(
-              Effect.catch((e) => Effect.logWarning(`git detect failed for ${w.path}: ${e}`)),
-            )
-          },
-          { concurrency: 4, discard: true },
+        // Watcher lifecycle rides the same list: every tick starts watchers for new
+        // workspaces and tears down ones that closed, before the one-time detect.
+        reconcileWatchers(list).pipe(
+          Effect.andThen(
+            Effect.forEach(
+              list.filter((w) => !seen.has(w.id)),
+              (w) => {
+                seen.add(w.id)
+                return detectRepository(w.id).pipe(
+                  Effect.catch((e) => Effect.logWarning(`git detect failed for ${w.path}: ${e}`)),
+                )
+              },
+              { concurrency: 4, discard: true },
+            ),
+          ),
         ),
       ),
       Effect.forkScoped,

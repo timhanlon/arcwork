@@ -114,7 +114,14 @@ const IngestKinds = Schema.Literals(["all", "claude", "codex", "cursor"])
  */
 const ChatChange = Schema.Struct({ chatId: ChatId })
 const WorkChangeWire = Schema.Struct({ refId: WorkId, chatId: Schema.NullOr(ChatId) })
-const GitChange = Schema.Struct({ workspaceId: WorkspaceId })
+// `kind` separates the two reasons the git read model moves: `status` is a
+// working-tree edit (refresh the changed-files list only); `repo` is a branch/PR
+// remap from a hook or worktree op (refresh context/commits too). The renderer
+// filters on it so a high-frequency edit signal never re-pulls the PR context.
+const GitChange = Schema.Struct({
+  workspaceId: WorkspaceId,
+  kind: Schema.Literals(["status", "repo"]),
+})
 
 /**
  * The contract. Each `Rpc.make` carries its own payload + success + error, so
