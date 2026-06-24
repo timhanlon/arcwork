@@ -138,8 +138,32 @@ export const gitChangesSignalAtom = Atom.family((workspaceId: WorkspaceId) =>
       ArcRpcAtomClient.use((client) =>
         Effect.succeed(
           signalCount(
-            client("WatchGitChanges", undefined).pipe(Stream.filter((c) => c.workspaceId === workspaceId)),
+            client("WatchGitChanges", undefined).pipe(
+              // Context/commits only move on a branch/PR remap — a working-tree
+              // edit must not re-pull the PR context, so drop `status` ticks here.
+              Stream.filter((c) => c.workspaceId === workspaceId && c.kind === "repo"),
+            ),
           ),
+        ),
+      ),
+    ),
+    { initialValue: 0 },
+  )
+)
+
+/**
+ * The changed-files refresh signal. Unlike {@link gitChangesSignalAtom} it ticks
+ * on *every* git change for the workspace — both `status` (a working-tree edit,
+ * surfaced by the main-side tree watcher) and `repo` (a hook/worktree remap, which
+ * can also change the dirty set). A repo signal still ticks both atoms; a status
+ * signal ticks only this one.
+ */
+const gitStatusSignalAtom = Atom.family((workspaceId: WorkspaceId) =>
+  ArcRpcAtomClient.runtime.atom(
+    Stream.unwrap(
+      ArcRpcAtomClient.use((client) =>
+        Effect.succeed(
+          signalCount(client("WatchGitChanges", undefined).pipe(Stream.filter((c) => c.workspaceId === workspaceId))),
         ),
       ),
     ),
@@ -163,7 +187,7 @@ const GIT_ATOM_TTL = Duration.minutes(5)
 
 export const gitStatusAtom = Atom.family((workspaceId: WorkspaceId) =>
   ArcRpcAtomClient.query("GetWorkspaceGitStatus", { workspaceId }).pipe(
-    Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.makeRefreshOnSignal(gitStatusSignalAtom(workspaceId)),
     Atom.setIdleTTL(GIT_ATOM_TTL),
   )
 )
