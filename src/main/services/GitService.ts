@@ -224,6 +224,10 @@ export const GitServiceLive = Layer.effect(
             Queue.offerUnsafe(queue, undefined)
           }
           // A runtime watch error ends the stream; the consumer logs the cause.
+          // Shared by both watchers below: whichever fails first tears down the
+          // workspace's watch (reconcile re-establishes it). A second failure — both
+          // watchers erroring at once — is a no-op, since failCauseUnsafe only acts
+          // on an Open queue.
           const fail = (error: Error): void => {
             Queue.failCauseUnsafe(queue, Cause.fail(error))
           }
