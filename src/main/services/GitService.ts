@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, Fiber, Layer, PubSub, Queue, type Scope, Stream } from "effect"
+import { Cause, Context, Duration, Effect, Fiber, Layer, PubSub, Queue, type Scope, Stream } from "effect"
 import * as fs from "node:fs/promises"
 import { realpathSync, watch as watchFs, type FSWatcher } from "node:fs"
 import * as path from "node:path"
@@ -189,12 +189,14 @@ export const GitServiceLive = Layer.effect(
 
     // One scoped fs.watch as an acquire/release resource, normalizing `filename` to
     // `string | null`. A bad path or a platform without the requested watch mode
-    // degrades to no watcher (the pane still refreshes on hooks + remount) rather
-    // than failing the whole stream.
+    // degrades to no watcher at acquire time. A *runtime* watch error (EPERM /
+    // ENOSPC after startup) is surfaced through `onError` so the consumer can fail
+    // the stream and log it, rather than being silently swallowed.
     const acquireWatch = (
       dir: string,
       recursive: boolean,
       onChange: (filename: string | null) => void,
+      onError: (error: Error) => void,
     ): Effect.Effect<void, never, Scope.Scope> =>
       Effect.acquireRelease(
         Effect.sync((): FSWatcher | null => {
@@ -203,7 +205,7 @@ export const GitServiceLive = Layer.effect(
             watcher.on("change", (_event, filename) =>
               onChange(filename == null ? null : typeof filename === "string" ? filename : filename.toString()),
             )
-            watcher.on("error", () => {}) // EPERM / ENOSPC: stop emitting; hooks + remount still refresh
+            watcher.on("error", onError)
             return watcher
           } catch {
             return null
@@ -215,11 +217,15 @@ export const GitServiceLive = Layer.effect(
     // The raw edit stream for one workspace: a scoped source that registers the
     // watchers and pushes a unit ping on every interesting event. Modelled as a
     // Stream (not a raw callback running Effects) so logging/scope stay intact.
-    const treeChanges = (workspace: Workspace): Stream.Stream<void> =>
-      Stream.callback<void>((queue) =>
+    const treeChanges = (workspace: Workspace): Stream.Stream<void, Error> =>
+      Stream.callback<void, Error>((queue) =>
         Effect.gen(function* () {
           const ping = (): void => {
             Queue.offerUnsafe(queue, undefined)
+          }
+          // A runtime watch error ends the stream; the consumer logs the cause.
+          const fail = (error: Error): void => {
+            Queue.failCauseUnsafe(queue, Cause.fail(error))
           }
           // The real index path. In a linked worktree `.git` is a file and the
           // index lives under the common git dir, so a tree-relative guess would
@@ -230,16 +236,26 @@ export const GitServiceLive = Layer.effect(
           ).stdout.trim()
           const indexPath = rel ? path.resolve(workspace.path, rel) : null
 
-          yield* acquireWatch(workspace.path, true, (filename) => {
-            if (isTreeEdit(filename)) ping()
-          })
+          yield* acquireWatch(
+            workspace.path,
+            true,
+            (filename) => {
+              if (isTreeEdit(filename)) ping()
+            },
+            fail,
+          )
           // Watch the index's directory, not the file inode: git writes the index
           // via a rename-into-place, which silences an inode watch (the repo's
           // fs.watch audit warning). Filter the dir's events to the index file.
           if (indexPath) {
-            yield* acquireWatch(path.dirname(indexPath), false, (filename) => {
-              if (filename === null || filename === "index") ping()
-            })
+            yield* acquireWatch(
+              path.dirname(indexPath),
+              false,
+              (filename) => {
+                if (filename === null || filename === "index") ping()
+              },
+              fail,
+            )
           }
           // Hold the scope open; the watchers live until the consumer is interrupted.
           yield* Effect.never
@@ -267,7 +283,19 @@ export const GitServiceLive = Layer.effect(
           const fiber = yield* treeChanges(workspace).pipe(
             Stream.debounce(WATCH_DEBOUNCE),
             Stream.runForEach(() => publishChange(workspace.id, "status")),
-            Effect.catchCause((cause) => Effect.logWarning(`git tree watch crashed for ${workspace.path}: ${cause}`)),
+            // A runtime fs.watch error fails the stream; log the cause rather than
+            // swallow it. The workspace then loses live status until reconcile
+            // re-establishes the watcher (its warmed atom can stay cached until the
+            // idle TTL), so the changed-files list is not silently stale-forever.
+            Effect.catchCause((cause) => Effect.logWarning(`git tree watch failed for ${workspace.path}: ${cause}`)),
+            // Drop ourselves from the registry when we end (a failed watch, or an
+            // interruption that didn't pre-delete) so a later reconcile re-creates
+            // the watcher. Identity-guarded against a concurrently-replaced entry.
+            Effect.ensuring(
+              Effect.sync(() => {
+                if (watcherFibers.get(workspace.id) === fiber) watcherFibers.delete(workspace.id)
+              }),
+            ),
             Effect.forkIn(scope),
           )
           watcherFibers.set(workspace.id, fiber)
