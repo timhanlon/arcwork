@@ -4,6 +4,7 @@ import type { JSX, ReactNode } from "react"
 import { useLayoutEffect, useMemo, useRef, useState } from "react"
 import type { Provider } from "../../../../shared/provider.js"
 import { renderShapeFor } from "../../../../shared/tool-catalog.js"
+import { tildify } from "../../format-path.js"
 import { Button } from "../../ui/Button.js"
 import { Label } from "../../ui/Label.js"
 import { parseApplyPatchEdits } from "./apply-patch.js"
@@ -252,7 +253,7 @@ function diffBody(a: Record<string, unknown>): JSX.Element | null {
     const path = filePathOf(a)
     return (
       <>
-        {path && <Field label="file">{path}</Field>}
+        {path && <Field label="file">{tildify(path)}</Field>}
         <EditDiff path={path} oldStr={oldStr ?? ""} newStr={newStr ?? ""} />
       </>
     )
@@ -264,7 +265,7 @@ function diffBody(a: Record<string, unknown>): JSX.Element | null {
     <div className="grid gap-2 min-w-0">
       {edits.map((edit) => (
         <div key={`${edit.path}:${edit.oldStr}`} className="grid gap-1.5 min-w-0">
-          <Field label="file">{edit.path}</Field>
+          <Field label="file">{tildify(edit.path)}</Field>
           <EditDiff path={edit.path} oldStr={edit.oldStr} newStr={edit.newStr} />
         </div>
       ))}
@@ -294,7 +295,7 @@ export function toolBody(provider: Provider | undefined, toolName: string, args:
       const content = str(a["content"]) ?? str(a["contents"])
       return (
         <>
-          {path && <Field label="file">{path}</Field>}
+          {path && <Field label="file">{tildify(path)}</Field>}
           {content != null && <CodeBlock text={content} />}
         </>
       )
@@ -308,7 +309,7 @@ export function toolBody(provider: Provider | undefined, toolName: string, args:
       return (
         <>
           {pattern && <Field label="pattern">{pattern}</Field>}
-          {path && <Field label={pattern ? "path" : "file"}>{path}</Field>}
+          {path && <Field label={pattern ? "path" : "file"}>{tildify(path)}</Field>}
         </>
       )
     }

@@ -21,6 +21,11 @@ contextBridge.exposeInMainWorld("arc", {
    */
   profile: process.env["ARC_PROFILE"] === "dev" ? "dev" : "stable",
 
+  /** The running user's home directory (`$HOME`). The renderer uses it to
+   * abbreviate home-rooted paths to `~/…` on display (see format-path.ts).
+   * Read synchronously here since the preload has Node access (`sandbox: false`). */
+  home: process.env["HOME"] ?? "",
+
   /** Dev-only PTY burst tracing flag (main stamps `ARC_PTY_TRACE`). Lets the
    * renderer half of the trace (term.write metrics, resize call sites) match the
    * main-side `pty-trace` aggregation. See pty-trace.ts. */

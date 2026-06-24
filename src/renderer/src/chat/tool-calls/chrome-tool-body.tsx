@@ -1,4 +1,5 @@
 import type { JSX, ReactNode } from "react"
+import { tildify } from "../../format-path.js"
 import { Label } from "../../ui/Label.js"
 import { CodeBlock, obj, str } from "./tool-body.js"
 import { chromeVerb } from "./chrome-tool-name.js"
@@ -143,7 +144,7 @@ function verbBody(verb: string, a: Record<string, unknown> | null): JSX.Element 
     case "file_upload":
     case "upload_image": {
       const path = str(a["path"]) ?? str(a["file_path"]) ?? str(a["filePath"])
-      return path ? <Row label="file">{path}</Row> : null
+      return path ? <Row label="file">{tildify(path)}</Row> : null
     }
     case "gif_creator": {
       const name = str(a["filename"]) ?? str(a["path"]) ?? str(a["name"])

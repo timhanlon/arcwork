@@ -6,6 +6,7 @@ declare global {
   interface Window {
     arc: {
       profile: "dev" | "stable"
+      home: string
       ptyTrace: boolean
       rpcSend: (message: unknown) => void
       onRpcMessage: (cb: (message: unknown) => void) => () => void

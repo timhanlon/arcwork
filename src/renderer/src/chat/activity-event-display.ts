@@ -1,4 +1,5 @@
 import type { ActivityEvent } from "../../../shared/activity-event.js"
+import { tildify } from "../format-path.js"
 
 export interface ActivityEventLine {
   readonly title: string
@@ -56,7 +57,7 @@ export const formatActivityEvent = (event: ActivityEvent): ActivityEventLine => 
       const changeKind = str(payload.changeKind)
       return {
         title: changeKind ? `${changeKind} file` : "File change",
-        detail: path,
+        detail: path ? tildify(path) : path,
       }
     }
     default:
