@@ -210,12 +210,15 @@ export const gitCommitsAtom = Atom.family((workspaceId: WorkspaceId) =>
 )
 
 /**
- * One changed file's diff, keyed on `(workspaceId, path)` so an expanded row
- * reads its own cached value and refreshes on the same git signal as the rest of
- * the pane (an inline diff no longer goes stale beside its live-updating row).
- * Composite string key because `Atom.family` memoizes by `Equal`, which treats
- * plain-object args as reference-unique; a workspace id and a path never contain
- * a newline, so it is an unambiguous separator.
+ * One changed file's diff, keyed on `(workspaceId, path)` so an expanded row reads
+ * its own cached value and refreshes on the same all-changes signal as the row it
+ * sits beneath — a working-tree edit re-pulls the inline diff, not just the row, so
+ * it can't go stale beside its live-updating file entry. (It rides
+ * {@link gitStatusSignalAtom}, the `status`-inclusive signal, not the `repo`-only
+ * {@link gitChangesSignalAtom} that context/commits use.) Composite string key
+ * because `Atom.family` memoizes by `Equal`, which treats plain-object args as
+ * reference-unique; a workspace id and a path never contain a newline, so it is an
+ * unambiguous separator.
  */
 const gitFileDiffKey = (workspaceId: WorkspaceId, path: string): string => `${workspaceId}\n${path}`
 
@@ -224,7 +227,7 @@ export const gitFileDiffAtom = Atom.family((key: string) => {
   const workspaceId = arcId("workspace", key.slice(0, sep))
   const path = key.slice(sep + 1)
   return ArcRpcAtomClient.query("GetWorkspaceGitFileDiff", { workspaceId, path }).pipe(
-    Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.makeRefreshOnSignal(gitStatusSignalAtom(workspaceId)),
     Atom.setIdleTTL(GIT_ATOM_TTL),
   )
 })
