@@ -388,13 +388,13 @@ describe("git worktree lifecycle", () => {
       ),
     )
 
-    expect(out.error.message).toContain("changes preserved in")
+    expect(out.error.message).toContain("restored to the original workspace")
     // The half-created tree and branch are gone, so the same name can be retried.
     expect(out.worktrees).not.toContain("carry-conflict")
     expect(out.branches.trim()).toBe("")
-    // The carried changes survive in the stash; the source tree is left clean.
-    expect(out.stashes).toContain("arc carry changes to carry-conflict")
-    expect(out.sourceStatus).toBe("")
+    // The carried changes are put back in the source, with no leftover stash.
+    expect(out.stashes.trim()).toBe("")
+    expect(out.sourceStatus).toContain("M README.md")
   })
 
   it("removes a stale read-model row when git no longer has the worktree", async () => {

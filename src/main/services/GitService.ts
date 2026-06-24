@@ -802,6 +802,25 @@ export const GitServiceLive = Layer.effect(
           }
           stashRef = stashSha
         }
+        // Put the carried changes back in the source workspace so any failure
+        // leaves the user exactly where they started — dirty source, no leftover
+        // worktree, branch, or stash. This apply can't conflict: the source still
+        // sits on the commit the stash was made from. Returns a suffix for the
+        // error message describing where the changes ended up.
+        const restoreToSource = (ref: string): Effect.Effect<string> =>
+          Effect.gen(function* () {
+            const restore = yield* Effect.promise(() =>
+              runGitCapture(sourceWorkspace.path, ["stash", "apply", "--index", ref]),
+            )
+            if (restore.exitCode !== 0) {
+              yield* Effect.logWarning(`git stash restore to source failed: ${restore.stderr.trim()}`)
+              return `; changes are stashed but could not be restored — recover with 'git stash apply ${ref}'`
+            }
+            const drop = yield* Effect.promise(() => runGitCapture(sourceWorkspace.path, ["stash", "drop", "stash@{0}"]))
+            if (drop.exitCode !== 0) yield* Effect.logWarning(`git stash drop failed after restore: ${drop.stderr.trim()}`)
+            return "; your changes were restored to the original workspace"
+          })
+
         const args = options.createBranch
           ? createOrphan
             ? ["worktree", "add", "--orphan", "-b", options.branch, dest]
@@ -809,29 +828,19 @@ export const GitServiceLive = Layer.effect(
           : ["worktree", "add", dest, options.branch]
         const result = yield* Effect.promise(() => runGitCapture(repo.rootPath, args))
         if (result.exitCode !== 0) {
-          if (stashRef) {
-            const restore = yield* Effect.promise(() => runGitCapture(sourceWorkspace.path, ["stash", "apply", "--index", stashRef]))
-            if (restore.exitCode === 0) {
-              const drop = yield* Effect.promise(() => runGitCapture(sourceWorkspace.path, ["stash", "drop", "stash@{0}"]))
-              if (drop.exitCode !== 0) yield* Effect.logWarning(`git stash drop failed after restore: ${drop.stderr.trim()}`)
-            } else {
-              yield* Effect.logWarning(`git stash restore failed after worktree add failure: ${restore.stderr.trim()}`)
-            }
-          }
+          const hint = stashRef ? yield* restoreToSource(stashRef) : ""
           return yield* Effect.fail(
-            arcRequestError(`git worktree add failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`),
+            arcRequestError(`git worktree add failed: ${result.stderr.trim() || `exit ${result.exitCode}`}${hint}`),
           )
         }
         if (stashRef) {
           const apply = yield* Effect.promise(() => runGitCapture(dest, ["stash", "apply", "--index", stashRef]))
           if (apply.exitCode !== 0) {
             // `worktree add` already succeeded, so the tree and branch exist on
-            // disk; tear them down (best-effort) so retrying the same branch name
-            // isn't blocked by "branch already exists". The stash is deliberately
-            // kept — it's now the only copy of the changes (source is clean), so
-            // the error names it for recovery. Delete the branch only after the
-            // tree is gone (a checked-out branch can't be deleted) and only if we
-            // created it.
+            // disk; tear them down (best-effort) so the same branch name can be
+            // retried, then restore the carried changes to the source. Delete the
+            // branch only after the tree is gone (a checked-out branch can't be
+            // deleted) and only if we created it.
             const removeTree = yield* Effect.promise(() =>
               runGitCapture(repo.rootPath, ["worktree", "remove", "--force", dest]),
             )
@@ -845,11 +854,10 @@ export const GitServiceLive = Layer.effect(
                 yield* Effect.logWarning(`branch cleanup failed after stash apply failure: ${deleteBranch.stderr.trim()}`)
               }
             }
+            const hint = yield* restoreToSource(stashRef)
             return yield* Effect.fail(
               arcRequestError(
-                `git stash apply failed in new worktree; changes preserved in ${stashRef}: ${
-                  apply.stderr.trim() || `exit ${apply.exitCode}`
-                }`,
+                `git stash apply failed in new worktree: ${apply.stderr.trim() || `exit ${apply.exitCode}`}${hint}`,
               ),
             )
           }
