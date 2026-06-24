@@ -1,5 +1,12 @@
 import { assign, createMachine, emit, enqueueActions, type ActorRefFrom } from "xstate"
-import type { ChatId, PaneId, TargetId, WorkId, WorkspaceId } from "../../../shared/ids.js"
+import { Schema } from "effect"
+import {
+  ChatId,
+  type PaneId,
+  type TargetId,
+  type WorkId,
+  WorkspaceId,
+} from "../../../shared/ids.js"
 
 export interface ShellPane {
   readonly id: PaneId
@@ -82,6 +89,20 @@ export interface ShellSelection {
   readonly gitPathByWorkspace: Readonly<Record<WorkspaceId, string>>
   readonly workByWorkspace: Readonly<Record<WorkspaceId, WorkId>>
 }
+
+// The slice of selection that survives an app restart, seeded back into the
+// machine as `input`. Just which workspace/chat were last open plus the
+// per-workspace last-chat map — layout, panes, and live session ids are
+// deliberately excluded because they name in-memory runtime that's gone on boot.
+// A Schema (not a bare interface) so the persistence layer can decode untrusted
+// localStorage JSON through it, rejecting malformed or stale-shaped payloads —
+// the branded id schemas also reject ids that aren't valid TypeIDs.
+export const PersistedShellSelection = Schema.Struct({
+  workspaceId: Schema.optional(WorkspaceId),
+  chatId: Schema.optional(ChatId),
+  chatByWorkspace: Schema.Record(WorkspaceId, ChatId),
+})
+export type PersistedShellSelection = typeof PersistedShellSelection.Type
 
 export interface ArcShellContext {
   // Layout (regions + surfaces) and selection (product picks) are the two halves
@@ -296,7 +317,12 @@ export const arcShellMachine = createMachine({
     emitted: {} as ArcShellEmitted,
   },
   initial: "running",
-  context: initialArcShellContext,
+  // `input` seeds the persisted selection on boot; it stays optional so callers
+  // (and tests) can create the actor with no options at all.
+  context: ({ input }: { readonly input?: PersistedShellSelection }) => ({
+    ...initialArcShellContext,
+    selection: { ...initialArcShellContext.selection, ...input },
+  }),
   states: {
     running: {
       on: {

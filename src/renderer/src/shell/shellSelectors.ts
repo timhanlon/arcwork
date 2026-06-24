@@ -37,13 +37,23 @@ export const deriveShellViewModel = (
 ): ShellViewModel => {
   const { selection, panes } = context
 
-  const workspaceId = selection.workspaceId ?? workspaces[0]?.id
+  // Guard each picked id against the live lists: a persisted (or in-session)
+  // selection can outlive the chat/workspace it names, so an unknown id falls
+  // through to the next default rather than stranding the pane on nothing.
+  const persistedWorkspace =
+    selection.workspaceId && workspaces.some((w) => w.id === selection.workspaceId)
+      ? selection.workspaceId
+      : undefined
+  const workspaceId = persistedWorkspace ?? workspaces[0]?.id
   const workspaceChats = workspaceId
     ? chats.filter((chat) => chat.workspaceId === workspaceId)
     : []
+  const chatExists = (id: ChatId | undefined): id is ChatId =>
+    id !== undefined && chats.some((chat) => chat.id === id)
+  const mappedChat = workspaceId ? selection.chatByWorkspace[workspaceId] : undefined
   const chatId =
-    selection.chatId ??
-    (workspaceId ? selection.chatByWorkspace[workspaceId] : undefined) ??
+    (chatExists(selection.chatId) ? selection.chatId : undefined) ??
+    (chatExists(mappedChat) ? mappedChat : undefined) ??
     workspaceChats[0]?.id
 
   const chat = chatId ? chats.find((candidate) => candidate.id === chatId) : undefined

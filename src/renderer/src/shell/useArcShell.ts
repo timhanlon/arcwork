@@ -13,6 +13,7 @@ import {
   type ShellSessionRef,
   type ShellTreeSelection,
 } from "./arcShellMachine.js"
+import { loadPersistedSelection, savePersistedSelection } from "./shellPersistence.js"
 type ViteImportMeta = ImportMeta & { readonly env?: { readonly DEV?: boolean } }
 
 const isDevelopment = ((import.meta as ViteImportMeta).env?.DEV ?? false) === true
@@ -81,7 +82,10 @@ export function useArcShell({
   readonly chats: ReadonlyArray<Chat>
   readonly sessions: ReadonlyArray<TargetSession>
 }): ArcShell {
-  const actor = useMemo(() => createActor(arcShellMachine).start(), [])
+  const actor = useMemo(
+    () => createActor(arcShellMachine, { input: loadPersistedSelection() }).start(),
+    [],
+  )
 
   useEffect(() => {
     return () => {
@@ -99,6 +103,12 @@ export function useArcShell({
     () => actor.getSnapshot(),
   )
   const state = snapshot.context
+
+  // Persist the selection slice whenever it changes; `selection` keeps the same
+  // reference across layout/pane-only updates, so this only writes on real picks.
+  useEffect(() => {
+    savePersistedSelection(state.selection)
+  }, [state.selection])
 
   const actions = useMemo<ArcShellActions>(
     () => ({
