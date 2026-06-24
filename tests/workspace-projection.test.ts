@@ -24,6 +24,7 @@ const wsRow = (
   name: "ws",
   createdAt: "2026-01-01T00:00:00Z",
   lastOpenedAt: "2026-01-01T00:00:00Z",
+  archivedAt: null,
   repositoryId: null,
   worktreeId: null,
   gitBranch: null,

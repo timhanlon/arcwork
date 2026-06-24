@@ -248,14 +248,20 @@ export function App(): JSX.Element {
   // Branch a fresh worktree off the repo's default branch, open it, and chat in
   // it — the "start a new isolated line of work" path. baseRef is omitted, so
   // the main side defaults it to the repo's default branch.
-  const newWorktreeChat = async (branch: string): Promise<void> => {
+  const newWorktreeChat = async (branch: string, carryChanges = false): Promise<void> => {
     if (!vm.workspaceId) return
     const worktree = await rpc("CreateWorktree", {
       workspaceId: vm.workspaceId,
       branch,
       createBranch: true,
+      carryChanges,
     })
     await openWorktreeChat(worktree.path)
+  }
+
+  const removeWorktree = async (worktreePath: string): Promise<void> => {
+    if (!vm.workspaceId) return
+    await rpc("RemoveWorktree", { workspaceId: vm.workspaceId, worktreePath })
   }
 
   const renameChat = async (chatId: ChatId, title: string): Promise<void> => {
@@ -273,6 +279,21 @@ export function App(): JSX.Element {
   })
   // The worktree commands act on the active workspace, so they only appear when
   // one is selected — otherwise selecting them would silently do nothing.
+  const loadRemovableWorktreeChoices = async () => {
+    if (!vm.workspaceId) return []
+    const context = await rpc("GetWorkspaceGitContext", { workspaceId: vm.workspaceId })
+    const mainPath = context.repository?.rootPath
+    // Exclude the main worktree (never removable) and the one we're viewing —
+    // removing the active workspace would archive it out from under the session.
+    const activePath = vm.workspace?.path
+    return context.worktrees
+      .filter((worktree) => worktree.path !== mainPath && worktree.path !== activePath)
+      .map((worktree) => ({
+        id: worktree.path,
+        title: worktree.branch ?? (worktree.path.split("/").pop() ?? worktree.path),
+        subtitle: worktree.path,
+      }))
+  }
   const worktreeCommands: ReadonlyArray<Command> = vm.workspaceId
     ? [
         {
@@ -280,6 +301,12 @@ export function App(): JSX.Element {
           title: "New worktree…",
           promptPlaceholder: "new branch name",
           onSubmit: (branch) => void newWorktreeChat(branch),
+        },
+        {
+          id: "newWorktreeWithChanges",
+          title: "New worktree with current changes…",
+          promptPlaceholder: "new branch name",
+          onSubmit: (branch) => void newWorktreeChat(branch, true),
         },
         {
           id: "openWorktree",
@@ -295,6 +322,13 @@ export function App(): JSX.Element {
             }))
           },
           onChoose: (worktreePath) => void openWorktreeChat(worktreePath),
+        },
+        {
+          id: "removeWorktree",
+          title: "Remove Git worktree…",
+          choosePlaceholder: "choose a Git worktree to remove",
+          loadChoices: loadRemovableWorktreeChoices,
+          onChoose: (worktreePath) => void removeWorktree(worktreePath),
         },
       ]
     : []

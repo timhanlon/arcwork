@@ -100,6 +100,7 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
               branch: req.branch,
               baseRef: req.baseRef,
               createBranch: req.createBranch,
+              carryChanges: req.carryChanges,
             }),
           ),
           toWireWorktree,
@@ -124,11 +125,6 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
           Effect.flatMap(GitService, (_) => _.pruneWorktrees(req.workspaceId)),
           (removed) => ({ removed }),
         ),
-      ),
-    PruneMergedWorktrees: (req) =>
-      rpcEffect(
-        "PruneMergedWorktrees",
-        Effect.flatMap(GitService, (_) => _.pruneMergedWorktrees(req.workspaceId)),
       ),
     CreatePullRequest: (req) =>
       rpcEffect(

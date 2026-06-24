@@ -45,14 +45,16 @@ const sqlMigrationAfterWorkspaceColumn = (
  * The git columns are a cached snapshot of the workspace's cwd for fast UI —
  * `repositoryId`/`worktreeId` bind it into the git domain (sidebar grouping,
  * branch→PR map), `gitBranch`/`gitHeadSha` are refreshed by the post-checkout
- * hook. All null until git detection runs; the canonical worktree model lives
- * in `worktrees`, not here. */
+ * hook. `archivedAt` hides old workspace history from the normal sidebar
+ * without deleting chats/sessions. All git columns are null until git detection
+ * runs; the canonical worktree model lives in `worktrees`, not here. */
 export interface WorkspaceRow {
   readonly id: WorkspaceId
   readonly path: string
   readonly name: string
   readonly createdAt: string
   readonly lastOpenedAt: string
+  readonly archivedAt: string | null
   readonly repositoryId: RepositoryId | null
   readonly worktreeId: WorktreeId | null
   readonly gitBranch: string | null
@@ -817,5 +819,9 @@ export const arcMigrations: Migrations = {
   "0008_pr_head_repository": sqlMigration(
     `ALTER TABLE pull_requests ADD COLUMN head_repository_owner TEXT`,
     `ALTER TABLE pull_requests ADD COLUMN head_repository_name TEXT`,
+  ),
+  "0009_workspace_archive": sqlMigration(
+    `ALTER TABLE workspaces ADD COLUMN archived_at TEXT`,
+    `CREATE INDEX IF NOT EXISTS workspaces_archived ON workspaces(archived_at, last_opened_at, id)`,
   ),
 }
