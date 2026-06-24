@@ -349,6 +349,54 @@ describe("git worktree lifecycle", () => {
     expect(out.untracked).toBe("untracked\n")
   })
 
+  it("cleans up the worktree and branch, preserving the stash, when carry hits a conflict", async () => {
+    const out = await withWorktreesRoot(() =>
+      withRepo(({ workspace }) =>
+        run(
+          workspace,
+          Effect.gen(function* () {
+            const service = yield* GitService
+            yield* seedWorkspace(workspace)
+            yield* service.detectRepository(workspace.id)
+
+            // A divergent base edits the same line the dirty source edits, so
+            // applying the carried stash into a worktree off that base conflicts.
+            yield* Effect.sync(() => {
+              git(workspace.path, "checkout", "-b", "diverge")
+              fs.writeFileSync(path.join(workspace.path, "README.md"), "# widgets (other side)\n")
+              git(workspace.path, "commit", "-am", "divergent edit")
+              git(workspace.path, "checkout", "main")
+              fs.writeFileSync(path.join(workspace.path, "README.md"), "# widgets (my side)\n")
+            })
+
+            const error = yield* service
+              .createWorktree(workspace.id, {
+                branch: "carry-conflict",
+                baseRef: "diverge",
+                createBranch: true,
+                carryChanges: true,
+              })
+              .pipe(Effect.flip)
+
+            const worktrees = yield* Effect.sync(() => git(workspace.path, "worktree", "list", "--porcelain"))
+            const branches = yield* Effect.sync(() => git(workspace.path, "branch", "--list", "carry-conflict"))
+            const stashes = yield* Effect.sync(() => git(workspace.path, "stash", "list"))
+            const sourceStatus = yield* Effect.sync(() => git(workspace.path, "status", "--porcelain"))
+            return { error, worktrees, branches, stashes, sourceStatus }
+          }),
+        ),
+      ),
+    )
+
+    expect(out.error.message).toContain("changes preserved in")
+    // The half-created tree and branch are gone, so the same name can be retried.
+    expect(out.worktrees).not.toContain("carry-conflict")
+    expect(out.branches.trim()).toBe("")
+    // The carried changes survive in the stash; the source tree is left clean.
+    expect(out.stashes).toContain("arc carry changes to carry-conflict")
+    expect(out.sourceStatus).toBe("")
+  })
+
   it("removes a stale read-model row when git no longer has the worktree", async () => {
     const out = await withWorktreesRoot(() =>
       withRepo(({ workspace }) =>

@@ -285,9 +285,18 @@ export function App(): JSX.Element {
     const mainPath = context.repository?.rootPath
     // Exclude the main worktree (never removable) and the one we're viewing —
     // removing the active workspace would archive it out from under the session.
+    // Identify the active worktree by branch (as createWorktree does), not path:
+    // git reports symlink-resolved paths that needn't match the workspace's
+    // stored path on macOS; the stored path is kept only as a secondary guard.
     const activePath = vm.workspace?.path
+    const activeBranch = context.branch
     return context.worktrees
-      .filter((worktree) => worktree.path !== mainPath && worktree.path !== activePath)
+      .filter(
+        (worktree) =>
+          worktree.path !== mainPath &&
+          worktree.path !== activePath &&
+          (activeBranch == null || worktree.branch !== activeBranch),
+      )
       .map((worktree) => ({
         id: worktree.path,
         title: worktree.branch ?? (worktree.path.split("/").pop() ?? worktree.path),

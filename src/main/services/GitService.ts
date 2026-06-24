@@ -825,9 +825,29 @@ export const GitServiceLive = Layer.effect(
         if (stashRef) {
           const apply = yield* Effect.promise(() => runGitCapture(dest, ["stash", "apply", "--index", stashRef]))
           if (apply.exitCode !== 0) {
+            // `worktree add` already succeeded, so the tree and branch exist on
+            // disk; tear them down (best-effort) so retrying the same branch name
+            // isn't blocked by "branch already exists". The stash is deliberately
+            // kept — it's now the only copy of the changes (source is clean), so
+            // the error names it for recovery. Delete the branch only after the
+            // tree is gone (a checked-out branch can't be deleted) and only if we
+            // created it.
+            const removeTree = yield* Effect.promise(() =>
+              runGitCapture(repo.rootPath, ["worktree", "remove", "--force", dest]),
+            )
+            if (removeTree.exitCode !== 0) {
+              yield* Effect.logWarning(`worktree cleanup failed after stash apply failure: ${removeTree.stderr.trim()}`)
+            } else if (options.createBranch) {
+              const deleteBranch = yield* Effect.promise(() =>
+                runGitCapture(repo.rootPath, ["branch", "-D", options.branch]),
+              )
+              if (deleteBranch.exitCode !== 0) {
+                yield* Effect.logWarning(`branch cleanup failed after stash apply failure: ${deleteBranch.stderr.trim()}`)
+              }
+            }
             return yield* Effect.fail(
               arcRequestError(
-                `git stash apply failed in new worktree; changes remain in ${stashRef}: ${
+                `git stash apply failed in new worktree; changes preserved in ${stashRef}: ${
                   apply.stderr.trim() || `exit ${apply.exitCode}`
                 }`,
               ),
