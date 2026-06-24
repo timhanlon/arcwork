@@ -212,7 +212,7 @@ export const ReadServiceLive = Layer.effect(
         where.push("search_document_fts MATCH ?")
         values.push(ftsQuery(args.terms))
       }
-      if (args.filters.chatId) {
+      if (args.filters.chatId && !args.filters.workspaceId) {
         where.push("(d.kind = 'work' OR d.ref = ?)")
         values.push(args.filters.chatId)
       }
@@ -272,8 +272,8 @@ export const ReadServiceLive = Layer.effect(
         const rows: Array<ArcSearchHit & { readonly createdAt: string }> = []
 
         const documentKinds = (["work", "chat"] as const).filter((kind) => kinds.includes(kind))
-        if (documentKinds.length > 0 && filters.chatId) {
-          const workspaceId = yield* arc.workspaceIdForChat(filters.chatId)
+        if (documentKinds.length > 0 && (filters.workspaceId || filters.chatId)) {
+          const workspaceId = filters.workspaceId ?? (yield* arc.workspaceIdForChat(filters.chatId!))
           if (!workspaceId) return { hits: [], total: 0, nextCursor: null }
           const docs = yield* searchDocuments({
             kinds: documentKinds,

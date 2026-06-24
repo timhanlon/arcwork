@@ -8,6 +8,7 @@ export interface ArcSearchDraft {
   readonly query: string
   readonly kinds: ReadonlySet<ArcSearchKind>
   readonly scope: SearchScope
+  readonly currentWorkspaceId?: WorkspaceId
   readonly currentChatId?: ChatId
 }
 
@@ -35,10 +36,17 @@ export const subtitleForSearchHit = (hit: ArcSearchHit): string => {
 
 export const buildArcSearchParams = (draft: ArcSearchDraft, cursor?: string): ArcSearchParams => {
   const query = draft.query.trim()
+  const kinds = Array.from(draft.kinds)
+  const needsWorkspaceAnchor = draft.scope === "currentChat" && kinds.some((kind) => kind === "work" || kind === "chat")
+  const needsChatAnchor = draft.scope === "currentChat" && kinds.includes("message")
+  const filters = {
+    ...(needsWorkspaceAnchor && draft.currentWorkspaceId ? { workspaceId: draft.currentWorkspaceId } : {}),
+    ...(needsChatAnchor && draft.currentChatId ? { chatId: draft.currentChatId } : {}),
+  }
   return {
     ...(query.length > 0 ? { query } : {}),
-    kinds: Array.from(draft.kinds),
-    ...(draft.scope === "currentChat" && draft.currentChatId ? { filters: { chatId: draft.currentChatId } } : {}),
+    kinds,
+    ...(Object.keys(filters).length > 0 ? { filters } : {}),
     limit: 12,
     ...(cursor ? { cursor } : {}),
   }

@@ -224,6 +224,70 @@ describe("ReadService.search", () => {
     expect(result.byChatKinds).toEqual(["chat", "work"])
   })
 
+  it("uses workspaceId as a document-search anchor without selecting one chat", async () => {
+    const result = await run(
+      Effect.gen(function* () {
+        const chats = yield* ChatService
+        const read = yield* ReadService
+        yield* insertWorkspace(arcId("workspace", "ws_1"), "repo-one")
+        yield* insertWorkspace(arcId("workspace", "ws_2"), "repo-two")
+        const chatA = yield* chats.create(arcId("workspace", "ws_1"), "design chat A")
+        yield* chats.create(arcId("workspace", "ws_1"), "design chat B")
+        yield* chats.create(arcId("workspace", "ws_2"), "design other workspace")
+
+        const byWorkspace = yield* read.search({
+          query: "design",
+          kinds: ["chat"],
+          filters: { workspaceId: arcId("workspace", "ws_1") },
+        })
+        const byChat = yield* read.search({
+          query: "design",
+          kinds: ["chat"],
+          filters: { chatId: chatA.id },
+        })
+        return {
+          byWorkspace: byWorkspace.hits.map((h) => h.title).toSorted(),
+          byChat: byChat.hits.map((h) => h.title),
+        }
+      }),
+    )
+
+    expect(result.byWorkspace).toEqual(["design chat A", "design chat B"])
+    expect(result.byChat).toEqual(["design chat A"])
+  })
+
+  it("returns workspace-wide work and chat results from a workspaceId anchor", async () => {
+    const result = await run(
+      Effect.gen(function* () {
+        const work = yield* WorkService
+        const chats = yield* ChatService
+        const read = yield* ReadService
+        yield* insertWorkspace(arcId("workspace", "ws_1"), "repo-one")
+        yield* insertWorkspace(arcId("workspace", "ws_2"), "repo-two")
+        const chatA = yield* chats.create(arcId("workspace", "ws_1"), "palette design A")
+        const chatB = yield* chats.create(arcId("workspace", "ws_1"), "palette design B")
+        const chatOther = yield* chats.create(arcId("workspace", "ws_2"), "palette design other")
+        yield* work.create({ title: "palette work A", body: "design" }, prov(chatA.id))
+        yield* work.create({ title: "palette work B", body: "design" }, prov(chatB.id))
+        yield* work.create({ title: "palette work other", body: "design" }, prov(chatOther.id))
+
+        const scoped = yield* read.search({
+          query: "palette",
+          kinds: ["work", "chat"],
+          filters: { workspaceId: arcId("workspace", "ws_1") },
+        })
+        return scoped.hits.map((h) => `${h.kind}:${h.title}`).toSorted()
+      }),
+    )
+
+    expect(result).toEqual([
+      "chat:palette design A",
+      "chat:palette design B",
+      "work:palette work A",
+      "work:palette work B",
+    ])
+  })
+
   it("uses chatId as a workspace anchor and has no unanchored global work search", async () => {
     const result = await run(
       Effect.gen(function* () {

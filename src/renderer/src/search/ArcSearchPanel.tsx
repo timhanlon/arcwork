@@ -8,6 +8,7 @@ import { type JSX, type KeyboardEvent, useEffect, useMemo, useRef, useState } fr
 import type { Chat } from "../../../shared/chat.js"
 import type { ArcSearchHit, ArcSearchKind } from "../../../shared/read.js"
 import { Button } from "../ui/Button.js"
+import { formatActivityDateTime, formatRelativeTime } from "../chat/activity-event-display.js"
 import { rpc } from "../rpc-client.js"
 import { useShellActions } from "../shell/ShellActionsContext.js"
 import {
@@ -57,6 +58,10 @@ export function ArcSearchPanel({
   // Every search anchors to the current chat's workspace — the backend has no
   // unanchored, profile-global search (read-service.test.ts:154). Without an
   // open chat there is nothing to anchor to, so the palette can't search.
+  const currentWorkspaceId = useMemo(
+    () => chats.find((chat) => chat.id === currentChatId)?.workspaceId,
+    [chats, currentChatId],
+  )
   const canSearchMessages = currentChatId !== undefined
   // Message search only makes sense scoped to a chat — drop it everywhere else so
   // the request and the filter chips agree.
@@ -65,8 +70,8 @@ export function ArcSearchPanel({
     return new Set(Array.from(kinds).filter((kind) => kind !== "message"))
   }, [canSearchMessages, kinds])
   const draft = useMemo(
-    () => ({ query, kinds: effectiveKinds, scope: "currentChat" as const, currentChatId }),
-    [query, effectiveKinds, currentChatId],
+    () => ({ query, kinds: effectiveKinds, scope: "currentChat" as const, currentWorkspaceId, currentChatId }),
+    [query, effectiveKinds, currentWorkspaceId, currentChatId],
   )
 
   useEffect(() => {
@@ -225,6 +230,14 @@ export function ArcSearchPanel({
                       <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">{hit.title}</span>
                       {hit.message ? (
                         <span className="flex-none font-mono text-[10px] text-fg-faint">{subtitleForSearchHit(hit)}</span>
+                      ) : hit.kind === "chat" ? (
+                        <time
+                          className="flex-none font-mono text-[10px] text-fg-faint"
+                          dateTime={hit.updatedAt}
+                          title={formatActivityDateTime(hit.updatedAt)}
+                        >
+                          {formatRelativeTime(hit.updatedAt)}
+                        </time>
                       ) : null}
                     </span>
                     {hit.preview ? (

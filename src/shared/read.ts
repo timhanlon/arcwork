@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { ChatId } from "./ids.js"
+import { ChatId, WorkspaceId } from "./ids.js"
 import { Chat } from "./chat.js"
 import { ChatMessage, ChatMessageRole } from "./chat-message.js"
 import { Work, WorkComment, WorkStatus } from "./work.js"
@@ -29,8 +29,9 @@ import { Work, WorkComment, WorkStatus } from "./work.js"
  * index and hydration path.
  *
  * Visibility: work/chat/message reads are workspace-scoped. The caller anchors
- * the scope with `filters.chatId`; Arc derives the workspace from that chat and
- * never treats the whole local profile as an implicit global work queue.
+ * work/chat search with `filters.workspaceId` or legacy `filters.chatId`; Arc
+ * derives the workspace from `chatId` for existing callers and never treats the
+ * whole local profile as an implicit global work queue.
  */
 
 // ── search ────────────────────────────────────────────────────────────────────
@@ -48,12 +49,14 @@ export const ArcSearchSort = Schema.Literals(["relevance", "updated", "created"]
 export type ArcSearchSort = typeof ArcSearchSort.Type
 
 /** Structured narrowing. Each filter is honored only by the kinds it applies to
- * (`status`/`labels` are work-only; `chatId` anchors work search to the chat's
- * workspace and selects that chat) — never a kind-specific field bolted onto
- * the shared envelope. */
+ * (`status`/`labels` are work-only; `workspaceId` anchors work/chat search to a
+ * workspace/project; legacy `chatId` anchors work search to the chat's workspace
+ * and selects that chat) — never a kind-specific field bolted onto the shared
+ * envelope. */
 export const ArcSearchFilters = Schema.Struct({
   status: Schema.optional(Schema.Array(WorkStatus)),
   labels: Schema.optional(Schema.Array(Schema.String)),
+  workspaceId: Schema.optional(WorkspaceId),
   chatId: Schema.optional(ChatId),
 })
 export type ArcSearchFilters = typeof ArcSearchFilters.Type
@@ -63,8 +66,8 @@ export const ArcSearchParams = Schema.Struct({
    * (case-insensitively) in its searchable text. Omit for a pure filter/browse. */
   query: Schema.optional(Schema.String),
   /** Restrict to these kinds; defaults to `["work"]` (the work queue is the
-   * dominant read). Work/chat searches require `filters.chatId` so Arc can derive
-   * the workspace boundary. */
+   * dominant read). Work/chat searches require `filters.workspaceId` or
+   * `filters.chatId` so Arc can derive the workspace boundary. */
   kinds: Schema.optional(Schema.Array(ArcSearchKind)),
   filters: Schema.optional(ArcSearchFilters),
   /** Defaults to `relevance` when `query` is set, else `updated`. */

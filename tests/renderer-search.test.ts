@@ -26,21 +26,60 @@ describe("renderer arc search model", () => {
         query: "  auth bug  ",
         kinds: new Set(["work", "chat", "message"]),
         scope: "currentChat",
+        currentWorkspaceId: arcId("workspace", "workspace_1"),
         currentChatId: arcId("chat", "chat_1"),
       }),
     ).toEqual({
       query: "auth bug",
       kinds: ["work", "chat", "message"],
-      filters: { chatId: "chat_1" },
+      filters: { workspaceId: "workspace_1", chatId: "chat_1" },
       limit: 12,
     })
 
     expect(
       buildArcSearchParams(
-        { query: "", kinds: new Set(["work"]), scope: "all", currentChatId: arcId("chat", "chat_1") },
+        {
+          query: "",
+          kinds: new Set(["work"]),
+          scope: "all",
+          currentWorkspaceId: arcId("workspace", "workspace_1"),
+          currentChatId: arcId("chat", "chat_1"),
+        },
         "cursor_2",
       ),
     ).toEqual({ kinds: ["work"], limit: 12, cursor: "cursor_2" })
+  })
+
+  it("uses workspace anchors for document search and chat anchors for message search", () => {
+    expect(
+      buildArcSearchParams({
+        query: "design",
+        kinds: new Set(["work", "chat"]),
+        scope: "currentChat",
+        currentWorkspaceId: arcId("workspace", "workspace_1"),
+        currentChatId: arcId("chat", "chat_1"),
+      }),
+    ).toEqual({
+      query: "design",
+      kinds: ["work", "chat"],
+      filters: { workspaceId: "workspace_1" },
+      limit: 12,
+    })
+
+    expect(
+      buildArcSearchParams({
+        query: "tool",
+        kinds: new Set(["message"]),
+        scope: "currentChat",
+        currentWorkspaceId: arcId("workspace", "workspace_1"),
+        currentChatId: arcId("chat", "chat_1"),
+      }),
+    ).toEqual({
+      query: "tool",
+      kinds: ["message"],
+      filters: { chatId: "chat_1" },
+      limit: 12,
+    })
   })
 
   it("renders the rigid hit envelope with useful message metadata", () => {
