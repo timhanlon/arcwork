@@ -60,3 +60,24 @@
   --font-sans: var(--sans);
   --font-mono: var(--mono);
 }
+
+/* Layout rhythm — single-sourced so the tree's disclosure ladder stays aligned.
+ * Not `inline`: these emit real CSS vars so arbitrary values (`grid-cols-[…]`)
+ * and `calc()` can reference them, and the `--spacing-*` namespace also mints
+ * named utilities (`w-gutter`, `ml-gutter`, `pl-row-indent`, …). */
+@theme {
+  /* The caret control's box — a fixed icon footprint, the width of ROW_GRID's
+   * first column. Independent of `--spacing-gutter` on purpose: the caret stays
+   * one size no matter how tight the nesting gets. */
+  --spacing-caret: 18px;
+  /* One nesting step per tree level — how far a child list shifts so its caret
+   * sits under its parent's label. The tunable knob, fully independent of the
+   * caret: changing it re-spaces the ladder without resizing carets. Equal to the
+   * caret box by default so a child's caret lands under its parent's label. */
+  --spacing-gutter: 18px;
+  /* Where a row's *label text* begins, from the container edge: ROW_GRID's flush
+   * `pl-2` (0.5rem) + the caret column + its `gap-0.5` (2px) + ROW_BASE's `px-2`
+   * (0.5rem). A caret-less note (the chat expander, a git list note) pads to this
+   * so its text shares the row-label column. */
+  --spacing-row-indent: calc(0.5rem + var(--spacing-caret) + 2px + 0.5rem);
+}

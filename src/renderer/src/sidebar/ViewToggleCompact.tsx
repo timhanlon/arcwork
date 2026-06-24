@@ -2,9 +2,11 @@ import type { JSX } from "react"
 import { ToggleGroup } from "@base-ui/react/toggle-group"
 import { Toggle } from "@base-ui/react/toggle"
 import { Chat, Notebook } from "@phosphor-icons/react"
-import type { ViewKey } from "./ViewToggle.js"
 import { bindingFor } from "../shell/keybindings.js"
 import { ICON_TOGGLE_ITEM } from "../ui/IconButton.js"
+
+/** Which surface the center pane shows. Mirrors the shell machine's `centerView`. */
+export type ViewKey = "chat" | "work"
 
 export interface ViewToggleCompactProps {
   readonly value: ViewKey

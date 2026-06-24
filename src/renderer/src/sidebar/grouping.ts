@@ -1,7 +1,7 @@
 import type { Workspace } from "../../../shared/workspace.js"
 import type { Chat } from "../../../shared/chat.js"
 import type { TargetSession } from "../../../shared/instance.js"
-import type { TargetId } from "../../../shared/ids.js"
+import type { ChatId, TargetId } from "../../../shared/ids.js"
 import type { LiveTargetActivity } from "../../../shared/live-target-state.js"
 import type { SessionDisplayStatus } from "./row-styles.js"
 
@@ -142,6 +142,72 @@ export function groupSidebarData(
     ),
     sessionsByChat,
   }))
+}
+
+/**
+ * One chat pinned in the always-visible "Active" section: a chat with a live
+ * (attached) or pending target. `context` is its location read as a path
+ * (`repo > workspace > branch`), so the cross-project listing isn't ambiguous;
+ * `pendingCount` drives the waiting badge and sorts those chats first.
+ */
+export interface ActiveChatEntry {
+  readonly chat: Chat
+  readonly sessions: ReadonlyArray<TargetSession>
+  readonly pendingCount: number
+  readonly context: string
+}
+
+/**
+ * The chats to pin in the "Active" section: those with a live (attached,
+ * non-exited) or pending target, pinned at the top so what's running stays
+ * reachable however far the archive below scrolls. Pending chats sort first —
+ * they're waiting on the user. A chat here is duplicated in the tree below; that
+ * duplication is intentional (a shortcut, not a move).
+ */
+export function activeChatEntries(
+  projects: ReadonlyArray<ProjectGroup>,
+  workspaces: ReadonlyArray<Workspace>,
+  chats: ReadonlyArray<Chat>,
+  sessions: ReadonlyArray<TargetSession>,
+  pendingSessionIds: ReadonlySet<string> | undefined,
+): ReadonlyArray<ActiveChatEntry> {
+  const byChat = new Map<ChatId, Array<TargetSession>>()
+  for (const session of sessions) {
+    const live = session.attached === true && session.state !== "exited"
+    const pending = pendingSessionIds?.has(session.id) ?? false
+    if (!live && !pending) continue
+    const list = byChat.get(session.chatId) ?? []
+    list.push(session)
+    byChat.set(session.chatId, list)
+  }
+  const chatById = new Map(chats.map((chat) => [chat.id, chat] as const))
+  const workspaceById = new Map(workspaces.map((workspace) => [workspace.id, workspace] as const))
+  // Repository label per workspace, for repo-backed projects only — a plain
+  // folder's project label is just the workspace name, so it adds nothing.
+  const projectLabelByWorkspace = new Map<string, string>()
+  for (const project of projects) {
+    if (project.repositoryId === null) continue
+    for (const member of project.members) projectLabelByWorkspace.set(member.workspace.id, project.label)
+  }
+  const entries: Array<ActiveChatEntry> = []
+  for (const [chatId, chatSessions] of byChat) {
+    const chat = chatById.get(chatId)
+    if (chat === undefined) continue
+    const pendingCount = chatSessions.filter((s) => pendingSessionIds?.has(s.id)).length
+    // Where this chat lives, read as a path: repo > workspace > branch, dropping
+    // any segment that just repeats the workspace name.
+    const workspace = workspaceById.get(chat.workspaceId)
+    const projectLabel = projectLabelByWorkspace.get(chat.workspaceId)
+    const parts: Array<string> = []
+    if (projectLabel && projectLabel !== workspace?.name) parts.push(projectLabel)
+    if (workspace) {
+      parts.push(workspace.name)
+      if (workspace.branch && workspace.branch !== workspace.name) parts.push(workspace.branch)
+    }
+    entries.push({ chat, sessions: chatSessions, pendingCount, context: parts.join(" > ") })
+  }
+  entries.sort((a, b) => Number(b.pendingCount > 0) - Number(a.pendingCount > 0))
+  return entries
 }
 
 /**

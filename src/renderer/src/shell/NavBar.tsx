@@ -4,7 +4,7 @@ import { Toggle } from "@base-ui/react/toggle"
 import { FolderSimplePlus, GitMerge, SidebarSimple, Terminal } from "@phosphor-icons/react"
 import { IconButton, ICON_TOGGLE_ITEM } from "../ui/IconButton.js"
 import { ViewToggleCompact } from "../sidebar/ViewToggleCompact.js"
-import type { ViewKey } from "../sidebar/ViewToggle.js"
+import type { ViewKey } from "../sidebar/ViewToggleCompact.js"
 import { bindingFor } from "./keybindings.js"
 
 export interface NavBarProps {

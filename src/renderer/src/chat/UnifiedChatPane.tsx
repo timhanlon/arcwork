@@ -5,7 +5,6 @@ import { useStickToBottom } from "use-stick-to-bottom"
 import type { Chat } from "../../../shared/chat.js"
 import type { TargetSession } from "../../../shared/instance.js"
 import type { Workspace } from "../../../shared/workspace.js"
-import type { LaunchableProvider } from "../sidebar/ArcSidebarTree.js"
 import { useChatActivity } from "./useChatActivity.js"
 import { useChatMessages } from "./useChatMessages.js"
 import { useStreamingMessages } from "./useStreamingMessages.js"
@@ -22,6 +21,12 @@ import { StreamingMessage } from "./StreamingMessage.js"
 import { type TranscriptFilter, TranscriptFilterMenu, showsMessage } from "./TranscriptFilterMenu.js"
 import { rpc } from "../rpc-client.js"
 import { liveActivityFor, type LiveStateById } from "../sidebar/grouping.js"
+
+/** A provider the composer can launch a new target session against. */
+export interface LaunchableProvider {
+  readonly kind: string
+  readonly displayName: string
+}
 
 export interface UnifiedChatPaneProps {
   readonly chat?: Chat

@@ -1,13 +1,16 @@
 import type { JSX, ReactNode } from "react"
-import { Button } from "@base-ui/react/button"
 import { GitBranch } from "@phosphor-icons/react"
 import type { Workspace, WorkspacePullRequest } from "../../../shared/workspace.js"
 import { PrStateIcon, prStateColor } from "../git/PrStateIcon.js"
-import { ROW_ACTIVE, ROW_BASE, ROW_GRID, TREE_LABEL, TREE_MAIN, TREE_SUBTITLE } from "./row-styles.js"
+import { tildify } from "../format-path.js"
+import { Row } from "../ui/Row.js"
+import { ROW_GRID, TREE_LABEL, TREE_MAIN, TREE_SUBTITLE } from "./row-styles.js"
 
 export interface WorkspaceRowProps {
   readonly workspace: Workspace
   readonly selected: boolean
+  /** Whether the row's panel is open — drives `aria-expanded`. Defaults to true. */
+  readonly expanded?: boolean
   readonly onSelect: () => void
   /**
    * The 18px disclosure-column slot. The tree fills it with the live
@@ -21,15 +24,12 @@ export interface WorkspaceRowProps {
  * with a PR chip on the right when the branch has an open pull request. The chip
  * is a sibling of the select button (not nested) so its link stays valid markup
  * and clicking it opens the PR without selecting the row. */
-export function WorkspaceRow({ workspace, selected, onSelect, disclosure }: WorkspaceRowProps): JSX.Element {
+export function WorkspaceRow({ workspace, selected, expanded = true, onSelect, disclosure }: WorkspaceRowProps): JSX.Element {
   return (
-    <div className={ROW_GRID} role="treeitem" aria-expanded="true">
+    <div className={ROW_GRID} role="treeitem" aria-expanded={expanded}>
       {disclosure}
-      <div className="flex min-w-0 items-center gap-1">
-        <Button
-          className={`${ROW_BASE} min-w-0 flex-1 justify-between gap-2 ${selected ? ROW_ACTIVE : ""}`}
-          onClick={onSelect}
-        >
+      <div className={`flex min-w-0 items-center gap-1 ${workspace.pullRequest ? "pr-2" : ""}`}>
+        <Row active={selected} className="min-w-0 flex-1 justify-between gap-2" onClick={onSelect}>
           <span className={TREE_MAIN}>
             <span className="flex min-w-0 items-center gap-1.5">
               <span className={TREE_LABEL}>{workspace.name}</span>
@@ -43,9 +43,9 @@ export function WorkspaceRow({ workspace, selected, onSelect, disclosure }: Work
                 </span>
               ) : null}
             </span>
-            <span className={TREE_SUBTITLE}>{workspace.path}</span>
+            <span className={TREE_SUBTITLE}>{tildify(workspace.path)}</span>
           </span>
-        </Button>
+        </Row>
         {workspace.pullRequest ? <PullRequestChip pr={workspace.pullRequest} /> : null}
       </div>
     </div>

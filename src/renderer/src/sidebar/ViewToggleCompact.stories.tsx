@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { SidebarSimple } from "@phosphor-icons/react"
 import { ViewToggleCompact } from "./ViewToggleCompact.js"
-import type { ViewKey } from "./ViewToggle.js"
+import type { ViewKey } from "./ViewToggleCompact.js"
 import { IconButton } from "../ui/IconButton.js"
 
 export default {

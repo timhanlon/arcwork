@@ -5,7 +5,8 @@ import type { TargetSession } from "../../../shared/instance.js"
 import { targetStatusDisplay } from "../chat/session-status-display.js"
 import { SessionDot } from "./SessionDot.js"
 import { KeyHint } from "../ui/KeyHint.js"
-import { ROW_BASE, SESSION_ACTIVE, TREE_LABEL, TREE_MAIN, TREE_SUBTITLE, type SessionDisplayStatus } from "./row-styles.js"
+import { Row } from "../ui/Row.js"
+import { TREE_LABEL, TREE_MAIN, TREE_SUBTITLE, type SessionDisplayStatus } from "./row-styles.js"
 
 export interface SessionRowProps {
   readonly session: TargetSession
@@ -46,8 +47,10 @@ export function SessionRow({ session, status, pending, slot, active, onSelect, o
     // `group` + `relative` so the stop control can overlay the row's trailing
     // edge without nesting a <button> inside the row's select <button>.
     <div className="group relative min-w-0">
-      <Button
-        className={`${ROW_BASE} justify-start gap-[7px] ${active ? SESSION_ACTIVE : ""}`}
+      <Row
+        active={active}
+        activeStyle="fill"
+        className="justify-start gap-2"
         title={
           pending
             ? `${session.provider} · waiting for your answer${slot ? ` · ⌘${slot}` : ""} · ${session.id}`
@@ -72,7 +75,7 @@ export function SessionRow({ session, status, pending, slot, active, onSelect, o
             />
           </span>
         )}
-      </Button>
+      </Row>
       {canStop && (
         <Button
           className={`${SESSION_OVERLAY} hover:text-request`}

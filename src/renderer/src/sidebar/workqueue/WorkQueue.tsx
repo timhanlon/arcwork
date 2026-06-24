@@ -37,7 +37,7 @@ const META =
 // PR pill — octicon + number; the glyph's shape + color carry the state.
 // GitHub conventions: open=green, merged=purple, closed=red.
 const PR =
-  "inline-flex items-center gap-[3px] text-fg-dim data-[state=open]:text-ok data-[state=merged]:text-[#a371f7] data-[state=closed]:text-danger"
+  "inline-flex items-center gap-1 text-fg-dim data-[state=open]:text-ok data-[state=merged]:text-[#a371f7] data-[state=closed]:text-danger"
 
 const ARCHIVE =
   "[grid-area:archive] self-center inline-flex items-center justify-center w-5 h-5 text-fg-faint opacity-0 cursor-pointer group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground"

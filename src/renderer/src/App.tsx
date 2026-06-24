@@ -9,20 +9,15 @@ import {
   chatsAtom,
   createChatAtom,
   launchTargetAtom,
-  liveTargetStatesAtom,
   openWorkspaceAtom,
-  pendingRequestsAtom,
   providersAtom,
   resumeTargetAtom,
   sessionsAtom,
-  stopTargetAtom,
   workspacesAtom,
 } from "./atoms.js"
-import type { LiveTargetActivity } from "../../shared/live-target-state.js"
 import type { ChatId, PaneId, TargetId, WorkspaceId } from "../../shared/ids.js"
 import { arcId } from "../../shared/ids.js"
 import { ArcSidebarTree } from "./sidebar/ArcSidebarTree.js"
-import { orderedPendingSessionIds } from "./sidebar/grouping.js"
 import { TargetSessionPane } from "./chat/TargetSessionPane.js"
 import { sync as syncTerminals } from "./terminal/terminalRegistry.js"
 import { UnifiedChatPane, type ChatPaneHandle } from "./chat/UnifiedChatPane.js"
@@ -35,10 +30,12 @@ import { CommandPalette } from "./shell/CommandPalette.js"
 import type { Command } from "./shell/commandPaletteModel.js"
 import { useArcShell } from "./shell/useArcShell.js"
 import { ShellActionsProvider } from "./shell/ShellActionsContext.js"
+import { ShellStateProvider } from "./shell/ShellStateContext.js"
 import { unadoptedSessions } from "./shell/sessionAdoption.js"
 import { deriveShellViewModel } from "./shell/shellSelectors.js"
 import { useKeyboardShortcuts } from "./shell/useKeyboardShortcuts.js"
 import { bindingFor, focusRequestId, REQUEST_SLOTS, type GlobalCommandId } from "./shell/keybindings.js"
+import { useSessionActivityProjection } from "./sidebar/useSessionActivityProjection.js"
 
 /**
  * The surface. Sidebar lists workspaces, chats, and sessions. The center pane
@@ -97,47 +94,7 @@ export function App(): JSX.Element {
   const runOpenWorkspace = useAtomSet(openWorkspaceAtom)
   const runLaunchTarget = useAtomSet(launchTargetAtom, { mode: "promiseExit" })
   const runResumeTarget = useAtomSet(resumeTargetAtom, { mode: "promiseExit" })
-  const runStopTarget = useAtomSet(stopTargetAtom)
-
-  const pendingRequestsResult = useAtomValue(pendingRequestsAtom)
-  const pendingRequests = useMemo(
-    () => (AsyncResult.isSuccess(pendingRequestsResult) ? pendingRequestsResult.value : []),
-    [pendingRequestsResult],
-  )
-  const pendingSessionIds = useMemo(
-    () => new Set(pendingRequests.map((request) => request.targetSessionId)),
-    [pendingRequests],
-  )
-
-  // The live activity projection (generating/idle/waiting/detached/exited),
-  // keyed by session id — the single status source the sidebar and composer
-  // both read, instead of each re-deriving off the lifecycle `session.state`.
-  const liveTargetStatesResult = useAtomValue(liveTargetStatesAtom)
-  const liveTargetStates = useMemo(
-    () => (AsyncResult.isSuccess(liveTargetStatesResult) ? liveTargetStatesResult.value : []),
-    [liveTargetStatesResult],
-  )
-  const liveStateById = useMemo(
-    () => new Map<string, LiveTargetActivity>(liveTargetStates.map((s) => [s.targetSessionId, s.activity])),
-    [liveTargetStates],
-  )
-
-  // The waiting sessions in sidebar order, capped at the nine ⌘-number slots, and
-  // the session id → slot map the tree paints onto each pending row. Both derive
-  // from the same ordering so ⌘N and the row's hint always agree.
-  const pendingOrder = useMemo(
-    () =>
-      orderedPendingSessionIds(workspaces, chats, sessions, pendingSessionIds).slice(
-        0,
-        REQUEST_SLOTS.length,
-      ),
-    [workspaces, chats, sessions, pendingSessionIds],
-  )
-  const requestSlots = useMemo(() => {
-    const map = new Map<string, number>()
-    pendingOrder.forEach((sessionId, index) => map.set(sessionId, index + 1))
-    return map
-  }, [pendingOrder])
+  const { liveStateById, pendingOrder } = useSessionActivityProjection({ workspaces, chats, sessions })
 
   const shell = useArcShell({ workspaces, chats, sessions })
   const { layout, panes } = shell.state
@@ -415,23 +372,8 @@ export function App(): JSX.Element {
     shell.actions.focusSession(sessionId)
   }
 
-  // Stop a session's live process. Fire-and-forget: the main process signals
-  // the child, and the resulting pty exit flows back through `onPtyExit` (pane
-  // close) and the `arc:sessions` push (row → detached), so there's no local
-  // state to update here.
-  const onStopSession = (sessionId: TargetId): void => {
-    shell.actions.stopSession(sessionId)
-    runStopTarget({ payload: { sessionId } })
-  }
-
   const onResumeDetached = (): void => {
     shell.actions.resumeDetached()
-  }
-
-  // Re-attach a detached but resumable session straight from its sidebar row —
-  // the live re-attach flows back through the same ResumeTarget pane path.
-  const onResumeSession = (sessionId: TargetId): void => {
-    shell.actions.resumeSession(sessionId)
   }
 
   const selectGitPath = (filePath: string): void => {
@@ -440,139 +382,126 @@ export function App(): JSX.Element {
 
   return (
     <ShellActionsProvider value={shell.actions}>
-    {vm.workspace ? <GitPrefetch workspaceId={vm.workspace.id} /> : null}
-    <div className="grid h-full grid-rows-[auto_1fr]">
-      {searchOpen ? (
-        <ArcSearchPanel
-          chats={chats}
-          currentChatId={vm.chatId}
-          onOpenChat={selectChat}
-          onClose={() => setSearchOpen(false)}
+      {vm.workspace ? <GitPrefetch workspaceId={vm.workspace.id} /> : null}
+      <div className="grid h-full grid-rows-[auto_1fr]">
+        {searchOpen ? (
+          <ArcSearchPanel
+            chats={chats}
+            currentChatId={vm.chatId}
+            onOpenChat={selectChat}
+            onClose={() => setSearchOpen(false)}
+          />
+        ) : null}
+        {commandOpen ? (
+          <CommandPalette commands={paletteCommands} onClose={() => setCommandOpen(false)} />
+        ) : null}
+        <NavBar
+          isDev={isDev}
+          centerView={centerView}
+          rightView={rightView}
+          leftPanelCollapsed={left.collapsed}
+          rightPanelCollapsed={right.collapsed}
+          onCenterViewChange={(view) =>
+            shell.actions.open(
+              view === "work" ? { kind: "work", workId: vm.workId } : { kind: "chat" },
+              "center",
+            )
+          }
+          onRightViewChange={(view) =>
+            shell.actions.open(view === "git" ? { kind: "git" } : { kind: "terminal" }, "right")
+          }
+          onToggleLeftPanel={shell.actions.toggleLeftPanel}
+          onToggleRightPanel={shell.actions.toggleRightPanel}
+          onOpenWorkspace={openWorkspace}
         />
-      ) : null}
-      {commandOpen ? (
-        <CommandPalette commands={paletteCommands} onClose={() => setCommandOpen(false)} />
-      ) : null}
-      <NavBar
-        isDev={isDev}
-        centerView={centerView}
-        rightView={rightView}
-        leftPanelCollapsed={left.collapsed}
-        rightPanelCollapsed={right.collapsed}
-        onCenterViewChange={(view) =>
-          shell.actions.open(
-            view === "work" ? { kind: "work", workId: vm.workId } : { kind: "chat" },
-            "center",
-          )
-        }
-        onRightViewChange={(view) =>
-          shell.actions.open(view === "git" ? { kind: "git" } : { kind: "terminal" }, "right")
-        }
-        onToggleLeftPanel={shell.actions.toggleLeftPanel}
-        onToggleRightPanel={shell.actions.toggleRightPanel}
-        onOpenWorkspace={openWorkspace}
-      />
-      <Group orientation="horizontal">
-        <Panel
-          collapsible
-          collapsedSize={0}
-          minSize="14%"
-          panelRef={leftPanelRef}
-          onResize={(size) => {
-            const collapsed = size.asPercentage === 0
-            if (collapsed !== left.collapsed) shell.actions.setLeftCollapsed(collapsed)
-          }}
-        >
-          <aside className="flex h-full min-h-0 flex-col overflow-hidden">
-            <ArcSidebarTree
-              workspaces={workspaces}
-              chats={chats}
-              sessions={sessions}
-              activeSessionId={vm.activeSessionId}
-              liveStateById={liveStateById}
-              pendingSessionIds={pendingSessionIds}
-              requestSlots={requestSlots}
-              selectedWorkspaceId={vm.workspaceId}
-              selectedChatId={vm.chatId}
-              onSelectChat={selectChat}
-              onSelectSession={(_provider, _sessionChatId, sessionId) => focusSession(sessionId)}
-              onStopSession={onStopSession}
-              onResumeSession={onResumeSession}
-              onCreateChat={createChat}
-              onRenameChat={renameChat}
-              onSelectionChange={shell.actions.selectSidebar}
-            />
-          </aside>
-        </Panel>
+        <Group orientation="horizontal">
+          <Panel
+            collapsible
+            collapsedSize={0}
+            minSize="14%"
+            panelRef={leftPanelRef}
+            onResize={(size) => {
+              const collapsed = size.asPercentage === 0
+              if (collapsed !== left.collapsed) shell.actions.setLeftCollapsed(collapsed)
+            }}
+          >
+            <aside className="flex h-full min-h-0 flex-col overflow-hidden">
+              {/* Only the sidebar reads shell state through context today; provide
+                  it here rather than at the root until another consumer needs it. */}
+              <ShellStateProvider value={shell.state}>
+                <ArcSidebarTree />
+              </ShellStateProvider>
+            </aside>
+          </Panel>
 
-        <Separator className="w-px flex-none bg-border transition-colors hover:bg-border-strong focus-visible:bg-accent focus-visible:outline-none active:bg-accent" />
+          <Separator className="w-px flex-none bg-border transition-colors hover:bg-border-strong focus-visible:bg-accent focus-visible:outline-none active:bg-accent" />
 
-        <Panel defaultSize="38%" minSize="24%" className="min-w-[280px]">
-          {center.surface.kind === "work" ? (
-            <WorkPane
-              ref={workPaneRef}
-              chatId={vm.chat?.id}
-              selectedId={vm.workId}
-              onSelectWork={(workId) => shell.actions.open({ kind: "work", workId }, "center")}
-            />
-          ) : (
-            <UnifiedChatPane
-              ref={chatPaneRef}
-              chat={vm.chat}
-              workspace={vm.chatWorkspace}
-              sessions={sessions}
-              liveStateById={liveStateById}
-              activeSessionId={vm.activeSessionId}
-              sessionCount={vm.sessionCount}
-              providers={interactiveProviders}
-              onLaunch={onLaunch}
-              onFocusSession={focusSession}
-              onRenameChat={renameChat}
-            />
-          )}
-        </Panel>
+          <Panel defaultSize="38%" minSize="24%" className="min-w-[280px]">
+            {center.surface.kind === "work" ? (
+              <WorkPane
+                ref={workPaneRef}
+                chatId={vm.chat?.id}
+                selectedId={vm.workId}
+                onSelectWork={(workId) => shell.actions.open({ kind: "work", workId }, "center")}
+              />
+            ) : (
+              <UnifiedChatPane
+                ref={chatPaneRef}
+                chat={vm.chat}
+                workspace={vm.chatWorkspace}
+                sessions={sessions}
+                liveStateById={liveStateById}
+                activeSessionId={vm.activeSessionId}
+                sessionCount={vm.sessionCount}
+                providers={interactiveProviders}
+                onLaunch={onLaunch}
+                onFocusSession={focusSession}
+                onRenameChat={renameChat}
+              />
+            )}
+          </Panel>
 
-        <Separator className="w-px flex-none bg-border transition-colors hover:bg-border-strong focus-visible:bg-accent focus-visible:outline-none active:bg-accent" />
+          <Separator className="w-px flex-none bg-border transition-colors hover:bg-border-strong focus-visible:bg-accent focus-visible:outline-none active:bg-accent" />
 
-        <Panel
-          collapsible
-          collapsedSize={0}
-          minSize="14%"
-          panelRef={rightPanelRef}
-          onResize={(size) => {
-            const collapsed = size.asPercentage === 0
-            if (collapsed !== right.collapsed) shell.actions.setRightCollapsed(collapsed)
-          }}
-        >
-          {right.surface.kind === "work" ? (
-            <WorkPane
-              chatId={vm.chat?.id}
-              selectedId={right.surface.workId}
-              onSelectWork={(workId) =>
-                shell.actions.open(
-                  workId ? { kind: "work", workId } : { kind: "terminal" },
-                  "right",
-                )
-              }
-            />
-          ) : right.surface.kind === "git" ? (
-            <GitPane
-              workspace={vm.workspace}
-              selectedPath={vm.gitPath}
-              onSelectPath={selectGitPath}
-            />
-          ) : (
-            <TargetSessionPane
-              panes={panes}
-              activePaneId={shell.state.selection.terminalPaneId}
-              detachedSession={vm.detachedSession}
-              hasWorkspaces={workspaces.length > 0}
-              onResumeDetached={onResumeDetached}
-            />
-          )}
-        </Panel>
-      </Group>
-    </div>
+          <Panel
+            collapsible
+            collapsedSize={0}
+            minSize="14%"
+            panelRef={rightPanelRef}
+            onResize={(size) => {
+              const collapsed = size.asPercentage === 0
+              if (collapsed !== right.collapsed) shell.actions.setRightCollapsed(collapsed)
+            }}
+          >
+            {right.surface.kind === "work" ? (
+              <WorkPane
+                chatId={vm.chat?.id}
+                selectedId={right.surface.workId}
+                onSelectWork={(workId) =>
+                  shell.actions.open(
+                    workId ? { kind: "work", workId } : { kind: "terminal" },
+                    "right",
+                  )
+                }
+              />
+            ) : right.surface.kind === "git" ? (
+              <GitPane
+                workspace={vm.workspace}
+                selectedPath={vm.gitPath}
+                onSelectPath={selectGitPath}
+              />
+            ) : (
+              <TargetSessionPane
+                panes={panes}
+                activePaneId={shell.state.selection.terminalPaneId}
+                detachedSession={vm.detachedSession}
+                hasWorkspaces={workspaces.length > 0}
+                onResumeDetached={onResumeDetached}
+              />
+            )}
+          </Panel>
+        </Group>
+      </div>
     </ShellActionsProvider>
   )
 }

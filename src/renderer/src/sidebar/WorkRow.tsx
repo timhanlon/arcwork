@@ -25,7 +25,7 @@ export function WorkRow({ work, relation, active, onSelect }: WorkRowProps): JSX
   const resolved = isResolved(work.status)
   return (
     <Button
-      className={`${ROW_BASE} justify-start gap-[7px] ${active ? ROW_ACTIVE : ""}`}
+      className={`${ROW_BASE} justify-start gap-2 ${active ? ROW_ACTIVE : ""}`}
       title={`${work.title} · ${work.status}${relation === "mentioned" ? " · mentioned" : ""} · ${work.id}`}
       onClick={onSelect}
     >

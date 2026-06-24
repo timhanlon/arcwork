@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { NavBar } from "./NavBar.js"
-import type { ViewKey } from "../sidebar/ViewToggle.js"
+import type { ViewKey } from "../sidebar/ViewToggleCompact.js"
 
 export default {
   title: "Shell / NavBar",

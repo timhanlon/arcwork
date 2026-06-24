@@ -1,11 +1,11 @@
 import type { Workspace } from "../../../shared/workspace.js"
 import type { Chat } from "../../../shared/chat.js"
 import type { TargetSession } from "../../../shared/instance.js"
-import type { LiveTargetActivity } from "../../../shared/live-target-state.js"
+import type { LiveTargetActivity, LiveTargetState } from "../../../shared/live-target-state.js"
+import type { PendingRequest } from "../../../shared/chat-request.js"
 import type { Work, WorkPriority, WorkProvenance } from "../../../shared/work.js"
 import { arcId } from "../../../shared/ids.js"
 import type { LiveStateById } from "./grouping.js"
-import type { ChatScopedWork } from "./WorkspaceTree.js"
 
 /** Stable reference clock so createdAt ordering in stories is deterministic. */
 export const REFERENCE_NOW = "2026-06-07T17:00:00.000Z"
@@ -161,56 +161,18 @@ export const liveStatesFixture: LiveStateById = new Map<string, LiveTargetActivi
   ["target_idle", "idle"],
 ])
 
-/** Authored + mentioned work scoped to chats for WorkspaceTree stories. */
-export const workByChatFixture: ReadonlyMap<string, ReadonlyArray<ChatScopedWork>> = new Map([
-  [
-    "chat_a",
-    [
-      {
-        work: workItem({
-          id: "work_hook",
-          title: "Investigate hook attribution",
-          status: "active",
-          priority: "p1",
-          provenance: { source: "cli", chatId: "chat_a" },
-          labels: ["bug"],
-        }),
-        relation: "authored",
-      },
-      {
-        work: workItem({
-          id: "work_sidebar",
-          title: "Collapse-all control for workspace chats",
-          status: "open",
-          provenance: { source: "cli", chatId: "chat_b" },
-          labels: ["ui"],
-        }),
-        relation: "mentioned",
-      },
-    ],
-  ],
-  [
-    "chat_b",
-    [
-      {
-        work: workItem({
-          id: "work_queue",
-          title: "Reconcile work status vs derived queue lanes",
-          status: "blocked",
-          priority: "p0",
-          provenance: { source: "cli", chatId: "chat_b" },
-        }),
-        relation: "authored",
-      },
-      {
-        work: workItem({
-          id: "work_done",
-          title: "Ship chat-scoped work list",
-          status: "done",
-          provenance: { source: "cli", chatId: "chat_a" },
-        }),
-        relation: "mentioned",
-      },
-    ],
-  ],
-])
+/** The raw shape the `liveTargetStatesAtom` carries (an array, not the folded
+ * Map) — what a story seeds the atom with so the sidebar derives its own
+ * `liveStateById` exactly as in the app. */
+export const liveTargetStatesFixture: ReadonlyArray<LiveTargetState> = sessionsFixture.flatMap(
+  (session) => {
+    const activity = liveStatesFixture.get(session.id)
+    return activity ? [{ targetSessionId: session.id, chatId: session.chatId, activity }] : []
+  },
+)
+
+/** The raw shape the `pendingRequestsAtom` carries — what a story seeds so the
+ * sidebar flags `target_wait` as awaiting the user. */
+export const pendingRequestsFixture: ReadonlyArray<PendingRequest> = sessionsFixture
+  .filter((session) => pendingSessionIdsFixture.has(session.id))
+  .map((session) => ({ chatId: session.chatId, targetSessionId: session.id, kind: "question" as const }))

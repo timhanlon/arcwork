@@ -6,7 +6,8 @@ import { Option } from "effect"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import type { GitChangeStatus, GitCommit, GitFileChange } from "../../../shared/git.js"
 import type { Workspace } from "../../../shared/workspace.js"
-import { Row } from "../ui/Row.js"
+import { DISCLOSURE, Row, ROW_GRID } from "../ui/Row.js"
+import { DisclosureSection } from "../ui/DisclosureSection.js"
 import { gitFileDiffAtomFor } from "../atoms.js"
 import { RepoContextBar } from "./RepoContextBar.js"
 import { useWorkspaceGit } from "./useWorkspaceGit.js"
@@ -168,18 +169,9 @@ function GitSection({
   readonly children: ReactNode
 }): JSX.Element {
   return (
-    <div className={`flex min-h-0 flex-col border-b border-border ${open ? "flex-1" : "flex-none"}`}>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full flex-none items-center gap-1.5 px-3 py-1.5 text-left font-mono text-[10px] uppercase tracking-[0.06em] text-fg-faint hover:bg-elev focus-visible:bg-elev focus-visible:outline-none"
-      >
-        {open ? <CaretDown size={11} weight="bold" /> : <CaretRight size={11} weight="bold" />}
-        <span>{title}</span>
-        {count !== undefined && <span className="text-fg-dim">{count}</span>}
-      </button>
-      {open && <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>}
-    </div>
+    <DisclosureSection title={title} count={count} open={open} onToggle={onToggle} fill>
+      {children}
+    </DisclosureSection>
   )
 }
 
@@ -191,7 +183,7 @@ function InlineDiff({ workspace, path }: { readonly workspace: Workspace; readon
   const diff = AsyncResult.isSuccess(result) ? result.value.diff : undefined
 
   return (
-    <div className="border-b border-border bg-elev/40 px-3 py-2">
+    <div className="border-b border-border bg-elev/40 px-2 py-2">
       {error ? (
         <span className="text-[12px] text-danger">{error}</span>
       ) : diff === undefined ? (
@@ -246,7 +238,7 @@ function EmptyState({ label }: { readonly label: string }): JSX.Element {
 /** A top-aligned note inside a list box. Shares the list rows' horizontal padding
  * so a placeholder → list transition doesn't shift the content (the load jank). */
 function ListNote({ label }: { readonly label: string }): JSX.Element {
-  return <div className="px-3 py-2 text-[12px] text-fg-dim">{label}</div>
+  return <div className="pl-row-indent pr-2 py-2 text-[12px] text-fg-dim">{label}</div>
 }
 
 /** The changed files, flat and already status-sorted. Each row toggles its own
@@ -288,8 +280,13 @@ function CommitsList({ commits }: { readonly commits: ReadonlyArray<GitCommit> }
 }
 
 function CommitRow({ commit }: { readonly commit: GitCommit }): JSX.Element {
+  // A flat, caret-less row: text sits flush at the same `pl-2` as the file
+  // carets above, no reserved gutter column.
   return (
-    <div className="flex items-baseline gap-2 px-3 py-[3px]" title={`${commit.shortSha} · ${commit.author}`}>
+    <div
+      className="flex min-w-0 items-baseline gap-2 py-1 pl-2 pr-2"
+      title={`${commit.shortSha} · ${commit.author}`}
+    >
       <span className="flex-none font-mono text-[11px] text-accent">{commit.shortSha}</span>
       <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">{commit.subject}</span>
       <span className="flex-none font-mono text-[10px] text-fg-faint">{formatCommitDate(commit.authoredAt)}</span>
@@ -325,21 +322,26 @@ function FileRow({
         .filter(Boolean)
         .join(" ")
   return (
-    <Row active={expanded} className="gap-1.5 px-3" onClick={onToggle}>
-      {expanded ? (
-        <CaretDown size={10} weight="bold" className="flex-none text-fg-faint" />
-      ) : (
-        <CaretRight size={10} weight="bold" className="flex-none text-fg-faint" />
-      )}
-      <span className={`w-3 flex-none text-center font-mono text-[11px] font-semibold ${STATUS_COLOR[file.status]}`}>
-        {STATUS_GLYPH[file.status]}
-      </span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground">
-        {file.originalPath ? `${file.originalPath} -> ${file.path}` : file.path}
-      </span>
-      {file.staged && <span className="flex-none text-[10px] text-fg-dim">staged</span>}
-      {stat && <span className="flex-none font-mono text-[10px] text-fg-dim">{stat}</span>}
-    </Row>
+    <div className={ROW_GRID} role="treeitem" aria-expanded={expanded}>
+      <button
+        type="button"
+        className={DISCLOSURE}
+        onClick={onToggle}
+        aria-label={expanded ? `Collapse diff for ${file.path}` : `Expand diff for ${file.path}`}
+      >
+        {expanded ? <CaretDown size={11} weight="bold" /> : <CaretRight size={11} weight="bold" />}
+      </button>
+      <Row active={expanded} className="min-w-0 justify-start gap-1.5" onClick={onToggle}>
+        <span className={`w-3 flex-none text-center font-mono text-[11px] font-semibold ${STATUS_COLOR[file.status]}`}>
+          {STATUS_GLYPH[file.status]}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground">
+          {file.originalPath ? `${file.originalPath} -> ${file.path}` : file.path}
+        </span>
+        {file.staged && <span className="flex-none text-[10px] text-fg-dim">staged</span>}
+        {stat && <span className="flex-none font-mono text-[10px] text-fg-dim">{stat}</span>}
+      </Row>
+    </div>
   )
 }
 
