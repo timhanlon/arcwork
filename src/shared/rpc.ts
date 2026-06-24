@@ -182,13 +182,17 @@ export const ArcRpcs = RpcGroup.make(
     error: RpcError,
   }),
   /** Create an arc-managed worktree for a branch under the workspace's repo.
-   * `createBranch` cuts a new branch off `baseRef` (default branch when omitted). */
+   * `createBranch` cuts a new branch off `baseRef` (default branch when omitted).
+   * `carryChanges` moves the source worktree's dirty tracked/untracked changes
+   * into the new worktree via a temporary git stash; repositories with no commits
+   * cannot carry changes because Git cannot stash without a base commit. */
   Rpc.make("CreateWorktree", {
     payload: {
       workspaceId: WorkspaceId,
       branch: Schema.String,
       baseRef: Schema.optional(Schema.String),
       createBranch: Schema.optional(Schema.Boolean),
+      carryChanges: Schema.optional(Schema.Boolean),
     },
     success: Worktree,
     error: RpcError,
@@ -213,13 +217,6 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("PruneWorktrees", {
     payload: { workspaceId: WorkspaceId },
     success: Schema.Struct({ removed: Schema.Number }),
-    error: RpcError,
-  }),
-  /** Auto-prune arc-managed worktrees whose branch has a merged PR (safe-only).
-   * Returns the paths actually pruned. */
-  Rpc.make("PruneMergedWorktrees", {
-    payload: { workspaceId: WorkspaceId },
-    success: Schema.Array(Schema.String),
     error: RpcError,
   }),
   /** Open a GitHub PR for the workspace's current branch via `gh pr create`,

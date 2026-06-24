@@ -82,30 +82,3 @@ describe("loadSidebarPullRequests fork safety", () => {
     expect(numbers).toEqual([1])
   })
 })
-
-describe("mergedBranchesForRepository fork safety", () => {
-  it("omits a fork's merged branch so auto-prune never deletes a same-named tree", async () => {
-    const branches = await run(
-      Effect.gen(function* () {
-        const db = yield* ArcStore
-        yield* upsertWidgetsRepo
-        // The repo's own merged PR on "feat" is prunable; a fork's merged PR that
-        // reused "rogue" must not be, or it would delete a local "rogue" worktree.
-        yield* db.upsertPullRequest(pr({ id: arcId("pr", "pr_local"), number: 1, state: "merged" }))
-        yield* db.upsertPullRequest(
-          pr({
-            id: arcId("pr", "pr_fork"),
-            number: 2,
-            state: "merged",
-            headRef: "rogue",
-            headRepositoryOwner: "forkuser",
-          }),
-        )
-        // An open PR on a third branch is not merged, so it isn't prunable either.
-        yield* db.upsertPullRequest(pr({ id: arcId("pr", "pr_open"), number: 3, headRef: "wip" }))
-        return yield* db.mergedBranchesForRepository(repoId)
-      }),
-    )
-    expect(branches).toEqual(["feat"])
-  })
-})

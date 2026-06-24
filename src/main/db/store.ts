@@ -241,7 +241,9 @@ export const ArcStoreLive = Layer.effect(
     yield* runMigrations("arc_migrations", arcMigrations)
 
     const loadWorkspaces =
-      sql<WorkspaceRow>`SELECT * FROM workspaces ORDER BY last_opened_at DESC, name, id`
+      sql<WorkspaceRow>`SELECT * FROM workspaces
+        WHERE archived_at IS NULL
+        ORDER BY last_opened_at DESC, name, id`
 
     const upsertWorkspace = (
       row: Pick<WorkspaceRow, "id" | "path" | "name" | "createdAt" | "lastOpenedAt">,
@@ -254,7 +256,8 @@ export const ArcStoreLive = Layer.effect(
           createdAt: row.createdAt,
           lastOpenedAt: row.lastOpenedAt,
         })} ON CONFLICT(path) DO UPDATE SET
-          last_opened_at = excluded.last_opened_at
+          last_opened_at = excluded.last_opened_at,
+          archived_at = NULL
           RETURNING *`
         const canonical = rows[0]
         if (!canonical) {

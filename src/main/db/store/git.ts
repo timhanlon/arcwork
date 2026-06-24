@@ -19,12 +19,10 @@ export interface GitStore {
   ) => Effect.Effect<ReadonlyArray<WorktreeRow>, SqlError>
   /** Upsert a worktree keyed by its path; returns the canonical row. */
   readonly upsertWorktree: (row: WorktreeRow) => Effect.Effect<WorktreeRow, SqlError>
+  /** Delete a git worktree read-model row and archive/detach any Arc workspace
+   * bound to that path/worktree. This preserves the workspace, chats, and
+   * sessions while hiding completed work from the normal sidebar. */
   readonly deleteWorktreeByPath: (path: string) => Effect.Effect<boolean, SqlError>
-  /** Head-ref names of merged PRs whose head lives in this repository (fork-safe;
-   * see {@link headInRepository}) — the input to auto-pruning a merged worktree. */
-  readonly mergedBranchesForRepository: (
-    repositoryId: string,
-  ) => Effect.Effect<ReadonlyArray<string>, SqlError>
   /** Every open or merged PR across all repositories — the source for the
    * sidebar's per-workspace branch→PR chip, joined in one read rather than per
    * row. Open PRs sort first so a branch with both shows the open one (drafts
@@ -140,6 +138,19 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
   const deleteWorktreeByPath = (path: string) =>
     sql.withTransaction(
       Effect.gen(function* () {
+        const worktrees = yield* sql<{ id: string }>`SELECT id FROM worktrees WHERE path = ${path} LIMIT 1`
+        const worktreeId = worktrees[0]?.id
+        // Archive every workspace rooted at this path, plus any bound to the
+        // worktree row by id when one exists — only add that clause when we have
+        // an id, rather than matching against a sentinel.
+        const boundToTree = worktreeId ? sql` OR worktree_id = ${worktreeId}` : sql``
+        yield* sql`UPDATE workspaces
+          SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            repository_id = NULL,
+            worktree_id = NULL,
+            git_branch = NULL,
+            git_head_sha = NULL
+          WHERE path = ${path}${boundToTree}`
         yield* sql`DELETE FROM worktrees WHERE path = ${path}`
         const rows = yield* sql<{ changes: number }>`SELECT changes() AS changes`
         return (rows[0]?.changes ?? 0) > 0
@@ -154,12 +165,6 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
   // that joins a PR to a local branch composes this fragment over `pr`/`r`.
   const headInRepository = sql`pr.head_repository_owner = r.github_owner
     AND pr.head_repository_name = r.github_repo`
-
-  const mergedBranchesForRepository = (repositoryId: string) =>
-    sql<{ headRef: string }>`SELECT DISTINCT pr.head_ref FROM pull_requests pr
-      JOIN repositories r ON r.id = pr.repository_id
-      WHERE pr.repository_id = ${repositoryId} AND pr.state = 'merged'
-        AND ${headInRepository}`.pipe(Effect.map((rows) => rows.map((row) => row.headRef)))
 
   // Open PRs sort first so a branch with both shows the open one.
   const loadSidebarPullRequests = sql<PullRequestRow>`SELECT pr.* FROM pull_requests pr
@@ -261,7 +266,6 @@ export const makeGitStore = (sql: SqlClient): GitStore => {
     loadWorktreesForRepository,
     upsertWorktree,
     deleteWorktreeByPath,
-    mergedBranchesForRepository,
     loadSidebarPullRequests,
     upsertPullRequest,
     pullRequestForBranch,

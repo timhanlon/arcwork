@@ -49,6 +49,25 @@ const createRepoFixture = (): RepoFixture => {
   }
 }
 
+const createUnbornRepoFixture = (): RepoFixture => {
+  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "arc-git-unborn-"))
+  git(repoDir, "-c", "init.defaultBranch=main", "init")
+  return {
+    workspace: {
+      id: arcId("workspace", "workspace_unborn"),
+      path: fs.realpathSync(repoDir),
+      name: "unborn",
+      repositoryId: null,
+      repoLabel: null,
+      defaultBranch: null,
+      branch: null,
+      isWorktree: false,
+      pullRequest: null,
+    },
+    cleanup: () => fs.rmSync(repoDir, { recursive: true, force: true }),
+  }
+}
+
 const run = async <A, E>(
   workspace: Workspace,
   program: Effect.Effect<A, E, GitService | ArcStore>,
@@ -75,6 +94,15 @@ const run = async <A, E>(
 
 const withRepo = async <A>(f: (fixture: RepoFixture) => Promise<A>): Promise<A> => {
   const fixture = createRepoFixture()
+  try {
+    return await f(fixture)
+  } finally {
+    fixture.cleanup()
+  }
+}
+
+const withUnbornRepo = async <A>(f: (fixture: RepoFixture) => Promise<A>): Promise<A> => {
+  const fixture = createUnbornRepoFixture()
   try {
     return await f(fixture)
   } finally {
@@ -225,7 +253,151 @@ describe("git worktree lifecycle", () => {
     expect(out.afterRemove.some((w) => w.branch === "feature-x")).toBe(false)
   })
 
-  it("auto-prunes a clean managed worktree whose PR has merged", async () => {
+  it("creates an orphan worktree for a repo with no commits yet", async () => {
+    const out = await withWorktreesRoot(() =>
+      withUnbornRepo(({ workspace }) =>
+        run(
+          workspace,
+          Effect.gen(function* () {
+            const store = yield* ArcStore
+            yield* seedWorkspace(workspace)
+            const service = yield* GitService
+            yield* service.detectRepository(workspace.id)
+
+            const wt = yield* service.createWorktree(workspace.id, { branch: "test-worktree", createBranch: true })
+            const status = yield* Effect.sync(() => git(wt.path, "status", "--short", "--branch"))
+            const worktrees = yield* store.loadWorktreesForRepository(wt.repositoryId)
+            return { wt, status, worktrees }
+          }),
+        ),
+      ),
+    )
+
+    expect(out.wt.branch).toBe("test-worktree")
+    expect(out.status).toContain("No commits yet on test-worktree")
+    expect(out.worktrees.some((w) => w.branch === "test-worktree")).toBe(true)
+  })
+
+  it("rejects carrying changes into an orphan worktree", async () => {
+    const error = await withWorktreesRoot(() =>
+      withUnbornRepo(({ workspace }) =>
+        run(
+          workspace,
+          Effect.gen(function* () {
+            yield* seedWorkspace(workspace)
+            const service = yield* GitService
+            yield* service.detectRepository(workspace.id)
+
+            yield* Effect.sync(() => {
+              fs.writeFileSync(path.join(workspace.path, "staged.txt"), "staged\n")
+              git(workspace.path, "add", "staged.txt")
+              fs.writeFileSync(path.join(workspace.path, "untracked.txt"), "untracked\n")
+            })
+
+            return yield* service.createWorktree(workspace.id, {
+              branch: "orphan-carry",
+              createBranch: true,
+              carryChanges: true,
+            }).pipe(Effect.flip)
+          }),
+        ),
+      ),
+    )
+
+    expect(error.message).toContain("Cannot carry changes from a repository with no commits yet")
+  })
+
+  it("carries dirty staged, unstaged, and untracked files into a new worktree", async () => {
+    const out = await withWorktreesRoot(() =>
+      withRepo(({ workspace }) =>
+        run(
+          workspace,
+          Effect.gen(function* () {
+            const service = yield* GitService
+            yield* seedWorkspace(workspace)
+            yield* service.detectRepository(workspace.id)
+
+            yield* Effect.sync(() => {
+              fs.appendFileSync(path.join(workspace.path, "README.md"), "dirty edit\n")
+              fs.writeFileSync(path.join(workspace.path, "staged.txt"), "staged\n")
+              git(workspace.path, "add", "staged.txt")
+              fs.writeFileSync(path.join(workspace.path, "untracked.txt"), "untracked\n")
+            })
+
+            const wt = yield* service.createWorktree(workspace.id, {
+              branch: "carry-dirty",
+              createBranch: true,
+              carryChanges: true,
+            })
+            const sourceStatus = yield* Effect.sync(() => git(workspace.path, "status", "--porcelain", "-uall"))
+            const destStatus = yield* Effect.sync(() => git(wt.path, "status", "--porcelain", "-uall"))
+            const readme = yield* Effect.sync(() => fs.readFileSync(path.join(wt.path, "README.md"), "utf8"))
+            const staged = yield* Effect.sync(() => fs.readFileSync(path.join(wt.path, "staged.txt"), "utf8"))
+            const untracked = yield* Effect.sync(() => fs.readFileSync(path.join(wt.path, "untracked.txt"), "utf8"))
+            return { sourceStatus, destStatus, readme, staged, untracked }
+          }),
+        ),
+      ),
+    )
+
+    expect(out.sourceStatus).toBe("")
+    expect(out.destStatus).toContain(" M README.md")
+    expect(out.destStatus).toContain("A  staged.txt")
+    expect(out.destStatus).toContain("?? untracked.txt")
+    expect(out.readme).toContain("dirty edit")
+    expect(out.staged).toBe("staged\n")
+    expect(out.untracked).toBe("untracked\n")
+  })
+
+  it("cleans up the worktree and branch, preserving the stash, when carry hits a conflict", async () => {
+    const out = await withWorktreesRoot(() =>
+      withRepo(({ workspace }) =>
+        run(
+          workspace,
+          Effect.gen(function* () {
+            const service = yield* GitService
+            yield* seedWorkspace(workspace)
+            yield* service.detectRepository(workspace.id)
+
+            // A divergent base edits the same line the dirty source edits, so
+            // applying the carried stash into a worktree off that base conflicts.
+            yield* Effect.sync(() => {
+              git(workspace.path, "checkout", "-b", "diverge")
+              fs.writeFileSync(path.join(workspace.path, "README.md"), "# widgets (other side)\n")
+              git(workspace.path, "commit", "-am", "divergent edit")
+              git(workspace.path, "checkout", "main")
+              fs.writeFileSync(path.join(workspace.path, "README.md"), "# widgets (my side)\n")
+            })
+
+            const error = yield* service
+              .createWorktree(workspace.id, {
+                branch: "carry-conflict",
+                baseRef: "diverge",
+                createBranch: true,
+                carryChanges: true,
+              })
+              .pipe(Effect.flip)
+
+            const worktrees = yield* Effect.sync(() => git(workspace.path, "worktree", "list", "--porcelain"))
+            const branches = yield* Effect.sync(() => git(workspace.path, "branch", "--list", "carry-conflict"))
+            const stashes = yield* Effect.sync(() => git(workspace.path, "stash", "list"))
+            const sourceStatus = yield* Effect.sync(() => git(workspace.path, "status", "--porcelain"))
+            return { error, worktrees, branches, stashes, sourceStatus }
+          }),
+        ),
+      ),
+    )
+
+    expect(out.error.message).toContain("restored to the original workspace")
+    // The half-created tree and branch are gone, so the same name can be retried.
+    expect(out.worktrees).not.toContain("carry-conflict")
+    expect(out.branches.trim()).toBe("")
+    // The carried changes are put back in the source, with no leftover stash.
+    expect(out.stashes.trim()).toBe("")
+    expect(out.sourceStatus).toContain("M README.md")
+  })
+
+  it("removes a stale read-model row when git no longer has the worktree", async () => {
     const out = await withWorktreesRoot(() =>
       withRepo(({ workspace }) =>
         run(
@@ -234,50 +406,63 @@ describe("git worktree lifecycle", () => {
             const store = yield* ArcStore
             yield* seedWorkspace(workspace)
             const service = yield* GitService
-            const repo = yield* service.detectRepository(workspace.id)
-            const wt = yield* service.createWorktree(workspace.id, {
-              branch: "merged-feature",
-              createBranch: true,
+            yield* service.detectRepository(workspace.id)
+            const wt = yield* service.createWorktree(workspace.id, { branch: "stale-tree", createBranch: true })
+
+            yield* Effect.sync(() => {
+              fs.rmSync(wt.path, { recursive: true, force: true })
+              git(workspace.path, "worktree", "prune")
             })
-            // A merged PR for that branch is the signal that makes the tree prunable.
-            yield* store.upsertPullRequest({
-              id: arcId("pr", "pr_merged"),
-              repositoryId: repo!.id,
-              number: 7,
-              githubNodeId: null,
-              title: "done",
-              body: "",
-              state: "merged",
-              isDraft: 0,
-              author: "octocat",
-              headRef: "merged-feature",
-              headSha: null,
-              headRepositoryOwner: "acme",
-              headRepositoryName: "widgets",
-              baseRef: "main",
-              reviewState: null,
-              checksState: null,
-              mergeable: null,
-              mergeStateStatus: null,
-              url: null,
-              lastSyncedAt: "2026-06-19T00:00:00.000Z",
+            yield* store.upsertWorkspace({
+              id: arcId("workspace", "workspace_stale_tree"),
+              path: wt.path,
+              name: "stale-tree",
               createdAt: "2026-06-19T00:00:00.000Z",
-              updatedAt: "2026-06-19T00:00:00.000Z",
+              lastOpenedAt: "2026-06-19T00:00:00.000Z",
+            })
+            yield* store.setWorkspaceGit(arcId("workspace", "workspace_stale_tree"), {
+              repositoryId: wt.repositoryId,
+              worktreeId: wt.id,
+              gitBranch: wt.branch,
+              gitHeadSha: wt.headSha,
+            })
+            yield* store.insertChat({
+              id: arcId("chat", "chat_stale_tree"),
+              workspaceId: arcId("workspace", "workspace_stale_tree"),
+              title: "keep me",
+              createdAt: "2026-06-19T00:00:00.000Z",
+            })
+            yield* store.upsertTargetSession({
+              id: arcId("target", "target_stale_tree"),
+              chatId: arcId("chat", "chat_stale_tree"),
+              provider: "codex",
+              preset: null,
+              cwd: wt.path,
+              nativeSessionId: null,
+              nativeTranscriptPath: null,
+              state: "exited",
+              startedAt: "2026-06-19T00:00:00.000Z",
             })
 
-            const pruned = yield* service.pruneMergedWorktrees(workspace.id)
-            const goneOnDisk = yield* Effect.sync(() => fs.existsSync(wt.path))
-            const remaining = yield* store.loadWorktreesForRepository(repo!.id)
-            return { wt, pruned, goneOnDisk, remaining }
+            yield* service.removeWorktree(workspace.id, wt.path)
+            const remaining = yield* store.loadWorktreesForRepository(wt.repositoryId)
+            const staleWorkspace = (yield* store.loadWorkspaces).find((w) => w.path === wt.path)
+            const chats = yield* store.loadChats
+            const sessions = yield* store.loadTargetSessions
+            const workspaceStillExists = yield* store.workspaceExists(arcId("workspace", "workspace_stale_tree"))
+            const chatWorkspacePath = yield* store.workspacePathForChat(arcId("chat", "chat_stale_tree"))
+            return { wt, remaining, staleWorkspace, chats, sessions, workspaceStillExists, chatWorkspacePath }
           }),
         ),
       ),
     )
 
-    expect(out.pruned).toContain(out.wt.path)
-    expect(out.goneOnDisk).toBe(false)
-    expect(out.remaining.some((w) => w.branch === "merged-feature")).toBe(false)
-    // The main worktree is never auto-pruned.
-    expect(out.remaining.some((w) => w.branch === "main")).toBe(true)
+    expect(out.remaining.some((w) => w.path === out.wt.path)).toBe(false)
+    expect(out.staleWorkspace).toBeUndefined()
+    expect(out.workspaceStillExists).toBe(true)
+    expect(out.chatWorkspacePath).toBe(out.wt.path)
+    expect(out.chats.some((chat) => chat.id === arcId("chat", "chat_stale_tree"))).toBe(true)
+    expect(out.sessions.some((session) => session.id === arcId("target", "target_stale_tree"))).toBe(true)
   })
+
 })
