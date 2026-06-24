@@ -12,7 +12,8 @@
     "storybook-static",
     "**/dist",
     "**/build",
-    "**/*.tsbuildinfo"
+    "**/*.tsbuildinfo",
+    "docs/effect/**"
   ],
   "rules": {
     // Import hygiene

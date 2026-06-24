@@ -4,6 +4,19 @@ Single Electron app (Effect v4 main + React renderer + typed Rpc seam). Source
 lives at the repo-root `src/` — `src/main`, `src/renderer`, `src/shared` (no
 package nesting; the monorepo was collapsed into this one app).
 
+## Writing Effect — read the vendored docs first
+
+Effect is pinned at `4.0.0-beta.74` (v4, **not** the v3 API most training data
+knows). Before writing or reviewing any Effect code, read the canonical,
+Effect-team-authored guidance vendored at **`docs/effect/`** — it's in the repo
+(every worktree), so don't reach for a `.tmp/` clone. Start with
+`docs/effect/patterns/effect.md` and `docs/effect/LLMS.md`; `docs/effect/ai-docs/`
+has runnable per-topic examples; `docs/effect/MIGRATION.md` covers v3→v4 renames.
+
+`docs/effect-idiom-audit.md` is the companion: anti-patterns mined from our own
+history (e.g. `JSON.parse(x) as T` instead of `Schema.decode*`, `try/catch`
+around a throwing decoder, v3 API names) — consult it to avoid known smells.
+
 ## Renderer layout — folder = Storybook section
 
 `src/renderer/src/` is organized so **each folder maps to exactly one Storybook
