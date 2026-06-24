@@ -1,5 +1,6 @@
 import { Duration, Effect, Layer, Stream } from "effect"
 import * as Atom from "effect/unstable/reactivity/Atom"
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import { AtomRpc } from "effect/unstable/reactivity"
 import { rpc, sharedFlatRpcClient } from "./rpc-client.js"
 import { ArcRpcs } from "../../shared/rpc.js"
@@ -126,49 +127,51 @@ const chatActivitySignalAtom = Atom.family((chatId: string) =>
 )
 
 /**
- * Per-workspace git read-model refresh signal. `WatchGitChanges` ticks whenever
- * a hook-driven branch remap (`post-checkout`) or PR sync (`pre-push`) touched
- * that workspace's repo/PR state; the Git pane re-pulls its context on each
- * increment. Seed `0` matches `initialValue` so the pane's own first pull on
- * mount isn't doubled by a boot tick.
+ * One `WatchGitChanges` subscription per workspace, shared by both git signal
+ * atoms below. It scans the change stream into two monotonic counters: `all` ticks
+ * on every change, `repo` only on a branch/PR remap (`post-checkout`/`pre-push`
+ * hook or worktree op). Sharing one upstream stream keeps the pane's IPC fan-out
+ * at a single stream per workspace instead of one per derived signal.
  */
-export const gitChangesSignalAtom = Atom.family((workspaceId: WorkspaceId) =>
+const gitChangeCountsAtom = Atom.family((workspaceId: WorkspaceId) =>
   ArcRpcAtomClient.runtime.atom(
     Stream.unwrap(
       ArcRpcAtomClient.use((client) =>
         Effect.succeed(
-          signalCount(
-            client("WatchGitChanges", undefined).pipe(
-              // Context/commits only move on a branch/PR remap — a working-tree
-              // edit must not re-pull the PR context, so drop `status` ticks here.
-              Stream.filter((c) => c.workspaceId === workspaceId && c.kind === "repo"),
-            ),
+          client("WatchGitChanges", undefined).pipe(
+            Stream.filter((c) => c.workspaceId === workspaceId),
+            Stream.scan({ all: 0, repo: 0 }, (acc, c) => ({
+              all: acc.all + 1,
+              repo: c.kind === "repo" ? acc.repo + 1 : acc.repo,
+            })),
           ),
         ),
       ),
     ),
-    { initialValue: 0 },
+    { initialValue: { all: 0, repo: 0 } },
   )
 )
 
 /**
- * The changed-files refresh signal. Unlike {@link gitChangesSignalAtom} it ticks
- * on *every* git change for the workspace — both `status` (a working-tree edit,
+ * Per-workspace git read-model refresh signal — context/commits. Derived from the
+ * shared counts as the bare `repo` number (not the wrapping `AsyncResult`, whose
+ * identity changes every emission), so a working-tree edit — which moves `all` but
+ * not `repo` — is deduped away by the registry's `Object.is` check and never
+ * re-pulls the PR context. Seed `0` matches the base initial value so the pane's
+ * own first pull on mount isn't doubled by a boot tick.
+ */
+export const gitChangesSignalAtom = Atom.family((workspaceId: WorkspaceId) =>
+  Atom.map(gitChangeCountsAtom(workspaceId), (r) => (AsyncResult.isSuccess(r) ? r.value.repo : 0)),
+)
+
+/**
+ * The changed-files refresh signal. Exposes the `all` counter, so it ticks on
+ * *every* git change for the workspace — both `status` (a working-tree edit,
  * surfaced by the main-side tree watcher) and `repo` (a hook/worktree remap, which
- * can also change the dirty set). A repo signal still ticks both atoms; a status
- * signal ticks only this one.
+ * can also change the dirty set).
  */
 const gitStatusSignalAtom = Atom.family((workspaceId: WorkspaceId) =>
-  ArcRpcAtomClient.runtime.atom(
-    Stream.unwrap(
-      ArcRpcAtomClient.use((client) =>
-        Effect.succeed(
-          signalCount(client("WatchGitChanges", undefined).pipe(Stream.filter((c) => c.workspaceId === workspaceId))),
-        ),
-      ),
-    ),
-    { initialValue: 0 },
-  )
+  Atom.map(gitChangeCountsAtom(workspaceId), (r) => (AsyncResult.isSuccess(r) ? r.value.all : 0)),
 )
 
 /**
