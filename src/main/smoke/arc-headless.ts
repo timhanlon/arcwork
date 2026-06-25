@@ -7,6 +7,8 @@ import { WorkspaceService } from "../services/WorkspaceService.js"
 import { launchArcMainController, type RendererTransport } from "../services/ArcMainController.js"
 import { AppLive } from "../runtime.js"
 import { ArcMcpServerLive } from "../mcp/server.js"
+import { newArcId } from "../../shared/ids.js"
+import { writeHeadlessLatest } from "./headless-latest.js"
 
 /**
  * Headless Arc backend — the autonomous test harness. Boots the *real* main-
@@ -72,11 +74,17 @@ const main = async (): Promise<void> => {
     /* discovery file not ready — reported as undefined */
   }
 
-  // One machine-readable line the driver greps for.
-  console.log(
-    "ARC_HEADLESS_READY " +
-      JSON.stringify({ mcpUrl, dbPath, cwd, chatId: seeded.chatId, workspaceId: seeded.workspaceId }),
-  )
+  // A fresh, well-formed driver bearer: `target_<26>:<chatId>`. The target
+  // segment must be a valid typeid or the MCP server drops the provenance, so
+  // mint it through the same factory the store uses.
+  const bearer = `${newArcId("target")}:${seeded.chatId}`
+
+  // Publish coordinates two ways: one machine-readable stdout line (kept for
+  // existing greppers) and the well-known `headless-latest.json` that `arc-drive`
+  // auto-discovers with zero arguments.
+  const coords = { mcpUrl, dbPath, cwd, chatId: seeded.chatId, workspaceId: seeded.workspaceId, bearer }
+  writeHeadlessLatest(coords)
+  console.log("ARC_HEADLESS_READY " + JSON.stringify(coords))
 
   const shutdown = async (): Promise<void> => {
     await runtime.runPromise(Scope.close(scope, Exit.succeed(undefined)))

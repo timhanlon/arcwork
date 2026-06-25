@@ -17,6 +17,8 @@ export default defineConfig({
           // Headless backend for the autonomous test harness; run via
           // `ELECTRON_RUN_AS_NODE=1 electron out/main/arc-headless.js`.
           "arc-headless": resolve(root, "src/main/smoke/arc-headless.ts"),
+          // CLI to drive + observe the headless harness (`pnpm drive <cmd>`).
+          "arc-drive": resolve(root, "src/main/smoke/arc-drive.ts"),
           // The `arc-mcp` CLI: a node-side executable run via
           // `ELECTRON_RUN_AS_NODE=1 electron out/main/cli-mcp.js` (see bin/arc-mcp),
           // so it shares the app bundle when emitting MCP client config.
