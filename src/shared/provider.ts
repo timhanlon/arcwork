@@ -62,6 +62,18 @@ export const InteractiveCapability = Schema.Struct({
    * than racing connection. Absent → fall back to first-output as the signal.
    */
   readyPromptGlyph: Schema.optional(Schema.String),
+  /**
+   * Pre-session gates this CLI parks at before its input prompt is ever reached
+   * — e.g. cursor-agent shows a "Workspace Trust Required" dialog (and, logged
+   * out, a "Press any key to log in" screen) in a fresh PTY. When a gate's
+   * `match` substring appears in early output, Arc sends its `key` once to
+   * advance past it, so the `readyPromptGlyph` can then appear and the seeded
+   * prompt deliver. Without this the glyph never shows and the prompt strands.
+   * Each gate fires at most once, in output order.
+   */
+  advanceGates: Schema.optional(
+    Schema.Array(Schema.Struct({ match: Schema.String, key: Schema.String })),
+  ),
 })
 export type InteractiveCapability = typeof InteractiveCapability.Type
 

@@ -101,8 +101,13 @@ export const providerMcpLaunchArgs = (
       ]
     case "cursor":
       // cursor declares the server in its plugin's mcp.json (loaded via
-      // --plugin-dir); launch only needs to auto-approve it. See cursor-plugin.ts.
-      return ["--approve-mcps"]
+      // --plugin-dir; see cursor-plugin.ts). Arc launches cursor-agent with no
+      // human at its PTY to clear prompts, so `--approve-mcps` alone leaves it
+      // stalled on the per-tool-call approval. `--force` (run unless explicitly
+      // denied) clears that. NOT `--trust` — cursor-agent rejects it outside
+      // --print/headless mode ("--trust can only be used with --print"), which
+      // is why the interactive target then exits 1.
+      return ["--approve-mcps", "--force"]
   }
 }
 

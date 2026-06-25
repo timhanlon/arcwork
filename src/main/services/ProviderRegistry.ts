@@ -53,6 +53,14 @@ const providers: ReadonlyArray<ProviderSpec> = [
       // tools. Waiting for the prompt glyph lets MCP come up first.
       promptInjectionMode: "stdin-after-start",
       readyPromptGlyph: "→",
+      // Fresh PTY launches park at a gate before the agent TUI (and its `→`
+      // prompt) appear: a workspace-trust dialog (select `[a] Trust`) and, when
+      // logged out, a "press any key to log in" screen (Enter). Clear each so
+      // the ready glyph can show.
+      advanceGates: [
+        { match: "Workspace Trust Required", key: "a" },
+        { match: "Press any key to log in", key: "\r" },
+      ],
     },
   },
   {

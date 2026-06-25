@@ -49,11 +49,12 @@ describe("buildCursorPluginFiles", () => {
 })
 
 describe("cursorPluginLaunchArgs", () => {
-  it("loads the plugin dir and auto-approves its MCP server", () => {
+  it("loads the plugin dir and auto-approves + force-allows its MCP server", () => {
     expect(cursorPluginLaunchArgs("/arc/arc-work", "dev")).toEqual([
       "--plugin-dir",
       "/arc/arc-work",
       "--approve-mcps",
+      "--force",
     ])
   })
 })

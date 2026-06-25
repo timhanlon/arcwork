@@ -434,6 +434,10 @@ export const TargetSessionManagerLive = Layer.effect(
       // How prompts reach this CLI: terminal paste+Enter, or a JSONL command line
       // (rpc providers). Determines both the seeded-prompt and inbox wire format.
       promptInjectionMode?: string,
+      // Pre-session gates to clear before the ready glyph can appear (cursor's
+      // workspace-trust / login screens): send each gate's key once when its
+      // match string shows in output.
+      advanceGates: ReadonlyArray<{ readonly match: string; readonly key: string }> = [],
     ) =>
       Effect.sync(() => {
         const spawnedAt = Date.now()
@@ -498,6 +502,7 @@ export const TargetSessionManagerLive = Layer.effect(
 
         let firstChunkSeen = false
         let readyTail = ""
+        const gatesLeft = [...advanceGates]
         child.onData((data) => {
           tracePtyChunk(session.id, data)
           if (!firstChunkSeen) {
@@ -510,10 +515,27 @@ export const TargetSessionManagerLive = Layer.effect(
             })
           }
           events.emit("data", { sessionId: session.id, data })
-          if (!delivered && hasSeededPrompt) {
+          // Clearing a gate matters even with no seeded prompt (a resumed session
+          // must still reach its ready prompt for later inbox sends), so this
+          // watch runs whenever there's a prompt to deliver OR a gate left to clear.
+          if (!delivered && (hasSeededPrompt || gatesLeft.length > 0)) {
             readyTail = (readyTail + data).slice(-READY_TAIL_CHARS)
+            // A pre-session gate (cursor's trust / login screen) blocks the ready
+            // glyph from ever appearing — send its key once, then keep watching
+            // the (reset) tail for the next gate or the glyph.
+            const gateIdx = gatesLeft.findIndex((g) => readyTail.includes(g.match))
+            if (gateIdx !== -1) {
+              const [gate] = gatesLeft.splice(gateIdx, 1)
+              readyTail = ""
+              try {
+                child.write(gate!.key)
+              } catch {
+                /* child gone before the gate could be cleared */
+              }
+              return
+            }
             // No glyph configured → first output is our readiness signal.
-            if (!readyGlyph || tailShowsGlyph(readyTail, readyGlyph)) deliver()
+            if (hasSeededPrompt && (!readyGlyph || tailShowsGlyph(readyTail, readyGlyph))) deliver()
           }
         })
         // Hand the exit off to the scoped consumer; no Effect runs from this
@@ -658,6 +680,7 @@ export const TargetSessionManagerLive = Layer.effect(
           submitSeededAfterReady,
           cap.readyPromptGlyph,
           cap.promptInjectionMode,
+          cap.advanceGates,
         ).pipe(
           Effect.withSpan("arc.target.spawn", {
             attributes: { "arc.provider": req.provider, "arc.target_session_id": id },
@@ -739,6 +762,7 @@ export const TargetSessionManagerLive = Layer.effect(
           false,
           spec.interactive.readyPromptGlyph,
           spec.interactive.promptInjectionMode,
+          spec.interactive.advanceGates,
         )
         yield* SubscriptionRef.update(store, (m) => new Map(m).set(session.id, session))
         yield* persistSession(session)
