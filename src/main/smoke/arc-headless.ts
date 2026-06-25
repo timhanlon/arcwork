@@ -35,9 +35,12 @@ const main = async (): Promise<void> => {
   if (!process.env["ARC_DB_PATH"]) {
     process.env["ARC_DB_PATH"] = join(mkdtempSync(join(tmpdir(), "arc-headless-")), "arc.sqlite")
   }
-  // Ephemeral MCP port by default — the persistent 7793/7794 are likely taken by a
-  // real app, and this instance is throwaway.
-  if (!process.env["ARC_MCP_PORT"]) process.env["ARC_MCP_PORT"] = "0"
+  // Bind the profile's PERSISTENT MCP port (dev→:7794) by default, not ephemeral:
+  // spawned cursor/codex/claude resolve the arc server from their per-profile
+  // config (the fixed port), so the harness must OWN that port for their tool
+  // calls to reach it — only pi and the driver discover the live URL via
+  // `arc-mcp.json`. So quit any real app holding it first. Set ARC_MCP_PORT=0 to
+  // force ephemeral (then the cloud providers can't reach this harness).
   const dbPath = process.env["ARC_DB_PATH"]
 
   // A real on-disk cwd a spawned agent can work in.

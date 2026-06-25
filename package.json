@@ -31,7 +31,7 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "rebuild": "electron-rebuild -f -w node-pty,better-sqlite3",
-    "headless": "ARC_PROFILE=dev ARC_MCP_PORT=0 ARC_DB_PATH=\"$(mktemp -d)/arc.sqlite\" ELECTRON_RUN_AS_NODE=1 electron out/main/arc-headless.js",
+    "headless": "ARC_PROFILE=dev ARC_DB_PATH=\"$(mktemp -d)/arc.sqlite\" ELECTRON_RUN_AS_NODE=1 electron out/main/arc-headless.js",
     "drive": "ELECTRON_RUN_AS_NODE=1 electron out/main/arc-drive.js",
     "test": "vitest run",
     "test:electron": "electron-vite build --mode test && ELECTRON_RUN_AS_NODE=1 electron out/main/raw-hook-signal-smoke.js",
