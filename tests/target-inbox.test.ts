@@ -127,6 +127,24 @@ describe("TargetInboxService delivery", () => {
     expect(await runtime.runPromise(pendingCount)).toBe(0)
   })
 
+  it("serializes concurrent flushes so a queued message is pasted only once", async () => {
+    // The enqueue path and the controller's turn-close path can both call flushTo
+    // at once; the flush lock must let only one win the pending rows. Without it
+    // both read the same `delivered_at IS NULL` batch and double-paste.
+    activity = "generating" // queue without auto-flushing
+    await runtime.runPromise(Effect.flatMap(TargetInboxService, (inbox) => inbox.enqueue(TARGET, "once")))
+    expect(submits).toEqual([])
+
+    activity = "idle"
+    await runtime.runPromise(
+      Effect.flatMap(TargetInboxService, (inbox) =>
+        Effect.all([inbox.flushTo(TARGET), inbox.flushTo(TARGET)], { concurrency: "unbounded" }),
+      ),
+    )
+    expect(submits).toHaveLength(1) // one paste, not two
+    expect(await runtime.runPromise(pendingCount)).toBe(0)
+  })
+
   it("does not ack when the PTY is gone (no live session to accept the paste)", async () => {
     submitAccepted = false
     await runtime.runPromise(Effect.flatMap(TargetInboxService, (inbox) => inbox.enqueue(TARGET, "into the void")))

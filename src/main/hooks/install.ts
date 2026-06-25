@@ -131,7 +131,7 @@ const readMcpUrl = () => {
   }
 }
 
-const postMcp = async (url, body, sessionId = null) => {
+const postMcp = async (url, body, sessionId = null, signal = null) => {
   const headers = {
     "content-type": "application/json",
     "accept": "application/json, text/event-stream",
@@ -143,7 +143,7 @@ const postMcp = async (url, body, sessionId = null) => {
     method: "POST",
     headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(1500),
+    signal: signal ?? AbortSignal.timeout(1500),
   })
   return { sessionId: res.headers.get("mcp-session-id"), text: await res.text() }
 }
@@ -153,6 +153,11 @@ const maybePrime = async () => {
   if (event !== "sessionstart" && event !== "session_start") return
   const url = readMcpUrl()
   if (!url) return
+  // One overall budget across all three priming round-trips, so a slow/unresponsive
+  // MCP server can't hold the provider's SessionStart hook open for 3×1500ms.
+  // Priming is best-effort (the spawn prompt also carries it), so if the budget
+  // blows we just skip and let the provider start.
+  const deadline = AbortSignal.timeout(2000)
   try {
     const init = await postMcp(url, {
       jsonrpc: "2.0",
@@ -163,14 +168,15 @@ const maybePrime = async () => {
         capabilities: {},
         clientInfo: { name: "arc-hook-prime", version: String(HELPER_VERSION) },
       },
-    })
+    }, null, deadline)
     const sessionId = init.sessionId
     if (!sessionId) return
-    await postMcp(url, { jsonrpc: "2.0", method: "notifications/initialized", params: {} }, sessionId)
+    await postMcp(url, { jsonrpc: "2.0", method: "notifications/initialized", params: {} }, sessionId, deadline)
     const prime = await postMcp(
       url,
       { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "arc.prime", arguments: {} } },
       sessionId,
+      deadline,
     )
     const payload = parseMcpPayload(prime.text)
     const context = payload?.result?.structuredContent

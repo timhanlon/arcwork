@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from "effect"
+import * as Semaphore from "effect/Semaphore"
 import { nowIso } from "../clock.js"
 import { arcId, newArcId } from "../../shared/ids.js"
 import type { TargetMessageRow } from "../db/schema.js"
@@ -52,30 +53,43 @@ export const TargetInboxServiceLive = Layer.effect(
     const sessions = yield* TargetSessionManager
     const liveStates = yield* LiveTargetStateService
 
+    // Serialize flushes so the read-pending → submit → ack window can't overlap:
+    // the enqueue path and the controller's turn-close path both call `flushTo`,
+    // and without this lock both could read the same pending rows and paste the
+    // batch twice before either ack commits. One global permit (not per-session)
+    // keeps it simple and is cheap — a flush is an in-memory check plus a PTY
+    // write; the loser re-reads and finds the rows already delivered. Ack stays
+    // on-surface (stamped only after an accepted paste), so crash-safety holds.
+    const flushLock = yield* Semaphore.make(1)
+
     const flushTo = (targetSessionId: string): Effect.Effect<void, never> =>
-      Effect.gen(function* () {
-        const states = yield* liveStates.list
-        // "idle" already implies attached + not exited + no open turn + no
-        // pending question/permission (see deriveActivity) — exactly when a
-        // pasted turn is safe. Any other activity: leave it queued.
-        if (states.find((s) => s.targetSessionId === targetSessionId)?.activity !== "idle") return
-        const pending = yield* store.listPendingTargetMessages(targetSessionId)
-        if (pending.length === 0) return
-        const { accepted } = yield* sessions.submit({
-          instanceId: targetSessionId,
-          text: formatBatch(pending),
-        })
-        if (!accepted) return // no live PTY — leave pending, retry on the next idle
-        const deliveredAt = yield* nowIso
-        yield* store.markTargetMessagesDelivered(
-          pending.map((p) => p.id),
-          deliveredAt,
+      flushLock
+        .withPermits(1)(
+          Effect.gen(function* () {
+            const states = yield* liveStates.list
+            // "idle" already implies attached + not exited + no open turn + no
+            // pending question/permission (see deriveActivity) — exactly when a
+            // pasted turn is safe. Any other activity: leave it queued.
+            if (states.find((s) => s.targetSessionId === targetSessionId)?.activity !== "idle") return
+            const pending = yield* store.listPendingTargetMessages(targetSessionId)
+            if (pending.length === 0) return
+            const { accepted } = yield* sessions.submit({
+              instanceId: targetSessionId,
+              text: formatBatch(pending),
+            })
+            if (!accepted) return // no live PTY — leave pending, retry on the next idle
+            const deliveredAt = yield* nowIso
+            yield* store.markTargetMessagesDelivered(
+              pending.map((p) => p.id),
+              deliveredAt,
+            )
+          }),
         )
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning(`target inbox flush failed (${targetSessionId}): ${cause}`),
-        ),
-      )
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning(`target inbox flush failed (${targetSessionId}): ${cause}`),
+          ),
+        )
 
     const enqueue = (targetSessionId: string, body: string, sender?: string): Effect.Effect<void, never> =>
       Effect.gen(function* () {
