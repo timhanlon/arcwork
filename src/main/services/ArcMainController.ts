@@ -8,6 +8,7 @@ import { HookSignalServer } from "./HookSignalServer.js"
 import { ActivityEventService } from "./ActivityEventService.js"
 import { ChatMessageService } from "./ChatMessageService.js"
 import { LiveTargetStateService } from "./LiveTargetStateService.js"
+import { TargetInboxService } from "./TargetInboxService.js"
 import { RawHookSignalService } from "./RawHookSignalService.js"
 import { ArtifactIngestService } from "./ArtifactIngestService.js"
 import { ingestHookSignal } from "./HookSignalIngestion.js"
@@ -164,6 +165,7 @@ export const launchArcMainController = (
   | ActivityEventService
   | ChatMessageService
   | LiveTargetStateService
+  | TargetInboxService
   | ArtifactIngestService
   | WorkService
   | GitService
@@ -175,6 +177,7 @@ export const launchArcMainController = (
     const activityEvents = yield* ActivityEventService
     const chatMessages = yield* ChatMessageService
     const liveStates = yield* LiveTargetStateService
+    const inbox = yield* TargetInboxService
     const artifactIngest = yield* ArtifactIngestService
     const work = yield* WorkService
     const git = yield* GitService
@@ -495,6 +498,9 @@ export const launchArcMainController = (
           const lifecycle = turnLifecycle(signal)
           if (lifecycle && signal.arcTargetSessionId) {
             yield* liveStates.noteTurn(signal.arcTargetSessionId, lifecycle === "open")
+            // A closing turn is the moment a busy target becomes idle — flush any
+            // messages that queued while it was mid-turn. Best-effort (never fails).
+            if (lifecycle === "close") yield* inbox.flushTo(signal.arcTargetSessionId)
           }
           if (shouldBackfillArtifacts(signal) && signal.cwd) {
             // Only the session that just stopped changed — persist just it (the

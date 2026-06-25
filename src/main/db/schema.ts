@@ -140,6 +140,17 @@ export interface ChatRow {
   readonly createdAt: string
 }
 
+/** A message queued for delivery into a running target session (see the
+ * `0011_target_messages` migration). `deliveredAt` NULL = still pending. */
+export interface TargetMessageRow {
+  readonly id: string
+  readonly targetSessionId: TargetId
+  readonly body: string
+  readonly sender: string | null
+  readonly createdAt: string
+  readonly deliveredAt: string | null
+}
+
 /** A communication endpoint — the "where turns flow" half of a worker: the
  * harness/provider, the (eventually selectable) model, and a preset. `kind` is
  * `'local'` today; the remote tier adds `'remote'`/`'cloudflare-sandbox'`
@@ -864,4 +875,20 @@ export const arcMigrations: Migrations = {
     yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS target_sessions_workspace ON target_sessions(workspace_id)`)
     yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS target_sessions_manual_slot ON target_sessions(chat_id, provider, origin, state, started_at)`)
   }),
+  // A per-target-session inbox of messages to deliver INTO a running agent (a
+  // parent's follow-up, a user nudge, a peer message). `delivered_at` is the
+  // ack: NULL = still pending, set only once the message has been surfaced to
+  // the agent (pasted into its PTY). Ack-on-surface means a crash before
+  // delivery leaves the row pending, so it redelivers on the next idle turn.
+  "0011_target_messages": sqlMigration(
+    `CREATE TABLE IF NOT EXISTS target_messages (
+      id TEXT PRIMARY KEY,
+      target_session_id TEXT NOT NULL REFERENCES target_sessions(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      sender TEXT,
+      created_at TEXT NOT NULL,
+      delivered_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS target_messages_pending ON target_messages(target_session_id, delivered_at, created_at, id)`,
+  ),
 }

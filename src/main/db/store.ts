@@ -7,6 +7,7 @@ import {
   type ChatMessageRow,
   type ChatRow,
   type RawHookSignalRow,
+  type TargetMessageRow,
   type TargetSessionRow,
   type WorkspaceRow,
 } from "./schema.js"
@@ -56,6 +57,17 @@ export class ArcStore extends Context.Service<
       nativeTranscriptPath?: string | null,
     ) => Effect.Effect<void, SqlError>
     readonly setTargetSessionState: (id: string, state: string) => Effect.Effect<void, SqlError>
+    /** Queue a message for delivery into a running target session's inbox. */
+    readonly enqueueTargetMessage: (row: TargetMessageRow) => Effect.Effect<void, SqlError>
+    /** Undelivered (`delivered_at IS NULL`) messages for a target, oldest first. */
+    readonly listPendingTargetMessages: (
+      targetSessionId: string,
+    ) => Effect.Effect<ReadonlyArray<TargetMessageRow>, SqlError>
+    /** Ack messages as surfaced — stamps `delivered_at`. No-op for an empty list. */
+    readonly markTargetMessagesDelivered: (
+      ids: ReadonlyArray<string>,
+      deliveredAt: string,
+    ) => Effect.Effect<void, SqlError>
     readonly insertActivityEvent: (row: ActivityEventRow) => Effect.Effect<boolean, SqlError>
     readonly loadActivityEvents: (
       targetSessionId: string,
@@ -419,6 +431,31 @@ export const ArcStoreLive = Layer.effect(
 
     const setTargetSessionState = (id: string, state: string) =>
       sql`UPDATE target_sessions SET state = ${state} WHERE id = ${id}`.pipe(Effect.asVoid)
+
+    const enqueueTargetMessage = (row: TargetMessageRow) =>
+      sql`INSERT INTO target_messages ${sql.insert({
+        id: row.id,
+        targetSessionId: row.targetSessionId,
+        body: row.body,
+        sender: row.sender,
+        createdAt: row.createdAt,
+        deliveredAt: row.deliveredAt,
+      })}`.pipe(Effect.asVoid)
+
+    const listPendingTargetMessages = (targetSessionId: string) =>
+      sql<TargetMessageRow>`
+        SELECT id, target_session_id AS targetSessionId, body, sender,
+               created_at AS createdAt, delivered_at AS deliveredAt
+        FROM target_messages
+        WHERE target_session_id = ${targetSessionId} AND delivered_at IS NULL
+        ORDER BY created_at, id`
+
+    const markTargetMessagesDelivered = (ids: ReadonlyArray<string>, deliveredAt: string) =>
+      ids.length === 0
+        ? Effect.void
+        : sql`UPDATE target_messages SET delivered_at = ${deliveredAt} WHERE id IN ${sql.in(ids)}`.pipe(
+            Effect.asVoid,
+          )
 
     const insertActivityEvent = (row: ActivityEventRow) =>
       Effect.gen(function* () {
@@ -888,6 +925,9 @@ export const ArcStoreLive = Layer.effect(
       upsertTargetSession,
       setNativeSessionId,
       setTargetSessionState,
+      enqueueTargetMessage,
+      listPendingTargetMessages,
+      markTargetMessagesDelivered,
       insertActivityEvent,
       loadActivityEvents,
       loadActivityEventsForChat,

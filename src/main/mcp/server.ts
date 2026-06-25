@@ -28,6 +28,7 @@ import {
 import { arcId, ChatId, TargetId, WorkId, WorkspaceId } from "../../shared/ids.js"
 import { WorkService } from "../work/service.js"
 import { TargetSessionManager } from "../services/TargetSessionManager.js"
+import { TargetInboxService } from "../services/TargetInboxService.js"
 import { ChatService } from "../services/ChatService.js"
 import { arcRequestError } from "../errors.js"
 import { ReadService } from "../read/service.js"
@@ -184,6 +185,22 @@ const PrimeTool = Tool.make("arc.prime", {
   success: PrimeResult,
 })
 
+const AgentSendResult = Schema.Struct({
+  queued: Schema.Boolean,
+  targetSessionId: TargetId,
+})
+
+const AgentSendTool = Tool.make("arc.agent.send", {
+  description:
+    "Send a message INTO a running orchestrated target session (a follow-up, a correction, a peer message). The message is queued on that target's inbox and delivered as its next turn when it is idle — pasted into its live session — or held until its current turn ends. Use this to talk to an agent you spawned with arc.agent.spawn; `targetSessionId` is the id that spawn returned. `from` optionally labels the sender.",
+  parameters: Schema.Struct({
+    targetSessionId: TargetId,
+    body: Schema.String,
+    from: Schema.optional(Schema.String),
+  }),
+  success: AgentSendResult,
+})
+
 const ArcToolkit = Toolkit.make(
   SearchTool,
   GetTool,
@@ -191,6 +208,7 @@ const ArcToolkit = Toolkit.make(
   WorkUpdateTool,
   AgentSpawnTool,
   PrimeTool,
+  AgentSendTool,
 )
 
 /**
@@ -239,6 +257,7 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
     const read = yield* ReadService
     const sessions = yield* TargetSessionManager
     const chats = yield* ChatService
+    const inbox = yield* TargetInboxService
 
     return {
       // A client can't know its own chatId — that's transport context — so
@@ -392,6 +411,19 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
               priority: w.priority,
             })),
           }
+        }).pipe(Effect.orDie),
+
+      "arc.agent.send": (params) =>
+        Effect.gen(function* () {
+          // Fail loud on an unknown/dead target rather than silently queuing into
+          // the void — the caller should know the agent isn't there to receive it.
+          const sessionList = yield* sessions.list
+          const target = sessionList.find((s) => s.id === params.targetSessionId)
+          if (!target) {
+            return yield* Effect.fail(arcRequestError(`unknown target session: ${params.targetSessionId}`))
+          }
+          yield* inbox.enqueue(params.targetSessionId, params.body, params.from)
+          return { queued: true, targetSessionId: params.targetSessionId }
         }).pipe(Effect.orDie),
     }
   }),

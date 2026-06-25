@@ -10,6 +10,7 @@ import { sqliteLayer } from "../src/main/db/sqlite.js"
 import { ReadService } from "../src/main/read/service.js"
 import { ChatService } from "../src/main/services/ChatService.js"
 import { TargetSessionManager } from "../src/main/services/TargetSessionManager.js"
+import { TargetInboxService } from "../src/main/services/TargetInboxService.js"
 import { WORK_STATUSES } from "../src/shared/work.js"
 
 /**
@@ -35,6 +36,7 @@ const StubServices = Layer.mergeAll(
   Layer.succeed(ReadService, {} as never),
   Layer.succeed(ChatService, {} as never),
   Layer.succeed(TargetSessionManager, {} as never),
+  Layer.succeed(TargetInboxService, {} as never),
 )
 
 const EXPECTED_TOOLS = [
@@ -44,6 +46,7 @@ const EXPECTED_TOOLS = [
   "arc.work.update",
   "arc.agent.spawn",
   "arc.prime",
+  "arc.agent.send",
 ] as const
 
 interface PostResult {
