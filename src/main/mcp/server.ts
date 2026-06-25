@@ -223,23 +223,49 @@ const ArcToolkit = Toolkit.make(
  * Composer) otherwise grep the repo for `arc.prime`, or try to run it as a shell
  * command (`which arc; arc prime`), instead of invoking it as the MCP tool it is.
  */
-const buildOrchestrationPrompt = (work: Work, instructions: string | undefined): string => {
+/** The exact tool name a spawned provider's model sees for an `arc.<verb>` MCP
+ * tool. Every client collapses the dotted MCP name to `arc_<verb>` and namespaces
+ * the server its own way, so a prompt that names a tool in prose must use that
+ * client's flattened string — otherwise the model is told to call `arc.prime`
+ * while its tool list only holds `mcp__arc__arc_prime`, and (esp. weaker models
+ * like Cursor's Composer) decides the tool is missing and shells out to `arc`.
+ * This is the forward of the renderer's `arc-tool-name.ts` parsing; keep the two
+ * prefix lists in sync. */
+const mcpToolName = (provider: string, dottedName: string): string => {
+  const base = dottedName.replaceAll(".", "_") // arc.work.update -> arc_work_update
+  switch (provider) {
+    case "claude":
+      return `mcp__arc__${base}`
+    case "cursor":
+      return `mcp_plugin-arc-work-arc_${base}` // orchestrated per-session plugin dir
+    default:
+      return base // codex, pi: server prefix only, no client namespace
+  }
+}
+
+const buildOrchestrationPrompt = (
+  provider: string,
+  work: Work,
+  instructions: string | undefined,
+): string => {
+  const name = (verb: string): string => mcpToolName(provider, verb)
   const header =
     "You are an agent spawned by Arc Work to carry out an assigned unit of work. " +
-    "Arc gives you `arc.prime`, `arc.work.update`, `arc.get`, and `arc.search` as " +
+    `Arc gives you \`${name("arc.prime")}\`, \`${name("arc.work.update")}\`, ` +
+    `\`${name("arc.get")}\`, and \`${name("arc.search")}\` as ` +
     "MCP TOOLS in your available-tools list — already connected in this session. " +
     "They are NOT shell commands: there is no `arc` CLI, so never run `arc ...` in a " +
     "terminal, and never grep or list the repo to check whether they exist. Invoke " +
-    "them directly as tool calls. If a call is rejected or errors, stop and report " +
-    "the exact error; never conclude the tools are missing."
+    "them directly as tool calls by these exact names. If a call is rejected or " +
+    "errors, stop and report the exact error; never conclude the tools are missing."
   const steps =
     "Do these in order:\n" +
-    "1. Invoke the `arc.prime` tool FIRST to load your full assignment and context.\n" +
+    `1. Invoke the \`${name("arc.prime")}\` tool FIRST to load your full assignment and context.\n` +
     "2. Carry out the work.\n" +
-    "3. Invoke the `arc.work.update` tool as you go — comment on progress and " +
+    `3. Invoke the \`${name("arc.work.update")}\` tool as you go — comment on progress and ` +
     "blockers, and set status to `done` only once the work is actually complete. " +
-    "Reporting back via `arc.work.update` is part of finishing, not optional.\n" +
-    "(The `arc.search` / `arc.get` tools read the work graph if you need more context.)"
+    `Reporting back via \`${name("arc.work.update")}\` is part of finishing, not optional.\n` +
+    `(The \`${name("arc.search")}\` / \`${name("arc.get")}\` tools read the work graph if you need more context.)`
   const assignment = `Assigned work ${work.id} [${work.priority}/${work.status}]: ${work.title}\n\n${work.body}`
   const task = instructions?.trim()
   return [header, steps, assignment, task ? `Task:\n${task}` : undefined].filter(Boolean).join("\n\n")
@@ -365,7 +391,9 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
           // Resolve the assigned work first so its context can be pushed into the
           // launch prompt (priming), then minted into the spawned session below.
           const work0 = params.workRefId ? yield* work.get(params.workRefId) : null
-          const prompt = work0 ? buildOrchestrationPrompt(work0, params.instructions) : params.instructions
+          const prompt = work0
+            ? buildOrchestrationPrompt(params.provider, work0, params.instructions)
+            : params.instructions
           const session = yield* sessions.launch({
             provider: params.provider,
             chatId,

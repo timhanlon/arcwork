@@ -174,6 +174,20 @@ export default function (pi) {
     },
   })
   pi.registerTool({
+    name: "arc_agent_spawn",
+    label: "Arc: spawn agent",
+    description: "Spawn a new provider-backed Arc agent (target session) to delegate work to. Returns the new agent's target session id — message it later with arc_agent_send. To have the new agent report back to you, call arc_prime first for your own target.id and pass it in its instructions.",
+    parameters: Type.Object({
+      provider: Type.String({ description: "provider to launch, e.g. pi" }),
+      instructions: Type.Optional(Type.String({ description: "task/prompt for the new agent" })),
+      preset: Type.Optional(Type.String({ description: "model/preset for the new agent" })),
+      workRefId: Type.Optional(Type.String({ description: "a work_… id to durably assign to the new agent" })),
+    }),
+    async execute(_id, params) {
+      try { return ok(await callArcTool("arc.agent.spawn", params)) } catch (e) { return fail(e) }
+    },
+  })
+  pi.registerTool({
     name: "arc_agent_send",
     label: "Arc: message agent",
     description: "Send a message into another running Arc agent (target session).",
