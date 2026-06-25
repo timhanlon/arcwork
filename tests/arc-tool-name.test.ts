@@ -1,15 +1,16 @@
 import { describe, expect, it } from "vitest"
 import { arcVerb, arcToolLabel, isArcTool } from "../src/renderer/src/chat/tool-calls/arc-tool-name.js"
 
-// The renderer must recognise arc MCP tool calls across the three name shapes the
-// target CLIs flatten them into (Claude `mcp__arc__arc_*`, Cursor `mcp_arc_arc_*`,
-// Codex bare `arc_*`) and recover the same verb from each, so a `work.update` call
-// renders identically whoever made it. Pure string logic; see arc-tool-name.ts.
+// The renderer must recognise arc MCP tool calls across the name shapes the target
+// CLIs flatten them into (Claude `mcp__arc__arc_*`, Cursor's plugin server
+// `mcp_plugin-arc-work-arc_arc_*`, Codex bare `arc_*`) and recover the same verb
+// from each, so a `work.update` call renders identically whoever made it. Pure
+// string logic; see arc-tool-name.ts.
 
 describe("arc tool-name parsing across CLI formats", () => {
   const cases = [
     { cli: "Claude", name: "mcp__arc__arc_work_update" },
-    { cli: "Cursor", name: "mcp_arc_arc_work_update" },
+    { cli: "Cursor", name: "mcp_plugin-arc-work-arc_arc_work_update" },
     { cli: "Codex", name: "arc_work_update" },
   ] as const
 
@@ -30,7 +31,15 @@ describe("arc tool-name parsing across CLI formats", () => {
   it("handles other arc verbs and the create door", () => {
     expect(arcVerb("arc_work_create")).toBe("work_create")
     expect(arcVerb("mcp__arc__arc_search")).toBe("search")
-    expect(arcVerb("mcp_arc_arc_handoff_report")).toBe("handoff_report")
+    expect(arcVerb("mcp_plugin-arc-work-arc_arc_handoff_report")).toBe("handoff_report")
+  })
+
+  it("still recognises Cursor's legacy home `~/.cursor/mcp.json` server shape", () => {
+    // The orchestrated path uses the plugin server; a manually-configured home
+    // server named "arc" emits `mcp_arc_arc_*` and must keep rendering as arc.
+    expect(isArcTool("mcp_arc_arc_work_update")).toBe(true)
+    expect(arcVerb("mcp_arc_arc_prime")).toBe("prime")
+    expect(arcToolLabel("mcp_plugin-arc-work-arc_arc_work_update")).toBe("arc.work.update")
   })
 
   it("labels the dotted public names for create/update, leaving real underscores intact", () => {
