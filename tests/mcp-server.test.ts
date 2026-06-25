@@ -8,6 +8,8 @@ import { WorkService, WorkServiceLive } from "../src/main/work/service.js"
 import { WorkStoreLive } from "../src/main/work/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
 import { ReadService } from "../src/main/read/service.js"
+import { ChatService } from "../src/main/services/ChatService.js"
+import { TargetSessionManager } from "../src/main/services/TargetSessionManager.js"
 import { WORK_STATUSES } from "../src/shared/work.js"
 
 /**
@@ -31,6 +33,8 @@ const RealWorkService = WorkServiceLive.pipe(
 const StubServices = Layer.mergeAll(
   RealWorkService,
   Layer.succeed(ReadService, {} as never),
+  Layer.succeed(ChatService, {} as never),
+  Layer.succeed(TargetSessionManager, {} as never),
 )
 
 const EXPECTED_TOOLS = [
@@ -38,6 +42,8 @@ const EXPECTED_TOOLS = [
   "arc.get",
   "arc.work.create",
   "arc.work.update",
+  "arc.agent.spawn",
+  "arc.prime",
 ] as const
 
 interface PostResult {

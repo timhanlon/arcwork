@@ -21,12 +21,21 @@ export const provenanceFromEnv = (): ArcMcpProvenanceIds => ({
   chatId: process.env[ArcEnvTags.chatId] || undefined,
 })
 
+/** A bearer segment is trusted only if it's a well-formed TypeID for its prefix.
+ * Mirrors `ArcId`'s own suffix pattern (26 Crockford-base32 chars). This is the
+ * guard that keeps an un-interpolated placeholder bearer (e.g. Cursor shipping
+ * the literal `${env:ARC_MCP_TOKEN}`, which splits into `${env` / `ARC_MCP_TOKEN}`)
+ * from being stamped as session/chat provenance and crashing write encoding. */
+const TYPEID_SUFFIX = "[0-9a-hjkmnp-tv-z]{26}"
+const wellFormedArcId = (prefix: string, value: string | undefined): string | undefined =>
+  value && new RegExp(`^${prefix}_${TYPEID_SUFFIX}$`).test(value) ? value : undefined
+
 export const provenanceFromBearerToken = (authorization: string | undefined): ArcMcpProvenanceIds => {
   if (!authorization?.startsWith(BEARER_PREFIX)) return {}
   const [sessionId, chatId] = authorization.slice(BEARER_PREFIX.length).split(":", 2)
   return {
-    sessionId: sessionId || undefined,
-    chatId: chatId || undefined,
+    sessionId: wellFormedArcId("target", sessionId),
+    chatId: wellFormedArcId("chat", chatId),
   }
 }
 

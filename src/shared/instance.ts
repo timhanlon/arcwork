@@ -21,6 +21,9 @@ export const TargetState = Schema.Literals([
 ])
 export type TargetState = typeof TargetState.Type
 
+export const TargetOrigin = Schema.Literals(["manual", "orchestrated"])
+export type TargetOrigin = typeof TargetOrigin.Type
+
 export const Run = Schema.Struct({
   _tag: Schema.Literal("Run"),
   id: RunId,
@@ -35,6 +38,7 @@ export const TargetSession = Schema.Struct({
   _tag: Schema.Literal("TargetSession"),
   id: TargetId,
   provider: Schema.String,
+  origin: Schema.optional(TargetOrigin),
   preset: Schema.optional(Schema.String),
   chatId: ChatId, // the chat this session belongs to
   cwd: Schema.String, // worktree root — the instance binding

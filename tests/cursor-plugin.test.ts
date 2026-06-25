@@ -23,16 +23,25 @@ describe("buildCursorPluginFiles", () => {
     expect(m["mcpServers"]).toBe("mcp.json")
   })
 
-  it("declares the arc HTTP+bearer MCP server on the dev profile's port (cursor's ${env:VAR} form)", () => {
+  it("declares the arc HTTP+bearer MCP server on the dev profile's port (env form when no session bearer)", () => {
     expect(parse("mcp.json")["mcpServers"]).toEqual({
       arc: { url: "http://127.0.0.1:7794/mcp", headers: { Authorization: "Bearer ${env:ARC_MCP_TOKEN}" } },
     })
   })
 
+  it("bakes a session bearer in literally when given (Cursor won't interpolate ${env:…} in headers)", () => {
+    const withToken = buildCursorPluginFiles(HELPER, "dev", "target_abc:chat_xyz")
+    expect((JSON.parse(withToken["mcp.json"]!) as Record<string, unknown>)["mcpServers"]).toEqual({
+      arc: { url: "http://127.0.0.1:7794/mcp", headers: { Authorization: "Bearer target_abc:chat_xyz" } },
+    })
+  })
+
   it("wires every cursor hook event to the Arc-owned helper", () => {
-    const hooks = parse("hooks/hooks.json")["hooks"] as Record<string, Array<{ command: string }>>
+    const root = parse("hooks/hooks.json")
+    const hooks = root["hooks"] as Record<string, Array<{ command: string }>>
     expect(Object.keys(hooks).sort()).toEqual([...CURSOR_EVENTS].sort())
-    // each event invokes `node "<helper>" cursor <event>` — quoted, path-correct
+    // each event invokes `node "<helper>" cursor <event>` in the plugin hook
+    // block shape Cursor-native plugins load.
     for (const event of CURSOR_EVENTS) {
       expect(hooks[event]).toEqual([{ command: `node ${JSON.stringify(HELPER)} cursor ${event}` }])
     }

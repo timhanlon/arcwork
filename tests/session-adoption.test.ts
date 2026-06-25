@@ -46,6 +46,16 @@ describe("unadoptedSessions", () => {
     expect(unadoptedSessions([s], panes)).toEqual([])
   })
 
+  it("adopts an orchestrated same-provider session while a manual launch is mid-bind", () => {
+    const s = session({
+      id: arcId("target", "target_worker"),
+      provider: "cursor",
+      origin: "orchestrated",
+    })
+    const panes = [pane({ id: arcId("pane", "pane_2"), provider: "cursor", chatId: arcId("chat", "chat_a") })]
+    expect(unadoptedSessions([s], panes)).toEqual([s])
+  })
+
   it("still adopts when an unbound pane is for a different (provider, chat)", () => {
     const s = session({ id: arcId("target", "target_mcp"), provider: "cursor", chatId: arcId("chat", "chat_a") })
     const panes = [pane({ id: arcId("pane", "pane_3"), provider: "claude", chatId: arcId("chat", "chat_b") })]

@@ -18,14 +18,18 @@ import {
   WorkPriority,
   WorkStatus,
 } from "../../shared/work.js"
+import { Chat } from "../../shared/chat.js"
+import { TargetSession } from "../../shared/instance.js"
 import {
   ArcGetParams,
   ArcGetResult,
   ArcSearchParams,
   ArcSearchResult,
 } from "../../shared/read.js"
-import { arcId, ChatId, WorkId } from "../../shared/ids.js"
+import { arcId, ChatId, WorkId, WorkspaceId } from "../../shared/ids.js"
 import { WorkService } from "../work/service.js"
+import { TargetSessionManager } from "../services/TargetSessionManager.js"
+import { ChatService } from "../services/ChatService.js"
 import { arcRequestError } from "../errors.js"
 import { ReadService } from "../read/service.js"
 import { resolveArcDb } from "../db/paths.js"
@@ -71,6 +75,17 @@ const MCP_PATH = ARC_MCP_PATH
 const WorkUpdateResult = Schema.Struct({
   work: Work,
   comment: Schema.optional(WorkComment),
+})
+
+const AgentSpawnResult = Schema.Struct({
+  session: TargetSession,
+  assignedWork: Schema.optional(Work),
+})
+
+const PrimeResult = Schema.Struct({
+  chat: Schema.optional(Chat),
+  target: Schema.optional(TargetSession),
+  assignedWork: Schema.Array(Work),
 })
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
@@ -131,12 +146,74 @@ const WorkUpdateTool = Tool.make("arc.work.update", {
   success: WorkUpdateResult,
 })
 
+const AgentSpawnTool = Tool.make("arc.agent.spawn", {
+  description:
+    "Spawn a new provider-backed Arc target session for orchestration. The spawned agent is a normal PTY-backed target session visible in Arc Work; same-provider sessions in one chat are allowed. Pass `workRefId` to durably assign work to the new target session. By default this mints a fresh `target_…`; reuse requires an explicit future target-session operation, not this spawn tool.",
+  parameters: Schema.Struct({
+    provider: Schema.String,
+    chatId: Schema.optional(ChatId),
+    workspaceId: Schema.optional(WorkspaceId),
+    workRefId: Schema.optional(WorkId),
+    instructions: Schema.optional(Schema.String),
+    preset: Schema.optional(Schema.String),
+    cols: Schema.optional(Schema.Number),
+    rows: Schema.optional(Schema.Number),
+  }),
+  success: AgentSpawnResult,
+})
+
+const PrimeTool = Tool.make("arc.prime", {
+  description:
+    "Return startup context for the current Arc-launched target session: the chat it belongs to, target session metadata, and work currently delegated to that target. This is read-only and derives target/chat from MCP transport provenance; `sessionId`/`chatId` are fallback params for clients without stamped headers.",
+  parameters: Schema.Struct({
+    sessionId: Schema.optional(Schema.String),
+    chatId: Schema.optional(ChatId),
+  }),
+  success: PrimeResult,
+})
+
 const ArcToolkit = Toolkit.make(
   SearchTool,
   GetTool,
   WorkCreateTool,
   WorkUpdateTool,
+  AgentSpawnTool,
+  PrimeTool,
 )
+
+/**
+ * Orchestration priming, pushed into the spawn prompt rather than pulled via a
+ * SessionStart hook: prepend the assigned work to the caller's instructions so a
+ * freshly launched agent starts already oriented on what it was delegated. The
+ * prompt is delivered by each provider's normal injection (cursor stdin paste,
+ * claude `--prefill`, …); `arc.prime` stays available for an already-running
+ * agent to re-fetch the same context on demand.
+ *
+ * The wording is deliberately blunt and MCP-first: weaker models (e.g. Cursor's
+ * Composer) otherwise grep the repo for `arc.prime`, or try to run it as a shell
+ * command (`which arc; arc prime`), instead of invoking it as the MCP tool it is.
+ */
+const buildOrchestrationPrompt = (work: Work, instructions: string | undefined): string => {
+  const header =
+    "You are an agent spawned by Arc Work to carry out an assigned unit of work. " +
+    "Arc gives you `arc.prime`, `arc.work.update`, `arc.get`, and `arc.search` as " +
+    "MCP TOOLS in your available-tools list — already connected in this session. " +
+    "They are NOT shell commands: there is no `arc` CLI, so never run `arc ...` in a " +
+    "terminal, and never grep or list the repo to check whether they exist. Invoke " +
+    "them directly as tool calls. If a call is rejected or errors, stop and report " +
+    "the exact error; never conclude the tools are missing."
+  const steps =
+    "Do these in order:\n" +
+    "1. Invoke the `arc.prime` tool FIRST to load your full assignment and context.\n" +
+    "2. Carry out the work.\n" +
+    "3. Invoke the `arc.work.update` tool as you go — comment on progress and " +
+    "blockers, and set status to `done` only once the work is actually complete. " +
+    "Reporting back via `arc.work.update` is part of finishing, not optional.\n" +
+    "(The `arc.search` / `arc.get` tools read the work graph if you need more context.)"
+  const assignment = `Assigned work ${work.id} [${work.priority}/${work.status}]: ${work.title}\n\n${work.body}`
+  const task = instructions?.trim()
+  return [header, steps, assignment, task ? `Task:\n${task}` : undefined].filter(Boolean).join("\n\n")
+}
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 // Services are acquired once in the build effect and closed over; each handler
@@ -148,6 +225,8 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
   Effect.gen(function* () {
     const work = yield* WorkService
     const read = yield* ReadService
+    const sessions = yield* TargetSessionManager
+    const chats = yield* ChatService
 
     return {
       // A client can't know its own chatId — that's transport context — so
@@ -243,6 +322,52 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
             result = loaded
           }
           return { work: result, comment }
+        }).pipe(Effect.orDie),
+
+      "arc.agent.spawn": (params) =>
+        Effect.gen(function* () {
+          const { chatId: headerChatId } = yield* readMcpProvenanceHeaders()
+          const chatId = params.chatId ?? (headerChatId ? arcId("chat", headerChatId) : undefined)
+          if (!chatId) {
+            return yield* Effect.fail(arcRequestError("arc.agent.spawn requires chatId or MCP chat provenance"))
+          }
+          // Resolve the assigned work first so its context can be pushed into the
+          // launch prompt (priming), then minted into the spawned session below.
+          const work0 = params.workRefId ? yield* work.get(params.workRefId) : null
+          const prompt = work0 ? buildOrchestrationPrompt(work0, params.instructions) : params.instructions
+          const session = yield* sessions.launch({
+            provider: params.provider,
+            chatId,
+            workspaceId: params.workspaceId,
+            preset: params.preset,
+            prompt,
+            autoSubmit: true,
+            cols: params.cols,
+            rows: params.rows,
+            origin: "orchestrated",
+            reuseExisting: false,
+          })
+          let assignedWork: Work | undefined
+          if (params.workRefId) {
+            const provenance = yield* resolveMcpWriteProvenance({ chatId, sessionId: session.id })
+            assignedWork = yield* work.linkTargetSession(params.workRefId, session.id, provenance, "orchestrated spawn")
+          }
+          return { session, assignedWork }
+        }).pipe(Effect.orDie),
+
+      "arc.prime": (params) =>
+        Effect.gen(function* () {
+          const ids = yield* readMcpProvenanceHeaders()
+          const sessionId = params.sessionId ?? ids.sessionId
+          const chatId = params.chatId ?? (ids.chatId ? arcId("chat", ids.chatId) : undefined)
+          const sessionList = yield* sessions.list
+          const target = sessionId ? sessionList.find((s) => s.id === sessionId) : undefined
+          const chatList = yield* chats.list
+          const chat = (target?.chatId ?? chatId) ? chatList.find((c) => c.id === (target?.chatId ?? chatId)) : undefined
+          const assignedWork = sessionId
+            ? (yield* work.listDelegatedTo(arcId("target", sessionId))).map((d) => d.work)
+            : []
+          return { chat, target, assignedWork }
         }).pipe(Effect.orDie),
     }
   }),

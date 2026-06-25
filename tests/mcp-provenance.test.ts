@@ -45,13 +45,15 @@ describe("MCP provenance headers", () => {
     expect(mergeProvenanceIds({}, { sessionId: "from-param" })).toEqual({ sessionId: "from-param" })
   })
 
+  // Real TypeIDs — the bearer parser enforces the full `prefix_<26 base32>` shape,
+  // so a toy `target_abc`/`chat_xyz` is (correctly) rejected as malformed.
+  const TARGET = "target_01kvy60sapfvmsv62zb4jc9ewk"
+  const CHAT = "chat_01kvy2h0qke8gvv1vt37fzg5tr"
+
   it("round-trips arcMcpBearerToken through the bearer parser", () => {
-    const token = arcMcpBearerToken({ targetSessionId: "target_abc", chatId: "chat_xyz" })
-    expect(token).toBe("target_abc:chat_xyz")
-    expect(provenanceFromBearerToken(`Bearer ${token}`)).toEqual({
-      sessionId: "target_abc",
-      chatId: "chat_xyz",
-    })
+    const token = arcMcpBearerToken({ targetSessionId: TARGET, chatId: CHAT })
+    expect(token).toBe(`${TARGET}:${CHAT}`)
+    expect(provenanceFromBearerToken(`Bearer ${token}`)).toEqual({ sessionId: TARGET, chatId: CHAT })
   })
 
   it("ignores absent or non-Bearer authorization", () => {
@@ -60,10 +62,19 @@ describe("MCP provenance headers", () => {
     expect(provenanceFromBearerToken("Bearer ")).toEqual({})
   })
 
+  it("drops a placeholder bearer the client failed to interpolate", () => {
+    // Cursor ships `${env:ARC_MCP_TOKEN}` verbatim; split on ":" yields `${env` /
+    // `ARC_MCP_TOKEN}`, neither a well-formed id — so nothing is stamped (rather
+    // than poisoning a write's provenance and crashing its result encoding).
+    expect(provenanceFromBearerToken("Bearer ${env:ARC_MCP_TOKEN}")).toEqual({})
+    // A well-formed prefix but malformed suffix is rejected too.
+    expect(provenanceFromBearerToken("Bearer target_abc:chat_xyz")).toEqual({})
+  })
+
   it("derives provenance from a bearer token on the HTTP request", () => {
-    expect(provenanceFromHttpHeaders({ authorization: "Bearer target_abc:chat_xyz" })).toEqual({
-      sessionId: "target_abc",
-      chatId: "chat_xyz",
+    expect(provenanceFromHttpHeaders({ authorization: `Bearer ${TARGET}:${CHAT}` })).toEqual({
+      sessionId: TARGET,
+      chatId: CHAT,
     })
   })
 
@@ -71,9 +82,9 @@ describe("MCP provenance headers", () => {
     expect(
       provenanceFromHttpHeaders({
         [ARC_MCP_SESSION_HEADER]: "from-proxy",
-        authorization: "Bearer from-bearer:chat-bearer",
+        authorization: `Bearer ${TARGET}:${CHAT}`,
       }),
-    ).toEqual({ sessionId: "from-proxy", chatId: "chat-bearer" })
+    ).toEqual({ sessionId: "from-proxy", chatId: CHAT })
   })
 })
 

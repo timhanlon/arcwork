@@ -51,6 +51,20 @@ export const providerServerEntry = (
 }
 
 /**
+ * Cursor's `arc` server entry. Cursor does **not** interpolate `${env:…}` inside
+ * MCP request headers, so the `${env:ARC_MCP_TOKEN}` form ships the literal
+ * placeholder as the bearer — the server then parses `${env` / `ARC_MCP_TOKEN}`
+ * as the session/chat ids and poisons every write's provenance. When Arc owns a
+ * per-session plugin dir it knows the `targetSessionId:chatId` at write time and
+ * bakes it in literally (`bearerToken`); the shared/preview path (no token) keeps
+ * the env form so one file can still serve a manually-configured session.
+ */
+export const cursorServerEntry = (profile: ArcProfile, bearerToken?: string): Record<string, unknown> =>
+  bearerToken === undefined
+    ? providerServerEntry("cursor", profile)
+    : { url: defaultArcMcpUrl(profile), headers: { Authorization: `Bearer ${bearerToken}` } }
+
+/**
  * Extra argv that declares the `arc` MCP server to a launched CLI *without*
  * writing a config file into the repo — the repo-clean lever for the auto
  * launch path (Arc owns the spawn argv at `TargetSessionManager`):

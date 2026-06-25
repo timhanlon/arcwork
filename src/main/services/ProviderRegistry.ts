@@ -20,6 +20,7 @@ const providers: ReadonlyArray<ProviderSpec> = [
       // `claude --prefill <text>` seeds the input box without submitting —
       // eliminates the paste-after-ready race (see orca audit).
       draftPromptFlag: "--prefill",
+      readyPromptGlyph: "❯",
     },
   },
   {
@@ -31,7 +32,8 @@ const providers: ReadonlyArray<ProviderSpec> = [
     interactive: {
       launchCmd: "codex",
       expectedProcess: "codex",
-      promptInjectionMode: "argv",
+      promptInjectionMode: "stdin-after-start",
+      readyPromptGlyph: "›",
     },
   },
   {
@@ -45,8 +47,12 @@ const providers: ReadonlyArray<ProviderSpec> = [
     interactive: {
       launchCmd: "cursor-agent",
       expectedProcess: "cursor-agent",
-      // stdin-after-start uses delayed submit in TargetSessionManager (text, then \r).
+      // Paste-after-ready (gated on the `→` glyph below), not a positional argv
+      // prompt: an argv prompt starts turn 1 during early startup, before the
+      // plugin's HTTP MCP servers connect, so the agent's first turn sees no arc
+      // tools. Waiting for the prompt glyph lets MCP come up first.
       promptInjectionMode: "stdin-after-start",
+      readyPromptGlyph: "→",
     },
   },
 ]

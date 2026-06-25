@@ -1,7 +1,7 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { type ArcProfile, arcWorkRuntimeDir, resolveProfile } from "../db/paths.js"
-import { providerMcpLaunchArgs, providerServerEntry } from "../mcp/client-config.js"
+import { cursorServerEntry, providerMcpLaunchArgs } from "../mcp/client-config.js"
 import { CURSOR_EVENTS, ensureArcOwnedHelper } from "./install.js"
 
 /**
@@ -27,8 +27,21 @@ import { CURSOR_EVENTS, ensureArcOwnedHelper } from "./install.js"
  * name, so this must be the product slug, not an implementation label. */
 export const CURSOR_PLUGIN_NAME = "arc-work"
 
-export const cursorPluginDir = (env: NodeJS.ProcessEnv = process.env): string =>
-  path.join(arcWorkRuntimeDir(resolveProfile(env)), CURSOR_PLUGIN_NAME)
+/**
+ * The plugin dir passed to `--plugin-dir`. A `scopeId` (the target session id)
+ * roots it under a per-session subdir so concurrent Cursor agents don't clobber
+ * each other's `mcp.json` — each carries its own session-specific bearer. The
+ * `arc-work` basename is preserved either way, since Cursor's `/plugins` shows
+ * the directory name. No scope → the shared profile-level dir (CLI preview).
+ */
+export const cursorPluginDir = (
+  opts: { env?: NodeJS.ProcessEnv; scopeId?: string } = {},
+): string => {
+  const base = arcWorkRuntimeDir(resolveProfile(opts.env ?? process.env))
+  return opts.scopeId
+    ? path.join(base, "sessions", opts.scopeId, CURSOR_PLUGIN_NAME)
+    : path.join(base, CURSOR_PLUGIN_NAME)
+}
 
 const json = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`
 
@@ -46,6 +59,7 @@ const hookCommand = (helperPath: string, event: string): string =>
 export const buildCursorPluginFiles = (
   helperPath: string,
   profile: ArcProfile,
+  bearerToken?: string,
 ): Record<string, string> => {
   const manifest = {
     name: CURSOR_PLUGIN_NAME,
@@ -56,10 +70,13 @@ export const buildCursorPluginFiles = (
   }
   const hooks = {
     hooks: Object.fromEntries(
-      CURSOR_EVENTS.map((event) => [event, [{ command: hookCommand(helperPath, event) }]]),
+      CURSOR_EVENTS.map((event) => [
+        event,
+        [{ command: hookCommand(helperPath, event) }],
+      ]),
     ),
   }
-  const mcp = { mcpServers: { arc: providerServerEntry("cursor", profile) } }
+  const mcp = { mcpServers: { arc: cursorServerEntry(profile, bearerToken) } }
   return {
     ".cursor-plugin/plugin.json": json(manifest),
     "hooks/hooks.json": json(hooks),
@@ -74,13 +91,18 @@ export interface CursorPluginResult {
 }
 
 /** Ensure the helper exists and (re)write the Arc-owned cursor plugin dir.
- * Best-effort and idempotent — overwrites its own files, never throws. */
-export const installCursorPlugin = (env: NodeJS.ProcessEnv = process.env): CursorPluginResult => {
-  const dir = cursorPluginDir(env)
+ * Best-effort and idempotent — overwrites its own files, never throws. A
+ * `scopeId` (target session id) gives this launch its own dir + `bearerToken`,
+ * so concurrent same-provider agents each carry their own provenance. */
+export const installCursorPlugin = (
+  opts: { env?: NodeJS.ProcessEnv; scopeId?: string; bearerToken?: string } = {},
+): CursorPluginResult => {
+  const env = opts.env ?? process.env
+  const dir = cursorPluginDir({ env, scopeId: opts.scopeId })
   try {
     const helperPath = ensureArcOwnedHelper(env)
     const profile = resolveProfile(env)
-    for (const [rel, content] of Object.entries(buildCursorPluginFiles(helperPath, profile))) {
+    for (const [rel, content] of Object.entries(buildCursorPluginFiles(helperPath, profile, opts.bearerToken))) {
       const abs = path.join(dir, rel)
       fs.mkdirSync(path.dirname(abs), { recursive: true })
       fs.writeFileSync(abs, content)

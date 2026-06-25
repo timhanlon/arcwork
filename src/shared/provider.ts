@@ -50,6 +50,14 @@ export const InteractiveCapability = Schema.Struct({
   draftPromptFlag: Schema.optional(Schema.String),
   /** env prefill when no flag exists (set via the launched session's env) */
   draftPromptEnvVar: Schema.optional(Schema.String),
+  /**
+   * The glyph this CLI prints at its input prompt once the interactive session
+   * (and its MCP servers) is fully up — `❯` claude, `→` cursor, `›` codex.
+   * Arc watches the tail of PTY output for it and only then submits/pastes the
+   * seeded prompt, so a spawned agent's first turn sees its MCP tools rather
+   * than racing connection. Absent → fall back to first-output as the signal.
+   */
+  readyPromptGlyph: Schema.optional(Schema.String),
 })
 export type InteractiveCapability = typeof InteractiveCapability.Type
 

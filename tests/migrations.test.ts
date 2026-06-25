@@ -95,6 +95,29 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
     expect(result.comment).toBe(true)
   })
 
+  it("target sessions are keyed by TypeID, not by chat/provider", async () => {
+    const count = await run(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient
+        yield* runMigrations("arc_migrations", arcMigrations)
+        yield* sql.unsafe(`INSERT INTO workspaces (id, path, name, created_at, last_opened_at)
+          VALUES ('ws_main', '/repo/main', 'main', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+        yield* sql.unsafe(`INSERT INTO chats (id, workspace_id, title, created_at)
+          VALUES ('chat_a', 'ws_main', 'a', '2026-01-01T00:00:00Z')`)
+        yield* sql.unsafe(`INSERT INTO target_sessions
+          (id, chat_id, provider, origin, preset, cwd, native_session_id, native_transcript_path, state, started_at)
+          VALUES
+          ('target_manual', 'chat_a', 'cursor', 'manual', NULL, '/repo/main', NULL, NULL, 'running', '2026-01-02T00:00:00Z'),
+          ('target_worker', 'chat_a', 'cursor', 'orchestrated', NULL, '/repo/main', NULL, NULL, 'running', '2026-01-03T00:00:00Z')`)
+        const rows = yield* sql.unsafe<{ c: number }>(
+          `SELECT count(*) AS c FROM target_sessions WHERE chat_id = 'chat_a' AND provider = 'cursor'`,
+        )
+        return rows[0]?.c ?? 0
+      }),
+    )
+    expect(count).toBe(2)
+  })
+
   it("ingest baseline creates its tables with the folded-in `ordinal` column", async () => {
     const result = await run(
       Effect.gen(function* () {
@@ -148,8 +171,8 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
         yield* sql.unsafe(`INSERT INTO workspaces (id, path, name, created_at, last_opened_at)
           VALUES ('ws_main', '/repo/main', 'main', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
                  ('ws_feat', '/repo/feat', 'feat', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
-        // target_sessions is keyed UNIQUE(chat_id, provider), so the two
-        // claude sessions live on different chats.
+        // Keep the two claude sessions on different chats to mirror the
+        // historical pre-orchestration data this migration upgraded.
         yield* sql.unsafe(`INSERT INTO chats (id, workspace_id, title, created_at)
           VALUES ('chat_a', 'ws_main', 'a', '2026-01-01T00:00:00Z'),
                  ('chat_b', 'ws_feat', 'b', '2026-01-01T00:00:00Z'),

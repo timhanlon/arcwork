@@ -35,7 +35,7 @@ export const ARC_HOOK_SOCK_ENV = "ARC_HOOK_SOCK"
 export const ARC_HOOK_HELPER_ENV = "ARC_HOOK_HELPER"
 export const HELPER_FILENAME = "arc-hook-signal.mjs"
 export const HOOK_SIGNAL_SCHEMA_VERSION = 1
-export const HOOK_SIGNAL_HELPER_VERSION = 1
+export const HOOK_SIGNAL_HELPER_VERSION = 3
 
 /**
  * Absolute path of the Arc-owned hook helper for the current profile. Stable
