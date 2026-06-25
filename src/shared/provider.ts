@@ -26,6 +26,10 @@ export const PromptInjectionMode = Schema.Literals([
   "stdin-after-start",
   "flag-interactive",
   "flag-prompt-interactive",
+  // A long-lived JSONL command stream on stdin (pi `--mode rpc`): prompts are
+  // `{"type":"prompt","message":…}` lines, not terminal paste+Enter. The process
+  // stays resident between turns, so follow-up/inbox messages are just more lines.
+  "rpc-jsonl",
 ])
 export type PromptInjectionMode = typeof PromptInjectionMode.Type
 

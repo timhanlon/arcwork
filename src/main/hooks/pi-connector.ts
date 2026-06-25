@@ -209,9 +209,12 @@ export const installPiExtension = (env: NodeJS.ProcessEnv = process.env): PiConn
   }
 }
 
-/** Launch argv to load the extension (+ optional model). pi reads its Arc wiring
- * from the env every target gets, so there is nothing else to pass. */
+/** Launch argv: run pi as a long-lived JSONL server (`--mode rpc`) loading the
+ * Arc extension (+ optional model). pi reads its Arc wiring from the env every
+ * target gets, so there is nothing else to pass. */
 export const piLaunchArgs = (extensionFile: string, model?: string): ReadonlyArray<string> => [
+  "--mode",
+  "rpc",
   "-e",
   extensionFile,
   ...(model ? ["--model", model] : []),

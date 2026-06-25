@@ -211,6 +211,10 @@ export const TargetSessionManagerLive = Layer.effect(
     // never *fails* the live op.
     const store = yield* SubscriptionRef.make(initialMap)
     const ptys = new Map<string, IPty>()
+    // How to deliver a prompt to each live session — paste+Enter for terminal
+    // providers, a JSONL command line for rpc providers (pi). Keyed by session id
+    // so the inbox/submit path writes the right wire format without re-deriving it.
+    const promptWriters = new Map<string, (text: string) => void>()
     const events = new EventEmitter()
     const arcDb = resolveArcDb()
 
@@ -266,6 +270,7 @@ export const TargetSessionManagerLive = Layer.effect(
           Effect.sync(() => {
             events.emit("exit", { sessionId, exitCode })
             ptys.delete(sessionId)
+            promptWriters.delete(sessionId)
           }),
         ),
       ).pipe(
@@ -423,6 +428,9 @@ export const TargetSessionManagerLive = Layer.effect(
       // until it shows in recent output, so the agent's first turn has its MCP
       // tools connected. Absent → first PTY output is the readiness signal.
       readyGlyph?: string,
+      // How prompts reach this CLI: terminal paste+Enter, or a JSONL command line
+      // (rpc providers). Determines both the seeded-prompt and inbox wire format.
+      promptInjectionMode?: string,
     ) =>
       Effect.sync(() => {
         const spawnedAt = Date.now()
@@ -446,9 +454,20 @@ export const TargetSessionManagerLive = Layer.effect(
             [ARC_HOOK_HELPER_ENV]: arcOwnedHelperFile(),
           } as Record<string, string>,
         })
+        // How to write a prompt to this child: a JSONL command line for rpc
+        // providers (pi stays resident and takes `{"type":"prompt",…}` lines), or
+        // terminal paste+Enter otherwise. Stored per session so the inbox/submit
+        // path reuses the exact wire format. The agent stays attached either way.
+        const writePrompt =
+          promptInjectionMode === "rpc-jsonl"
+            ? (text: string) => child.write(JSON.stringify({ type: "prompt", message: text }) + "\n")
+            : (text: string) => writePromptWithDelayedSubmit((d) => child.write(d), text)
+        promptWriters.set(session.id, writePrompt)
+
         // Deliver the seeded prompt exactly once, when the session is ready:
-        // paste-then-submit for stdin providers, a bare Enter for a prefilled
-        // draft. Gated on the ready glyph so MCP has connected by turn 1.
+        // paste-then-submit / a JSONL command for stdin providers, a bare Enter
+        // for a prefilled draft. Gated on the ready glyph so MCP has connected by
+        // turn 1.
         const hasSeededPrompt = Boolean(writeAfterStart) || submitSeededAfterReady
         let delivered = false
         const deliver = () => {
@@ -456,7 +475,7 @@ export const TargetSessionManagerLive = Layer.effect(
           delivered = true
           clearTimeout(readyFallback)
           if (writeAfterStart) {
-            writePromptWithDelayedSubmit((d) => child.write(d), writeAfterStart)
+            writePrompt(writeAfterStart)
           } else if (submitSeededAfterReady) {
             setTimeout(() => {
               try {
@@ -469,6 +488,10 @@ export const TargetSessionManagerLive = Layer.effect(
         }
         // Fallback so a glyph mismatch or a quiet CLI never strands the prompt.
         const readyFallback = hasSeededPrompt ? setTimeout(deliver, READY_FALLBACK_MS) : undefined
+        // An rpc provider reads stdin commands from process start and emits nothing
+        // until prompted, so there's no readiness output to wait for — deliver the
+        // seeded prompt now (the pty buffers it until pi's reader is up).
+        if (hasSeededPrompt && promptInjectionMode === "rpc-jsonl") deliver()
 
         let firstChunkSeen = false
         let readyTail = ""
@@ -631,6 +654,7 @@ export const TargetSessionManagerLive = Layer.effect(
           extraEnv,
           submitSeededAfterReady,
           cap.readyPromptGlyph,
+          cap.promptInjectionMode,
         ).pipe(
           Effect.withSpan("arc.target.spawn", {
             attributes: { "arc.provider": req.provider, "arc.target_session_id": id },
@@ -698,7 +722,21 @@ export const TargetSessionManagerLive = Layer.effect(
         ]
 
         const session: TargetSession = { ...existing, attached: true, state: "running" }
-        yield* spawnAttached(session, spec.interactive.launchCmd, args, req.cols, req.rows, sockPath)
+        // No seeded prompt on resume, but pass the injection mode so the prompt
+        // writer is registered — a later inbox send must reach the resumed session.
+        yield* spawnAttached(
+          session,
+          spec.interactive.launchCmd,
+          args,
+          req.cols,
+          req.rows,
+          sockPath,
+          undefined,
+          {},
+          false,
+          spec.interactive.readyPromptGlyph,
+          spec.interactive.promptInjectionMode,
+        )
         yield* SubscriptionRef.update(store, (m) => new Map(m).set(session.id, session))
         yield* persistSession(session)
         yield* Effect.logInfo(
@@ -786,9 +824,9 @@ export const TargetSessionManagerLive = Layer.effect(
 
     const submit = (req: SubmitRequest) =>
       Effect.sync(() => {
-        const child = ptys.get(req.instanceId)
-        if (!child) return { accepted: false }
-        writePromptWithDelayedSubmit((data) => child.write(data), req.text)
+        const write = promptWriters.get(req.instanceId)
+        if (!write) return { accepted: false } // no live child to accept the prompt
+        write(req.text)
         return { accepted: true }
       })
 

@@ -66,11 +66,11 @@ const providers: ReadonlyArray<ProviderSpec> = [
     interactive: {
       launchCmd: "pi",
       expectedProcess: "pi",
-      // The arc toolkit loads in-process via a pi extension (`-e`) that registers
-      // native tools, so unlike cursor there's no async MCP connect to race — but
-      // paste-after-ready is still the safe, shared delivery path. Glyph TBD, so
-      // delivery falls back to first-output readiness.
-      promptInjectionMode: "stdin-after-start",
+      // pi runs in `--mode rpc`: a long-lived JSONL server, not a TUI. The TUI
+      // exits after one turn under our PTY, leaving nothing for the inbox to wake;
+      // rpc mode stays resident and takes prompts as JSON command lines. The arc
+      // toolkit + lifecycle hook relay still come from the `-e` extension.
+      promptInjectionMode: "rpc-jsonl",
     },
   },
 ]
