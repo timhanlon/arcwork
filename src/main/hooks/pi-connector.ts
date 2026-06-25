@@ -100,6 +100,19 @@ const callArcTool = async (name, args) => {
   return payload?.result?.structuredContent ?? payload?.result?.content ?? payload?.result
 }
 
+// pi's own session id (the uuid in its session-file name == the \`session\` entry
+// id the transcript parser keys on). Relaying it lets Arc bind the target to this
+// native session, so ingested rows match exactly instead of via the unbound
+// fallback (important once a chat has more than one pi agent).
+let piSessionId = null
+const refreshSessionId = (ctx) => {
+  try {
+    const f = ctx?.sessionManager?.getSessionFile?.()
+    const m = typeof f === "string" ? f.match(/_([0-9a-f-]+)\\.jsonl$/) : null
+    if (m) piSessionId = m[1]
+  } catch {}
+}
+
 const relayHook = (eventName) => {
   if (!hookSock) return
   const record = {
@@ -110,7 +123,8 @@ const relayHook = (eventName) => {
     observedAt: new Date().toISOString(),
     cwd: process.cwd(),
     pid: process.pid,
-    native: { hookEventName: eventName },
+    native: { sessionId: piSessionId, hookEventName: eventName },
+    sessionId: piSessionId,
     arc: { chatId, targetSessionId, targetProvider: "pi", hookSockPresent: true },
     provider: "pi",
     event: eventName,
@@ -123,10 +137,10 @@ const relayHook = (eventName) => {
 }
 
 export default function (pi) {
-  pi.on("session_start", () => relayHook("SessionStart"))
-  pi.on("agent_start", () => relayHook("UserPromptSubmit"))
-  pi.on("agent_end", () => relayHook("Stop"))
-  pi.on("session_shutdown", () => relayHook("SessionEnd"))
+  pi.on("session_start", (_e, ctx) => { refreshSessionId(ctx); relayHook("SessionStart") })
+  pi.on("agent_start", (_e, ctx) => { refreshSessionId(ctx); relayHook("UserPromptSubmit") })
+  pi.on("agent_end", (_e, ctx) => { refreshSessionId(ctx); relayHook("Stop") })
+  pi.on("session_shutdown", (_e, ctx) => { refreshSessionId(ctx); relayHook("SessionEnd") })
 
   const ok = (value) => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }], details: {} })
   const fail = (e) => ({ content: [{ type: "text", text: "arc tool error: " + (e instanceof Error ? e.message : String(e)) }], details: {} })

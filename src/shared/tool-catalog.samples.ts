@@ -159,4 +159,12 @@ export const TOOL_SAMPLES: Readonly<Record<string, ToolSample>> = {
   "cursor:AskQuestion": {
     args: { title: "Temperature check", questions: [{ id: "temperature", prompt: "Is it hot or cold?", options: [{ id: "hot", label: "Hot" }, { id: "cold", label: "Cold" }] }] },
   },
+  // ── pi (local) ───────────────────────────────────────────────────────────
+  "pi:bash": { args: { command: "cat note.txt" }, output: "hello\nworld" },
+  "pi:read": { args: { path: "note.txt" }, output: "hello\nworld" },
+  "pi:write": { args: { path: "out.txt", content: "done" } },
+  "pi:edit": { args: { path: "note.txt", edits: [{ oldText: "world", newText: "earth" }] } },
+  "pi:ls": { args: { path: "src" } },
+  "pi:grep": { args: { pattern: "hello", path: "note.txt" } },
+  "pi:find": { args: { pattern: "*.ts", path: "src" } },
 }
