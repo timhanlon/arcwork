@@ -30,6 +30,19 @@ export type McpProvider = (typeof MCP_PROVIDERS)[number]
 export const isMcpProvider = (value: string): value is McpProvider =>
   (MCP_PROVIDERS as ReadonlyArray<string>).includes(value)
 
+/**
+ * The arc MCP URL to bake into a config generated *at launch* for an Arc-spawned
+ * target. Prefers `ARC_MCP_URL` (the live endpoint the running server publishes
+ * into its own env) over the profile's persistent default, so a server on a
+ * non-default port — notably the headless harness on an ephemeral port — is
+ * reachable by cursor/codex/claude, which (unlike pi) don't read `arc-mcp.json`.
+ * Safe because these configs are regenerated every spawn, never installed: only
+ * {@link defaultArcMcpUrl} (the persistent port) is written into durable client
+ * config that must survive a restart.
+ */
+export const liveArcMcpUrl = (profile: ArcProfile): string =>
+  process.env["ARC_MCP_URL"] ?? defaultArcMcpUrl(profile)
+
 /** Bearer header referencing `ARC_MCP_TOKEN` in each provider's config-interpolation
  * syntax — claude expands `${VAR}`, cursor expands `${env:VAR}`. Plain strings (not
  * template literals) so the `${…}` reaches the written config file verbatim and the
@@ -46,7 +59,7 @@ export const providerServerEntry = (
   provider: McpProvider,
   profile: ArcProfile,
 ): Record<string, unknown> => {
-  const http = { url: defaultArcMcpUrl(profile), headers: bearerAuthHeaders(provider) }
+  const http = { url: liveArcMcpUrl(profile), headers: bearerAuthHeaders(provider) }
   return provider === "claude" ? { type: "http", ...http } : http
 }
 
@@ -62,7 +75,7 @@ export const providerServerEntry = (
 export const cursorServerEntry = (profile: ArcProfile, bearerToken?: string): Record<string, unknown> =>
   bearerToken === undefined
     ? providerServerEntry("cursor", profile)
-    : { url: defaultArcMcpUrl(profile), headers: { Authorization: `Bearer ${bearerToken}` } }
+    : { url: liveArcMcpUrl(profile), headers: { Authorization: `Bearer ${bearerToken}` } }
 
 /**
  * Extra argv that declares the `arc` MCP server to a launched CLI *without*
@@ -95,7 +108,7 @@ export const providerMcpLaunchArgs = (
     case "codex":
       return [
         "-c",
-        `mcp_servers.arc.url="${defaultArcMcpUrl(profile)}"`,
+        `mcp_servers.arc.url="${liveArcMcpUrl(profile)}"`,
         "-c",
         `mcp_servers.arc.bearer_token_env_var="ARC_MCP_TOKEN"`,
       ]
