@@ -2,7 +2,7 @@ import * as fs from "node:fs"
 import * as path from "node:path"
 import { type ArcProfile, arcWorkRuntimeDir, resolveProfile } from "../db/paths.js"
 import { cursorServerEntry, providerMcpLaunchArgs } from "../mcp/client-config.js"
-import { CURSOR_EVENTS, ensureArcOwnedHelper } from "./install.js"
+import { CURSOR_EVENTS, ensureArcOwnedHelper, type InstallResult } from "./install.js"
 
 /**
  * Cursor integration as a **plugin** rather than repo/home config writes.
@@ -52,12 +52,14 @@ const hookCommand = (helperPath: string, event: string): string =>
 
 /**
  * The plugin's files as a `relativePath → contents` map (pure — no IO), so the
- * shape is unit-testable without touching disk. `plugin.json` is explicit about
- * the `hooks`/`mcpServers` paths even though Cursor auto-detects both, so a
- * future layout change can't silently drop a component.
+ * shape is unit-testable without touching disk. The plugin carries the arc MCP
+ * server ONLY: cursor-agent loads a `--plugin-dir` plugin's `mcp.json` but does
+ * NOT fire its bundled `hooks/hooks.json` (verified against a live cursor-agent
+ * v2026.06.24 — identical hooks fire from `<cwd>/.cursor/hooks.json` but never
+ * from the plugin). The lifecycle hooks therefore live in `.cursor/hooks.json`
+ * (see {@link buildCursorHooksJson} / {@link installCursorHooks}).
  */
 export const buildCursorPluginFiles = (
-  helperPath: string,
   profile: ArcProfile,
   bearerToken?: string,
 ): Record<string, string> => {
@@ -65,24 +67,30 @@ export const buildCursorPluginFiles = (
     name: CURSOR_PLUGIN_NAME,
     version: "0.0.1",
     description: "Connects this session to Arc Work — tracks the agent's activity and gives it Arc's work-management tools.",
-    hooks: "hooks/hooks.json",
     mcpServers: "mcp.json",
-  }
-  const hooks = {
-    hooks: Object.fromEntries(
-      CURSOR_EVENTS.map((event) => [
-        event,
-        [{ command: hookCommand(helperPath, event) }],
-      ]),
-    ),
   }
   const mcp = { mcpServers: { arc: cursorServerEntry(profile, bearerToken) } }
   return {
     ".cursor-plugin/plugin.json": json(manifest),
-    "hooks/hooks.json": json(hooks),
     "mcp.json": json(mcp),
   }
 }
+
+/**
+ * The `.cursor/hooks.json` body: cursor's documented hooks format (`version: 1`
+ * + an event→commands map). This is the file cursor-agent actually reads and
+ * fires (project-level, in the workspace cwd) — the plugin's hooks are ignored.
+ * Each event runs the Arc-owned helper, which relays cursor's hook payload
+ * (carrying `session_id` + `transcript_path`) over `ARC_HOOK_SOCK` so Arc can
+ * bind the native session and ingest the transcript.
+ */
+export const buildCursorHooksJson = (helperPath: string): string =>
+  json({
+    version: 1,
+    hooks: Object.fromEntries(
+      CURSOR_EVENTS.map((event) => [event, [{ command: hookCommand(helperPath, event) }]]),
+    ),
+  })
 
 export interface CursorPluginResult {
   readonly installed: boolean
@@ -100,9 +108,9 @@ export const installCursorPlugin = (
   const env = opts.env ?? process.env
   const dir = cursorPluginDir({ env, scopeId: opts.scopeId })
   try {
-    const helperPath = ensureArcOwnedHelper(env)
+    ensureArcOwnedHelper(env)
     const profile = resolveProfile(env)
-    for (const [rel, content] of Object.entries(buildCursorPluginFiles(helperPath, profile, opts.bearerToken))) {
+    for (const [rel, content] of Object.entries(buildCursorPluginFiles(profile, opts.bearerToken))) {
       const abs = path.join(dir, rel)
       fs.mkdirSync(path.dirname(abs), { recursive: true })
       fs.writeFileSync(abs, content)
@@ -110,6 +118,29 @@ export const installCursorPlugin = (
     return { installed: true, dir }
   } catch (e) {
     return { installed: false, dir, reason: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * Write `<cwd>/.cursor/hooks.json` so cursor-agent fires Arc's lifecycle hooks
+ * (the plugin's bundled hooks are ignored — see {@link buildCursorPluginFiles}).
+ * This lands a file in the workspace, unlike the home/repo-clean plugin, but
+ * it's a no-op without `ARC_HOOK_SOCK` (same contract as the git post-commit
+ * hook) and matches how Arc already writes `.claude`/`.codex` hook config.
+ * Best-effort: a failure only means native binding/ingest is unavailable.
+ */
+export const installCursorHooks = (
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): InstallResult => {
+  try {
+    const helperPath = ensureArcOwnedHelper(env)
+    const file = path.join(cwd, ".cursor", "hooks.json")
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, buildCursorHooksJson(helperPath))
+    return { installed: true }
+  } catch (e) {
+    return { installed: false, reason: e instanceof Error ? e.message : String(e) }
   }
 }
 

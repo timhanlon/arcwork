@@ -10,7 +10,7 @@ import type { IPty } from "node-pty"
 import type { TargetSession } from "../../shared/instance.js"
 import { arcEnvTags, arcMcpBearerToken } from "../../shared/env-tags.js"
 import { installProviderHooks } from "../hooks/install.js"
-import { cursorPluginLaunchArgs, installCursorPlugin } from "../hooks/cursor-plugin.js"
+import { cursorPluginLaunchArgs, installCursorHooks, installCursorPlugin } from "../hooks/cursor-plugin.js"
 import { installPiExtension, piLaunchArgs } from "../hooks/pi-connector.js"
 import { isMcpProvider, providerMcpLaunchArgs } from "../mcp/client-config.js"
 import { ARC_HOOK_HELPER_ENV, ARC_HOOK_SOCK_ENV, arcOwnedHelperFile } from "../hooks/signals.js"
@@ -365,7 +365,7 @@ export const TargetSessionManagerLive = Layer.effect(
     // and falls through to no extra args rather than blocking the spawn.
     const buildProviderArgs = (
       provider: string,
-      scope: { chatId: string; targetSessionId: string; model?: string },
+      scope: { chatId: string; targetSessionId: string; cwd: string; model?: string },
     ): Effect.Effect<Array<string>> =>
       Effect.gen(function* () {
         // Resolve the profile once here (the main process has ARC_PROFILE pinned at
@@ -382,6 +382,14 @@ export const TargetSessionManagerLive = Layer.effect(
           if (!plugin.installed) {
             yield* Effect.logWarning(`cursor plugin install failed: ${plugin.reason ?? "unknown error"}`)
             return []
+          }
+          // Lifecycle hooks must live in the workspace's .cursor/hooks.json —
+          // cursor-agent ignores the plugin's bundled hooks (it only loads the
+          // plugin's MCP). Without this the native session never binds and the
+          // transcript never ingests.
+          const hooks = installCursorHooks(scope.cwd)
+          if (!hooks.installed) {
+            yield* Effect.logWarning(`cursor hooks install failed: ${hooks.reason ?? "unknown error"}`)
           }
           return [...cursorPluginLaunchArgs(plugin.dir, profile)]
         }
@@ -625,6 +633,7 @@ export const TargetSessionManagerLive = Layer.effect(
         const args: Array<string> = yield* buildProviderArgs(req.provider, {
           chatId: req.chatId,
           targetSessionId: id,
+          cwd,
           model: req.preset ?? undefined,
         })
         let writeAfterStart: string | undefined
@@ -742,6 +751,7 @@ export const TargetSessionManagerLive = Layer.effect(
           ...(yield* buildProviderArgs(existing.provider, {
             chatId: existing.chatId,
             targetSessionId: existing.id,
+            cwd: existing.cwd,
             model: existing.preset ?? undefined,
           })),
           ...resumeBase,
