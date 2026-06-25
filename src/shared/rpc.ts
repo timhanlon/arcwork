@@ -81,7 +81,7 @@ const LocalModelStatus = Schema.Struct({
 
 /** Per-provider artifact ingest counts, shared by the two ingest results. */
 const IngestSummary = Schema.Struct({
-  provider: Schema.Literals(["claude", "codex", "cursor"]),
+  provider: Schema.Literals(["claude", "codex", "cursor", "pi"]),
   sessions: Schema.Number,
   messages: Schema.Number,
   toolCalls: Schema.Number,
@@ -103,7 +103,7 @@ export const WorkspaceFiles = Schema.Struct({
 })
 export type WorkspaceFiles = typeof WorkspaceFiles.Type
 
-const IngestKinds = Schema.Literals(["all", "claude", "codex", "cursor"])
+const IngestKinds = Schema.Literals(["all", "claude", "codex", "cursor", "pi"])
 
 /**
  * Lightweight change descriptors for the `Watch*Changes` signal streams. These

@@ -7,9 +7,9 @@ import { Schema } from "effect"
  * re-exports these. (Distinct from {@link ProviderSpec} below, which is a
  * provider's capability sheet; this is just its identity.)
  */
-export const Provider = Schema.Literals(["claude", "codex", "cursor"])
+export const Provider = Schema.Literals(["claude", "codex", "cursor", "pi"])
 export type Provider = typeof Provider.Type
-export const ALL_PROVIDERS: ReadonlyArray<Provider> = ["claude", "codex", "cursor"]
+export const ALL_PROVIDERS: ReadonlyArray<Provider> = ["claude", "codex", "cursor", "pi"]
 
 /**
  * Layer 1 — Provider (the "kind"): static capability sheet for a CLI agent.
