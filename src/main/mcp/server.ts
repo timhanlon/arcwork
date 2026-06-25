@@ -18,7 +18,6 @@ import {
   WorkPriority,
   WorkStatus,
 } from "../../shared/work.js"
-import { Chat } from "../../shared/chat.js"
 import { TargetSession } from "../../shared/instance.js"
 import {
   ArcGetParams,
@@ -26,7 +25,7 @@ import {
   ArcSearchParams,
   ArcSearchResult,
 } from "../../shared/read.js"
-import { arcId, ChatId, WorkId, WorkspaceId } from "../../shared/ids.js"
+import { arcId, ChatId, TargetId, WorkId, WorkspaceId } from "../../shared/ids.js"
 import { WorkService } from "../work/service.js"
 import { TargetSessionManager } from "../services/TargetSessionManager.js"
 import { ChatService } from "../services/ChatService.js"
@@ -82,10 +81,23 @@ const AgentSpawnResult = Schema.Struct({
   assignedWork: Schema.optional(Work),
 })
 
+/** `arc.prime` is read by a freshly-spawned subagent to orient itself, so it
+ * returns only what the agent needs — not the full Work/Chat/TargetSession
+ * objects (provenance, citations, nodeId, transcript paths, timestamps …) that
+ * would dump a wall of noise into its context. The assignment is the point: the
+ * work's id (to update it), title, and body, plus its current status/priority. */
+const PrimedWork = Schema.Struct({
+  id: WorkId,
+  title: Schema.String,
+  body: Schema.String,
+  status: WorkStatus,
+  priority: Schema.NullOr(WorkPriority),
+})
+
 const PrimeResult = Schema.Struct({
-  chat: Schema.optional(Chat),
-  target: Schema.optional(TargetSession),
-  assignedWork: Schema.Array(Work),
+  chat: Schema.optional(Schema.Struct({ id: ChatId, title: Schema.String })),
+  target: Schema.optional(Schema.Struct({ id: TargetId, provider: Schema.String, cwd: Schema.String })),
+  assignedWork: Schema.Array(PrimedWork),
 })
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
@@ -367,7 +379,19 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
           const assignedWork = sessionId
             ? (yield* work.listDelegatedTo(arcId("target", sessionId))).map((d) => d.work)
             : []
-          return { chat, target, assignedWork }
+          // Project to the lean shape — only what a primed agent needs, never the
+          // full objects' provenance/citations/transcript-path noise.
+          return {
+            chat: chat ? { id: chat.id, title: chat.title } : undefined,
+            target: target ? { id: target.id, provider: target.provider, cwd: target.cwd } : undefined,
+            assignedWork: assignedWork.map((w) => ({
+              id: w.id,
+              title: w.title,
+              body: w.body,
+              status: w.status,
+              priority: w.priority,
+            })),
+          }
         }).pipe(Effect.orDie),
     }
   }),
