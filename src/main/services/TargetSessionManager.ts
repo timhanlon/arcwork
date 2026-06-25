@@ -407,6 +407,9 @@ export const TargetSessionManagerLive = Layer.effect(
           return ["resume", nativeSessionId]
         case "cursor":
           return ["--resume", nativeSessionId]
+        case "pi":
+          // pi resolves a (partial/full) session UUID within the cwd's session dir.
+          return ["--session", nativeSessionId]
         default:
           return null
       }

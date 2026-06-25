@@ -83,34 +83,51 @@ export const normalizePiRecords = (
 
     if (role === "assistant") {
       const model = str(message["model"]) ?? currentModel
+      // Coalesce the entry's content parts into ONE assistant message — text is
+      // the body, thinking rides the (hidden) thinking column. A part-per-message
+      // split would surface each thinking block as its own chat bubble, since the
+      // body projection falls back to `text ?? thinking`. Tool calls keep their
+      // own rows, appended in source order after the message.
+      let text = ""
+      let thinking = ""
+      const toolCalls: Array<Rec> = []
       for (const part of arr(message["content"])) {
         const c = obj(part)
         if (!c) continue
         switch (str(c["type"])) {
-          case "thinking": {
-            const thinking = str(c["thinking"])
-            if (thinking) b.message({ role: "assistant", thinking, model, createdAt: timestamp })
+          case "text":
+            text += str(c["text"]) ?? ""
             break
-          }
-          case "text": {
-            const text = str(c["text"])
-            if (text) b.message({ role: "assistant", text, model, createdAt: timestamp, nativeMessageId })
+          case "thinking":
+            thinking += str(c["thinking"]) ?? ""
             break
-          }
-          case "toolCall": {
-            const name = str(c["name"])
-            if (!name) break
-            const input = obj(c["arguments"])
-            const row = b.tool({
-              name,
-              kind: classifyTool("pi", name),
-              nativeToolId: str(c["id"]) ?? null,
-              inputJson: JSON.stringify(c["arguments"] ?? {}),
-            })
-            b.hint(name, input, null, row.id)
+          case "toolCall":
+            if (str(c["name"])) toolCalls.push(c)
             break
-          }
         }
+      }
+      // Only emit a bubble when there's actual response text; a thinking-only
+      // (or whitespace-only) entry leaves no standalone/empty assistant message.
+      if (text.trim()) {
+        b.message({
+          role: "assistant",
+          text,
+          thinking: thinking || null,
+          model,
+          createdAt: timestamp,
+          nativeMessageId,
+        })
+      }
+      for (const c of toolCalls) {
+        const name = str(c["name"])!
+        const input = obj(c["arguments"])
+        const row = b.tool({
+          name,
+          kind: classifyTool("pi", name),
+          nativeToolId: str(c["id"]) ?? null,
+          inputJson: JSON.stringify(c["arguments"] ?? {}),
+        })
+        b.hint(name, input, null, row.id)
       }
       continue
     }
