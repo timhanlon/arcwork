@@ -66,11 +66,12 @@ const providers: ReadonlyArray<ProviderSpec> = [
     interactive: {
       launchCmd: "pi",
       expectedProcess: "pi",
-      // pi runs in `--mode rpc`: a long-lived JSONL server, not a TUI. The TUI
-      // exits after one turn under our PTY, leaving nothing for the inbox to wake;
-      // rpc mode stays resident and takes prompts as JSON command lines. The arc
-      // toolkit + lifecycle hook relay still come from the `-e` extension.
-      promptInjectionMode: "rpc-jsonl",
+      // A normal interactive TUI, human-drivable like the other providers; the
+      // arc toolkit + lifecycle hook relay come from the `-e` extension, and the
+      // inbox pastes follow-ups. (pi can also run as a JSONL rpc server — see
+      // piLaunchArgs `rpc` + the `rpc-jsonl` injection mode — but the TUI is the
+      // default so pi is launchable by hand.)
+      promptInjectionMode: "stdin-after-start",
     },
   },
 ]

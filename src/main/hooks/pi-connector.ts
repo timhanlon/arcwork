@@ -209,12 +209,20 @@ export const installPiExtension = (env: NodeJS.ProcessEnv = process.env): PiConn
   }
 }
 
-/** Launch argv: run pi as a long-lived JSONL server (`--mode rpc`) loading the
- * Arc extension (+ optional model). pi reads its Arc wiring from the env every
- * target gets, so there is nothing else to pass. */
-export const piLaunchArgs = (extensionFile: string, model?: string): ReadonlyArray<string> => [
-  "--mode",
-  "rpc",
+/** Launch argv loading the Arc extension (+ optional model). pi reads its Arc
+ * wiring from the env every target gets, so there's nothing else to pass.
+ *
+ * Default is the interactive TUI — pi is a normal human-drivable PTY provider
+ * like claude/cursor/codex (manually launchable, paste-delivered, the inbox
+ * pastes follow-ups). `opts.rpc` instead runs the long-lived JSONL server
+ * (`--mode rpc`); retained as a usable capability for programmatic/headless
+ * drivers even though no provider selects it by default. */
+export const piLaunchArgs = (
+  extensionFile: string,
+  model?: string,
+  opts?: { readonly rpc?: boolean },
+): ReadonlyArray<string> => [
+  ...(opts?.rpc ? ["--mode", "rpc"] : []),
   "-e",
   extensionFile,
   ...(model ? ["--model", model] : []),
