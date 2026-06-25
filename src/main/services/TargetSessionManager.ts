@@ -11,6 +11,7 @@ import type { TargetSession } from "../../shared/instance.js"
 import { arcEnvTags, arcMcpBearerToken } from "../../shared/env-tags.js"
 import { installProviderHooks } from "../hooks/install.js"
 import { cursorPluginLaunchArgs, installCursorPlugin } from "../hooks/cursor-plugin.js"
+import { installPiExtension, piLaunchArgs } from "../hooks/pi-connector.js"
 import { isMcpProvider, providerMcpLaunchArgs } from "../mcp/client-config.js"
 import { ARC_HOOK_HELPER_ENV, ARC_HOOK_SOCK_ENV, arcOwnedHelperFile } from "../hooks/signals.js"
 import { HookSignalServer } from "./HookSignalServer.js"
@@ -359,7 +360,7 @@ export const TargetSessionManagerLive = Layer.effect(
     // and falls through to no extra args rather than blocking the spawn.
     const buildProviderArgs = (
       provider: string,
-      scope: { chatId: string; targetSessionId: string },
+      scope: { chatId: string; targetSessionId: string; model?: string },
     ): Effect.Effect<Array<string>> =>
       Effect.gen(function* () {
         // Resolve the profile once here (the main process has ARC_PROFILE pinned at
@@ -378,6 +379,16 @@ export const TargetSessionManagerLive = Layer.effect(
             return []
           }
           return [...cursorPluginLaunchArgs(plugin.dir, profile)]
+        }
+        if (provider === "pi") {
+          // pi gets the arc toolkit + hook relay from a self-registering extension
+          // (`-e`); identity/endpoint ride the env arcEnvTags already injects.
+          const ext = installPiExtension()
+          if (!ext.installed) {
+            yield* Effect.logWarning(`pi extension install failed: ${ext.reason ?? "unknown error"}`)
+            return []
+          }
+          return [...piLaunchArgs(ext.file, scope.model)]
         }
         return isMcpProvider(provider) ? [...providerMcpLaunchArgs(provider, profile)] : []
       })
@@ -566,6 +577,7 @@ export const TargetSessionManagerLive = Layer.effect(
         const args: Array<string> = yield* buildProviderArgs(req.provider, {
           chatId: req.chatId,
           targetSessionId: id,
+          model: req.preset ?? undefined,
         })
         let writeAfterStart: string | undefined
         let seededViaPrefill = false
@@ -680,6 +692,7 @@ export const TargetSessionManagerLive = Layer.effect(
           ...(yield* buildProviderArgs(existing.provider, {
             chatId: existing.chatId,
             targetSessionId: existing.id,
+            model: existing.preset ?? undefined,
           })),
           ...resumeBase,
         ]

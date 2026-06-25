@@ -55,6 +55,24 @@ const providers: ReadonlyArray<ProviderSpec> = [
       readyPromptGlyph: "→",
     },
   },
+  {
+    kind: "pi",
+    displayName: "pi (local)",
+    detectCmd: "pi",
+    // Local-model agent (via LM Studio). No machine-wide singleton constraint and
+    // no cloud/approval gate, so it's the workhorse for orchestration testing.
+    concurrency: "per-worktree",
+    batch: { commandName: "pi", promptFlag: "-p", modelFlag: "--model" },
+    interactive: {
+      launchCmd: "pi",
+      expectedProcess: "pi",
+      // The arc toolkit loads in-process via a pi extension (`-e`) that registers
+      // native tools, so unlike cursor there's no async MCP connect to race — but
+      // paste-after-ready is still the safe, shared delivery path. Glyph TBD, so
+      // delivery falls back to first-output readiness.
+      promptInjectionMode: "stdin-after-start",
+    },
+  },
 ]
 
 export class ProviderRegistry extends Context.Service<
