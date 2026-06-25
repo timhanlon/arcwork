@@ -105,11 +105,15 @@ const callArcTool = async (name, args) => {
 // native session, so ingested rows match exactly instead of via the unbound
 // fallback (important once a chat has more than one pi agent).
 let piSessionId = null
+let piSessionFile = null
 const refreshSessionId = (ctx) => {
   try {
     const f = ctx?.sessionManager?.getSessionFile?.()
-    const m = typeof f === "string" ? f.match(/_([0-9a-f-]+)\\.jsonl$/) : null
-    if (m) piSessionId = m[1]
+    if (typeof f === "string") {
+      piSessionFile = f
+      const m = f.match(/_([0-9a-f-]+)\\.jsonl$/)
+      if (m) piSessionId = m[1]
+    }
   } catch {}
 }
 
@@ -123,7 +127,7 @@ const relayHook = (eventName) => {
     observedAt: new Date().toISOString(),
     cwd: process.cwd(),
     pid: process.pid,
-    native: { sessionId: piSessionId, hookEventName: eventName },
+    native: { sessionId: piSessionId, transcriptPath: piSessionFile, hookEventName: eventName },
     sessionId: piSessionId,
     arc: { chatId, targetSessionId, targetProvider: "pi", hookSockPresent: true },
     provider: "pi",
