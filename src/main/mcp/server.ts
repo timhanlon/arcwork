@@ -457,19 +457,23 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
 
       "arc.agent.send": (params) =>
         Effect.gen(function* () {
-          // Fail loud on an unknown/dead target rather than silently queuing into
+          // Fail loud on an undeliverable target rather than silently queuing into
           // the void — the caller should know the agent isn't there to receive it.
           const sessionList = yield* sessions.list
           const target = sessionList.find((s) => s.id === params.targetSessionId)
           if (!target) {
             return yield* Effect.fail(arcRequestError(`unknown target session: ${params.targetSessionId}`))
           }
-          // An exited target can't surface the message (no PTY, no resume path that
-          // would flush it), so report failure rather than a misleading `queued`.
-          // A detached-but-running target is fine: the durable inbox delivers when
-          // it resumes (the controller flushes on the resume binding).
-          if (target.state === "exited") {
-            return yield* Effect.fail(arcRequestError(`target session has exited: ${params.targetSessionId}`))
+          // The message must be surface-able. A target is deliverable if it has a
+          // live PTY now (`attached` — pasted when idle, or flushed on turn-close
+          // when busy) OR a resume path (a bound native session — the controller
+          // flushes the inbox on the resume binding). A detached/exited target with
+          // neither could never surface the message, so fail rather than return a
+          // misleading `{ queued: true }`.
+          if (target.attached !== true && !target.nativeSessionId) {
+            return yield* Effect.fail(
+              arcRequestError(`target session is not deliverable (no live session or resume path): ${params.targetSessionId}`),
+            )
           }
           yield* inbox.enqueue(params.targetSessionId, params.body, params.from)
           return { queued: true, targetSessionId: params.targetSessionId }

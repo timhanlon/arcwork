@@ -32,7 +32,7 @@ const RealWorkService = WorkServiceLive.pipe(
   Layer.provide(sqliteLayer(":memory:")),
 )
 // Controllable state for the orchestration-tool stubs (arc.agent.send).
-const stubTargets: Array<{ id: string; state: string; attached: boolean }> = []
+const stubTargets: Array<{ id: string; state: string; attached: boolean; nativeSessionId?: string }> = []
 const stubEnqueued: Array<{ targetSessionId: string; body: string }> = []
 
 const StubServices = Layer.mergeAll(
@@ -307,13 +307,15 @@ describe("Arc MCP server", () => {
     expect(payload.comment?.workRefId).toBe(work.id)
   })
 
-  it("arc.agent.send rejects an exited target instead of reporting it queued", async () => {
+  it("arc.agent.send only queues for a deliverable target (live PTY or resume path)", async () => {
     // Valid target typeids (the tool's TargetId schema validates the argument).
-    const liveId = "target_01kw09f93fenb8tagr6z6y4992"
-    const deadId = "target_01kw0669hfferbxf2tayrtvabz"
+    const liveId = "target_01kw09f93fenb8tagr6z6y4992" // attached: deliver now / on turn-close
+    const resumableId = "target_01kw0669hfferbxf2tayrtvabz" // detached but bound: delivers on resume
+    const orphanId = "target_01kw060khqferbxez0mg1ctbpa" // detached, never bound: undeliverable
     stubTargets.length = 0
     stubTargets.push({ id: liveId, state: "running", attached: true })
-    stubTargets.push({ id: deadId, state: "exited", attached: false })
+    stubTargets.push({ id: resumableId, state: "exited", attached: false, nativeSessionId: "native-1" })
+    stubTargets.push({ id: orphanId, state: "exited", attached: false })
     stubEnqueued.length = 0
 
     const init = await post(url, {
@@ -338,17 +340,23 @@ describe("Arc MCP server", () => {
         init.sessionId!,
       )
 
-    // A running target queues + reports success.
+    // Attached (live PTY) → queues + reports success.
     const live = parseCallResult((await send(liveId, 12)).text)
     expect(live.isError).toBeFalsy()
     expect(live.structuredContent).toMatchObject({ queued: true })
     expect(stubEnqueued).toHaveLength(1)
 
-    // An exited target is rejected loudly — and crucially NOT queued (it could
-    // never be surfaced), unlike the old code that returned `{ queued: true }`.
-    const dead = parseCallResult((await send(deadId, 13)).text)
-    expect(dead.isError).toBe(true)
-    expect(stubEnqueued).toHaveLength(1)
+    // Detached but resumable (bound native session) → still queues; the controller
+    // flushes it when the target resumes.
+    const resumable = parseCallResult((await send(resumableId, 13)).text)
+    expect(resumable.isError).toBeFalsy()
+    expect(stubEnqueued).toHaveLength(2)
+
+    // No live PTY and no resume path → rejected loudly, and crucially NOT queued
+    // (it could never be surfaced), unlike the old `{ queued: true }`.
+    const orphan = parseCallResult((await send(orphanId, 14)).text)
+    expect(orphan.isError).toBe(true)
+    expect(stubEnqueued).toHaveLength(2)
   })
 
   it("arc.work.update rejects a call with no operation", async () => {
