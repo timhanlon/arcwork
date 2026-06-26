@@ -57,8 +57,16 @@ const readMcpUrl = () => {
   }
 }
 const parseMcpPayload = (text) => {
-  const line = text.split("\\n").find((l) => l.startsWith("data:")) ?? text
-  return JSON.parse(line.replace(/^data:\\s*/, ""))
+  // SSE may emit progress events before the result; return the data line that
+  // carries the JSON-RPC response (result/error), not just the first one.
+  const datas = text.split("\\n").filter((l) => l.startsWith("data:"))
+  for (const line of datas.length ? datas : [text]) {
+    try {
+      const obj = JSON.parse(line.replace(/^data:\\s*/, ""))
+      if (obj && (obj.result !== undefined || obj.error !== undefined)) return obj
+    } catch {}
+  }
+  return null
 }
 const mcpHeaders = (sessionId) => ({
   "content-type": "application/json",

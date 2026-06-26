@@ -117,8 +117,16 @@ if (sock) {
 }
 
 const parseMcpPayload = (text) => {
-  const dataLine = text.split("\\n").find((line) => line.startsWith("data:")) ?? text
-  return JSON.parse(dataLine.replace(/^data:\\s*/, ""))
+  // SSE may emit progress events before the result; return the data line that
+  // carries the JSON-RPC response (result/error), not just the first one.
+  const datas = text.split("\\n").filter((line) => line.startsWith("data:"))
+  for (const line of datas.length ? datas : [text]) {
+    try {
+      const obj = JSON.parse(line.replace(/^data:\\s*/, ""))
+      if (obj && (obj.result !== undefined || obj.error !== undefined)) return obj
+    } catch {}
+  }
+  return null
 }
 
 const readMcpUrl = () => {

@@ -95,15 +95,23 @@ class McpClient {
     const text = await res.text()
     const ct = res.headers.get("content-type") ?? ""
     if (ct.includes("text/event-stream")) {
-      // One JSON-RPC message arrives as the first `data:` line of the SSE stream.
+      // SSE may interleave progress events before the result; return the data
+      // line that carries the JSON-RPC response (result/error), not just the first.
+      let first: JsonRpc | undefined
       for (const line of text.split("\n")) {
         const t = line.trim()
-        if (t.startsWith("data:")) {
-          const payload = t.slice(5).trim()
-          if (payload) return JSON.parse(payload) as JsonRpc
+        if (!t.startsWith("data:")) continue
+        const payload = t.slice(5).trim()
+        if (!payload) continue
+        try {
+          const obj = JSON.parse(payload) as JsonRpc
+          first ??= obj
+          if (obj.result !== undefined || obj.error !== undefined) return obj
+        } catch {
+          /* skip non-JSON data line */
         }
       }
-      return undefined
+      return first
     }
     return text ? (JSON.parse(text) as JsonRpc) : undefined
   }
