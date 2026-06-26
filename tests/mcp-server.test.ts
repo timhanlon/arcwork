@@ -31,12 +31,21 @@ const RealWorkService = WorkServiceLive.pipe(
   Layer.provide(WorkStoreLive),
   Layer.provide(sqliteLayer(":memory:")),
 )
+// Controllable state for the orchestration-tool stubs (arc.agent.send).
+const stubTargets: Array<{ id: string; state: string; attached: boolean }> = []
+const stubEnqueued: Array<{ targetSessionId: string; body: string }> = []
+
 const StubServices = Layer.mergeAll(
   RealWorkService,
   Layer.succeed(ReadService, {} as never),
   Layer.succeed(ChatService, {} as never),
-  Layer.succeed(TargetSessionManager, {} as never),
-  Layer.succeed(TargetInboxService, {} as never),
+  Layer.succeed(TargetSessionManager, { list: Effect.sync(() => stubTargets) } as never),
+  Layer.succeed(TargetInboxService, {
+    enqueue: (targetSessionId: string, body: string) =>
+      Effect.sync(() => {
+        stubEnqueued.push({ targetSessionId, body })
+      }),
+  } as never),
 )
 
 const EXPECTED_TOOLS = [
@@ -296,6 +305,50 @@ describe("Arc MCP server", () => {
     expect(payload.work.priority).toBe("p1")
     expect(payload.comment?.body).toBe("started")
     expect(payload.comment?.workRefId).toBe(work.id)
+  })
+
+  it("arc.agent.send rejects an exited target instead of reporting it queued", async () => {
+    // Valid target typeids (the tool's TargetId schema validates the argument).
+    const liveId = "target_01kw09f93fenb8tagr6z6y4992"
+    const deadId = "target_01kw0669hfferbxf2tayrtvabz"
+    stubTargets.length = 0
+    stubTargets.push({ id: liveId, state: "running", attached: true })
+    stubTargets.push({ id: deadId, state: "exited", attached: false })
+    stubEnqueued.length = 0
+
+    const init = await post(url, {
+      jsonrpc: "2.0",
+      id: 11,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "arc-mcp-test", version: "1.0.0" },
+      },
+    })
+    const send = (targetSessionId: string, id: number): Promise<PostResult> =>
+      post(
+        url,
+        {
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "arc.agent.send", arguments: { targetSessionId, body: "ping" } },
+        },
+        init.sessionId!,
+      )
+
+    // A running target queues + reports success.
+    const live = parseCallResult((await send(liveId, 12)).text)
+    expect(live.isError).toBeFalsy()
+    expect(live.structuredContent).toMatchObject({ queued: true })
+    expect(stubEnqueued).toHaveLength(1)
+
+    // An exited target is rejected loudly — and crucially NOT queued (it could
+    // never be surfaced), unlike the old code that returned `{ queued: true }`.
+    const dead = parseCallResult((await send(deadId, 13)).text)
+    expect(dead.isError).toBe(true)
+    expect(stubEnqueued).toHaveLength(1)
   })
 
   it("arc.work.update rejects a call with no operation", async () => {

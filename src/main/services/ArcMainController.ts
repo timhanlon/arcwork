@@ -426,7 +426,15 @@ export const launchArcMainController = (
     // A hook revealed a child's native session id — bind it onto the session.
     // The mutation flows to renderers through the `changes` broadcasts below.
     yield* streamFromEmitter<HookBinding>(hookServer.events, "binding").pipe(
-      Stream.runForEach((b) => sessions.bindNative(b.targetSessionId, b.nativeSessionId, b.transcriptPath)),
+      Stream.runForEach((b) =>
+        sessions.bindNative(b.targetSessionId, b.nativeSessionId, b.transcriptPath).pipe(
+          // A binding fires on SessionStart — including a resume, which otherwise
+          // never delivers messages queued while the target was detached/exited.
+          // The flush no-ops unless the target is idle with pending rows, so it's
+          // harmless for a fresh spawn (which has nothing queued yet).
+          Effect.andThen(inbox.flushTo(b.targetSessionId)),
+        ),
+      ),
       Effect.forkScoped,
     )
 

@@ -384,7 +384,17 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
       "arc.agent.spawn": (params) =>
         Effect.gen(function* () {
           const { chatId: headerChatId } = yield* readMcpProvenanceHeaders()
-          const chatId = params.chatId ?? (headerChatId ? arcId("chat", headerChatId) : undefined)
+          const headerChat = headerChatId ? arcId("chat", headerChatId) : undefined
+          // Don't let a caller launch the session under one chat while the
+          // work-link provenance is recorded under another: the session uses this
+          // `chatId`, but `resolveMcpWriteProvenance` below prefers the trusted
+          // header chat — so a mismatch would split the spawn across chats.
+          if (params.chatId && headerChat && params.chatId !== headerChat) {
+            return yield* Effect.fail(
+              arcRequestError("arc.agent.spawn chatId does not match MCP chat provenance"),
+            )
+          }
+          const chatId = headerChat ?? params.chatId
           if (!chatId) {
             return yield* Effect.fail(arcRequestError("arc.agent.spawn requires chatId or MCP chat provenance"))
           }
@@ -417,8 +427,12 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
       "arc.prime": (params) =>
         Effect.gen(function* () {
           const ids = yield* readMcpProvenanceHeaders()
-          const sessionId = params.sessionId ?? ids.sessionId
-          const chatId = params.chatId ?? (ids.chatId ? arcId("chat", ids.chatId) : undefined)
+          // Trusted transport provenance wins over the voluntary params (which are
+          // only a fallback for clients without stamped headers) — otherwise a
+          // target could read another session's assignment by passing a different
+          // id. Mirrors `resolveMcpWriteProvenance`'s header-first rule.
+          const sessionId = ids.sessionId ?? params.sessionId
+          const chatId = ids.chatId ? arcId("chat", ids.chatId) : params.chatId
           const sessionList = yield* sessions.list
           const target = sessionId ? sessionList.find((s) => s.id === sessionId) : undefined
           const chatList = yield* chats.list
@@ -449,6 +463,13 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
           const target = sessionList.find((s) => s.id === params.targetSessionId)
           if (!target) {
             return yield* Effect.fail(arcRequestError(`unknown target session: ${params.targetSessionId}`))
+          }
+          // An exited target can't surface the message (no PTY, no resume path that
+          // would flush it), so report failure rather than a misleading `queued`.
+          // A detached-but-running target is fine: the durable inbox delivers when
+          // it resumes (the controller flushes on the resume binding).
+          if (target.state === "exited") {
+            return yield* Effect.fail(arcRequestError(`target session has exited: ${params.targetSessionId}`))
           }
           yield* inbox.enqueue(params.targetSessionId, params.body, params.from)
           return { queued: true, targetSessionId: params.targetSessionId }
