@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, PubSub, Stream } from "effect"
+import { Context, Effect, Layer, Option, PubSub, Schema, Stream } from "effect"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import { createHash } from "node:crypto"
 import { nowIso } from "../clock.js"
@@ -12,7 +12,6 @@ import type {
   WorkCommentListing,
   WorkCommentSubjectKind,
   WorkCreateInput,
-  WorkExecution,
   WorkPriority,
   WorkProvenance,
   WorkReviseInput,
@@ -20,6 +19,7 @@ import type {
   WorkStatus,
   WorkSummary,
 } from "../../shared/work.js"
+import { WorkExecution } from "../../shared/work.js"
 import { arcId, type ChatId, newArcId, type TargetId, type WorkId } from "../../shared/ids.js"
 import { arcRequestError, type ArcRequestError } from "../errors.js"
 import { ArcStore } from "../db/store.js"
@@ -186,12 +186,14 @@ const encodeExecution = (execution: WorkExecution | undefined): string | null =>
 
 const decodeExecution = (json: string | null): WorkExecution | undefined => {
   if (!json) return undefined
+  let value: unknown
   try {
-    const parsed = JSON.parse(json) as WorkExecution
-    return parsed.harness || parsed.model ? parsed : undefined
+    value = JSON.parse(json)
   } catch {
     return undefined
   }
+  const decoded = Schema.decodeUnknownOption(WorkExecution)(value)
+  return Option.isSome(decoded) && (decoded.value.harness || decoded.value.model) ? decoded.value : undefined
 }
 
 /** Citations serialize to a `references` edge whose `toId` is `kind:target`. */

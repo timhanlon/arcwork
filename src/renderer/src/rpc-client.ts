@@ -99,16 +99,12 @@ const isRpcError = (error: unknown): error is RpcError =>
  * (decode/protocol fault) is logged and collapsed to a generic unexpected error,
  * mirroring how main hides internals behind a clean message.
  */
-const toArcRpcError = (error: unknown): ArcRpcError => {
+const toArcRpcError = (error: unknown, logTransportError: (error: unknown) => void): ArcRpcError => {
   if (isRpcError(error)) return new ArcRpcError(error)
   // A transport fault is collapsed to a generic message for the caller, but the
   // detail would otherwise be lost — log the cause through Effect (not console)
   // so it stays on the same observability seam as everything else.
-  Effect.runFork(
-    Effect.logError("rpc transport error", error).pipe(
-      Effect.annotateLogs({ "arc.renderer.context": "rpc transport" }),
-    ),
-  )
+  logTransportError(error)
   return new ArcRpcError({ _tag: "ArcUnexpectedError", message: "Unexpected RPC transport error" })
 }
 
@@ -141,7 +137,13 @@ export async function rpc<const T extends ArcRpc["_tag"]>(
     log("ok", { tag })
     return exit.value
   }
-  const error = toArcRpcError(Cause.squash(exit.cause))
+  const error = toArcRpcError(Cause.squash(exit.cause), (cause) => {
+    runtime.runFork(
+      Effect.logError("rpc transport error", cause).pipe(
+        Effect.annotateLogs({ "arc.renderer.context": "rpc transport" }),
+      ),
+    )
+  })
   log("failed", { tag, message: error.message })
   throw error
 }

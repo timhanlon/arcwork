@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Queue, Stream, SubscriptionRef } from "effect"
+import { Clock, Context, Effect, Layer, Queue, Stream, SubscriptionRef } from "effect"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import { nowIso } from "../clock.js"
 import { EventEmitter } from "node:events"
@@ -179,6 +179,7 @@ export const TargetSessionManagerLive = Layer.effect(
     const chats = yield* ChatService
     const hookServer = yield* HookSignalServer
     const db = yield* ArcStore
+    const scope = yield* Effect.scope
 
     // Restore persisted sessions on boot. Their PTYs died with the last process,
     // so any previously-live state is now unconfirmed → "unknown" (an already
@@ -270,24 +271,27 @@ export const TargetSessionManagerLive = Layer.effect(
     interface FirstOutput {
       readonly sessionId: string
       readonly provider: string
-      readonly firstByteMs: number
+      readonly spawnedAt: number
       readonly firstChunkBytes: number
     }
     const firstOutputs = yield* Queue.make<FirstOutput>()
     yield* Stream.fromQueue(firstOutputs).pipe(
       Stream.runForEach((f) =>
-        Effect.logInfo(
-          `target first-output target=${f.sessionId} provider=${f.provider} ` +
-            `firstByteMs=${f.firstByteMs} firstChunkBytes=${f.firstChunkBytes}`,
-        ).pipe(
-          Effect.annotateLogs({
-            "arc.event": "target.first_output",
-            "arc.provider": f.provider,
-            "arc.target_session_id": f.sessionId,
-            "arc.first_byte_ms": f.firstByteMs,
-            "arc.first_chunk_bytes": f.firstChunkBytes,
-          }),
-        ),
+        Effect.gen(function* () {
+          const firstByteMs = (yield* Clock.currentTimeMillis) - f.spawnedAt
+          yield* Effect.logInfo(
+            `target first-output target=${f.sessionId} provider=${f.provider} ` +
+              `firstByteMs=${firstByteMs} firstChunkBytes=${f.firstChunkBytes}`,
+          ).pipe(
+            Effect.annotateLogs({
+              "arc.event": "target.first_output",
+              "arc.provider": f.provider,
+              "arc.target_session_id": f.sessionId,
+              "arc.first_byte_ms": firstByteMs,
+              "arc.first_chunk_bytes": f.firstChunkBytes,
+            }),
+          )
+        }),
       ),
       Effect.forkScoped,
     )
@@ -451,7 +455,9 @@ export const TargetSessionManagerLive = Layer.effect(
     }
 
     const spawnAttached = (session: TargetSession, opts: SpawnOptions) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        const spawnedAt = yield* Clock.currentTimeMillis
+        yield* Effect.sync(() => {
         const {
           launchCmd,
           args,
@@ -465,7 +471,6 @@ export const TargetSessionManagerLive = Layer.effect(
           promptInjectionMode,
           advanceGates = [],
         } = opts
-        const spawnedAt = Date.now()
         const child = pty.spawn(launchCmd, [...args], {
           name: "xterm-color",
           cols: cols && cols > 0 ? Math.floor(cols) : 80,
@@ -535,7 +540,7 @@ export const TargetSessionManagerLive = Layer.effect(
             Queue.offerUnsafe(firstOutputs, {
               sessionId: session.id,
               provider: session.provider,
-              firstByteMs: Date.now() - spawnedAt,
+              spawnedAt,
               firstChunkBytes: Buffer.byteLength(data, "utf8"),
             })
           }
@@ -572,6 +577,7 @@ export const TargetSessionManagerLive = Layer.effect(
           Queue.offerUnsafe(exits, { sessionId: session.id, exitCode })
         })
         ptys.set(session.id, child)
+        })
       })
 
     const launch = (req: LaunchRequest) =>
@@ -807,23 +813,17 @@ export const TargetSessionManagerLive = Layer.effect(
         const child = ptys.get(req.sessionId)
         if (!child) return { stopped: false }
         yield* Effect.logInfo(`target stop requested target=${req.sessionId}`)
-        try {
-          child.kill("SIGTERM")
-        } catch {
-          /* raced the child's own exit between get and kill — already gone */
-        }
-        setTimeout(() => {
-          // Force-kill only if THIS handle is still live after the grace
-          // window. Identity-check, not just presence: a stop-then-resume of
-          // the same session id within the window puts a *different* pty under
-          // the same key, and that innocent new child must not be SIGKILLed.
-          if (ptys.get(req.sessionId) !== child) return
-          try {
-            child.kill("SIGKILL")
-          } catch {
-            /* gone */
-          }
-        }, STOP_GRACE_MS)
+        yield* Effect.try({ try: () => child.kill("SIGTERM"), catch: () => undefined }).pipe(Effect.ignore)
+        yield* Effect.sleep(STOP_GRACE_MS).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              ptys.get(req.sessionId) !== child
+                ? Effect.void
+                : Effect.try({ try: () => child.kill("SIGKILL"), catch: () => undefined }).pipe(Effect.ignore),
+            ),
+          ),
+          Effect.forkIn(scope),
+        )
         return { stopped: true }
       }).pipe(
         Effect.withSpan("arc.target.stop", {

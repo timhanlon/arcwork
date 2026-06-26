@@ -5,23 +5,26 @@
  * provider narrowing) and the title seed derived from a chat's user prompts.
  * Pure — no stores, no Effect.
  */
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import type { ChatMessageRow } from "../../db/schema.js"
 import { ChatMessagePayload } from "../../../shared/chat-message.js"
 import type { ChatMessage } from "../../../shared/chat-message.js"
 import type { PendingRequest } from "../../../shared/chat-request.js"
 import { ALL_PROVIDERS, type Provider } from "../../../shared/provider.js"
 
-const decodePayload = Schema.decodeUnknownSync(ChatMessagePayload)
+const decodePayload = Schema.decodeUnknownOption(ChatMessagePayload)
 
 /** Tolerant: a malformed/legacy `request_json` degrades to no structured payload. */
 export const parsePayload = (json: string | null): ChatMessage["payload"] => {
   if (!json) return undefined
+  let value: unknown
   try {
-    return decodePayload(JSON.parse(json))
+    value = JSON.parse(json)
   } catch {
     return undefined
   }
+  const decoded = decodePayload(value)
+  return Option.isSome(decoded) ? decoded.value : undefined
 }
 
 /**

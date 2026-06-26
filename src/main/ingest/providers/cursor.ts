@@ -1,5 +1,6 @@
 import { Effect, FileSystem, Path } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
+import type { SqlError } from "effect/unstable/sql/SqlError"
 import { SqliteClient } from "@effect/sql-sqlite-node"
 import { createHash } from "node:crypto"
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs"
@@ -325,7 +326,7 @@ interface RawDb {
 }
 
 /** Read meta['0'] and all blobs from a store.db via a per-file read-only client. */
-const readVia = (file: string): Effect.Effect<RawDb, unknown> =>
+const readVia = (file: string): Effect.Effect<RawDb, SqlError> =>
   Effect.gen(function* () {
     const sql = yield* SqlClient
     const meta = yield* sql<{ value: string }>`SELECT value FROM meta WHERE key = '0'`
@@ -337,7 +338,7 @@ const readVia = (file: string): Effect.Effect<RawDb, unknown> =>
   }).pipe(Effect.provide(SqliteClient.layer({ filename: file, readonly: true })))
 
 /** Copy store.db (+ -wal/-shm) to a temp dir and read the snapshot, for live/locked DBs. */
-const readViaSnapshot = (dbPath: string): Effect.Effect<RawDb, unknown> =>
+const readViaSnapshot = (dbPath: string): Effect.Effect<RawDb, SqlError> =>
   Effect.acquireUseRelease(
     Effect.sync(() => mkdtempSync(join(tmpdir(), "arc-cursor-"))),
     (dir) => {
