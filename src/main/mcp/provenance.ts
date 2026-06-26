@@ -21,26 +21,41 @@ export const provenanceFromEnv = (): ArcMcpProvenanceIds => ({
   chatId: process.env[ArcEnvTags.chatId] || undefined,
 })
 
+/** A bearer segment is trusted only if it's a well-formed TypeID for its prefix.
+ * Mirrors `ArcId`'s own suffix pattern (26 Crockford-base32 chars). This is the
+ * guard that keeps an un-interpolated placeholder bearer (e.g. Cursor shipping
+ * the literal `${env:ARC_MCP_TOKEN}`, which splits into `${env` / `ARC_MCP_TOKEN}`)
+ * from being stamped as session/chat provenance and crashing write encoding. */
+const TYPEID_SUFFIX = "[0-9a-hjkmnp-tv-z]{26}"
+const wellFormedArcId = (prefix: string, value: string | undefined): string | undefined =>
+  value && new RegExp(`^${prefix}_${TYPEID_SUFFIX}$`).test(value) ? value : undefined
+
 export const provenanceFromBearerToken = (authorization: string | undefined): ArcMcpProvenanceIds => {
   if (!authorization?.startsWith(BEARER_PREFIX)) return {}
   const [sessionId, chatId] = authorization.slice(BEARER_PREFIX.length).split(":", 2)
   return {
-    sessionId: sessionId || undefined,
-    chatId: chatId || undefined,
+    sessionId: wellFormedArcId("target", sessionId),
+    chatId: wellFormedArcId("chat", chatId),
   }
 }
 
-/** Parse provenance ids stamped by the stdio proxy onto an HTTP MCP request. */
+/**
+ * Resolve provenance for an HTTP MCP request. The `Authorization: Bearer
+ * target:chat` token is the authenticated, Arc-baked identity; the `x-arc-*`
+ * headers are a stamp the trusted stdio proxy adds for bearer-less clients. So
+ * the BEARER WINS when present — a direct caller can't override its own identity
+ * by also sending an `x-arc-session-id`/`x-arc-chat-id` for another target (which
+ * would otherwise let it read that target's assignment via `arc.prime`). The
+ * header ids are themselves validated as well-formed TypeIDs, so a malformed
+ * proxy stamp (or a forged header on the bearer-less path) can't poison provenance.
+ */
 export const provenanceFromHttpHeaders = (
   headers: Readonly<Record<string, string | undefined>>,
 ): ArcMcpProvenanceIds =>
-  mergeProvenanceIds(
-    {
-      sessionId: headers[ARC_MCP_SESSION_HEADER] || undefined,
-      chatId: headers[ARC_MCP_CHAT_HEADER] || undefined,
-    },
-    provenanceFromBearerToken(headers["authorization"]),
-  )
+  mergeProvenanceIds(provenanceFromBearerToken(headers["authorization"]), {
+    sessionId: wellFormedArcId("target", headers[ARC_MCP_SESSION_HEADER] || undefined),
+    chatId: wellFormedArcId("chat", headers[ARC_MCP_CHAT_HEADER] || undefined),
+  })
 
 /** Headers the stdio proxy attaches when forwarding to the in-app HTTP MCP server. */
 export const provenanceToProxyHeaders = (

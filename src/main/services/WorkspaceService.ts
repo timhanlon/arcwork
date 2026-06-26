@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, type Stream, SubscriptionRef } from "effect"
-import { dialog } from "electron"
+import { dialog } from "../electron-optional.js"
 import * as path from "node:path"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import type { Workspace, WorkspacePullRequest } from "../../shared/workspace.js"
@@ -141,8 +141,11 @@ export const WorkspaceServiceLive = Layer.effect(
     const changes = SubscriptionRef.changes(store)
 
     const open = Effect.gen(function* () {
+      // The directory picker is GUI-only; never reached headless (no `dialog`).
+      if (!dialog) return undefined
+      const dlg = dialog
       const result = yield* Effect.promise(() =>
-        dialog.showOpenDialog({
+        dlg.showOpenDialog({
           properties: ["openDirectory", "createDirectory"],
         }),
       )

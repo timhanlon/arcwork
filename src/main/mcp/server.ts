@@ -18,14 +18,18 @@ import {
   WorkPriority,
   WorkStatus,
 } from "../../shared/work.js"
+import { TargetSession } from "../../shared/instance.js"
 import {
   ArcGetParams,
   ArcGetResult,
   ArcSearchParams,
   ArcSearchResult,
 } from "../../shared/read.js"
-import { arcId, ChatId, WorkId } from "../../shared/ids.js"
+import { arcId, ChatId, TargetId, WorkId, WorkspaceId } from "../../shared/ids.js"
 import { WorkService } from "../work/service.js"
+import { TargetSessionManager } from "../services/TargetSessionManager.js"
+import { TargetInboxService } from "../services/TargetInboxService.js"
+import { ChatService } from "../services/ChatService.js"
 import { arcRequestError } from "../errors.js"
 import { ReadService } from "../read/service.js"
 import { resolveArcDb } from "../db/paths.js"
@@ -71,6 +75,30 @@ const MCP_PATH = ARC_MCP_PATH
 const WorkUpdateResult = Schema.Struct({
   work: Work,
   comment: Schema.optional(WorkComment),
+})
+
+const AgentSpawnResult = Schema.Struct({
+  session: TargetSession,
+  assignedWork: Schema.optional(Work),
+})
+
+/** `arc.prime` is read by a freshly-spawned subagent to orient itself, so it
+ * returns only what the agent needs — not the full Work/Chat/TargetSession
+ * objects (provenance, citations, nodeId, transcript paths, timestamps …) that
+ * would dump a wall of noise into its context. The assignment is the point: the
+ * work's id (to update it), title, and body, plus its current status/priority. */
+const PrimedWork = Schema.Struct({
+  id: WorkId,
+  title: Schema.String,
+  body: Schema.String,
+  status: WorkStatus,
+  priority: Schema.NullOr(WorkPriority),
+})
+
+const PrimeResult = Schema.Struct({
+  chat: Schema.optional(Schema.Struct({ id: ChatId, title: Schema.String })),
+  target: Schema.optional(Schema.Struct({ id: TargetId, provider: Schema.String, cwd: Schema.String })),
+  assignedWork: Schema.Array(PrimedWork),
 })
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
@@ -131,12 +159,117 @@ const WorkUpdateTool = Tool.make("arc.work.update", {
   success: WorkUpdateResult,
 })
 
+const AgentSpawnTool = Tool.make("arc.agent.spawn", {
+  description:
+    "Spawn a new provider-backed Arc target session for orchestration. The spawned agent is a normal PTY-backed target session visible in Arc Work; same-provider sessions in one chat are allowed. Pass `workRefId` to durably assign work to the new target session. By default this mints a fresh `target_…`; reuse requires an explicit future target-session operation, not this spawn tool.",
+  parameters: Schema.Struct({
+    provider: Schema.String,
+    chatId: Schema.optional(ChatId),
+    workspaceId: Schema.optional(WorkspaceId),
+    workRefId: Schema.optional(WorkId),
+    instructions: Schema.optional(Schema.String),
+    preset: Schema.optional(Schema.String),
+    cols: Schema.optional(Schema.Number),
+    rows: Schema.optional(Schema.Number),
+  }),
+  success: AgentSpawnResult,
+})
+
+const PrimeTool = Tool.make("arc.prime", {
+  description:
+    "Return startup context for the current Arc-launched target session: the chat it belongs to, target session metadata, and work currently delegated to that target. This is read-only and derives target/chat from MCP transport provenance; `sessionId`/`chatId` are fallback params for clients without stamped headers.",
+  parameters: Schema.Struct({
+    sessionId: Schema.optional(Schema.String),
+    chatId: Schema.optional(ChatId),
+  }),
+  success: PrimeResult,
+})
+
+const AgentSendResult = Schema.Struct({
+  queued: Schema.Boolean,
+  targetSessionId: TargetId,
+})
+
+const AgentSendTool = Tool.make("arc.agent.send", {
+  description:
+    "Send a message INTO a running orchestrated target session (a follow-up, a correction, a peer message). The message is queued on that target's inbox and delivered as its next turn when it is idle — pasted into its live session — or held until its current turn ends. Use this to talk to an agent you spawned with arc.agent.spawn; `targetSessionId` is the id that spawn returned. `from` optionally labels the sender.",
+  parameters: Schema.Struct({
+    targetSessionId: TargetId,
+    body: Schema.String,
+    from: Schema.optional(Schema.String),
+  }),
+  success: AgentSendResult,
+})
+
 const ArcToolkit = Toolkit.make(
   SearchTool,
   GetTool,
   WorkCreateTool,
   WorkUpdateTool,
+  AgentSpawnTool,
+  PrimeTool,
+  AgentSendTool,
 )
+
+/**
+ * Orchestration priming, pushed into the spawn prompt rather than pulled via a
+ * SessionStart hook: prepend the assigned work to the caller's instructions so a
+ * freshly launched agent starts already oriented on what it was delegated. The
+ * prompt is delivered by each provider's normal injection (cursor stdin paste,
+ * claude `--prefill`, …); `arc.prime` stays available for an already-running
+ * agent to re-fetch the same context on demand.
+ *
+ * The wording is deliberately blunt and MCP-first: weaker models (e.g. Cursor's
+ * Composer) otherwise grep the repo for `arc.prime`, or try to run it as a shell
+ * command (`which arc; arc prime`), instead of invoking it as the MCP tool it is.
+ */
+/** The exact tool name a spawned provider's model sees for an `arc.<verb>` MCP
+ * tool. Every client collapses the dotted MCP name to `arc_<verb>` and namespaces
+ * the server its own way, so a prompt that names a tool in prose must use that
+ * client's flattened string — otherwise the model is told to call `arc.prime`
+ * while its tool list only holds `mcp__arc__arc_prime`, and (esp. weaker models
+ * like Cursor's Composer) decides the tool is missing and shells out to `arc`.
+ * This is the forward of the renderer's `arc-tool-name.ts` parsing; keep the two
+ * prefix lists in sync. */
+const mcpToolName = (provider: string, dottedName: string): string => {
+  const base = dottedName.replaceAll(".", "_") // arc.work.update -> arc_work_update
+  switch (provider) {
+    case "claude":
+      return `mcp__arc__${base}`
+    case "cursor":
+      return `mcp_plugin-arc-work-arc_${base}` // orchestrated per-session plugin dir
+    default:
+      return base // codex, pi: server prefix only, no client namespace
+  }
+}
+
+const buildOrchestrationPrompt = (
+  provider: string,
+  work: Work,
+  instructions: string | undefined,
+): string => {
+  const name = (verb: string): string => mcpToolName(provider, verb)
+  const header =
+    "You are an agent spawned by Arc Work to carry out an assigned unit of work. " +
+    `Arc gives you \`${name("arc.prime")}\`, \`${name("arc.work.update")}\`, ` +
+    `\`${name("arc.get")}\`, and \`${name("arc.search")}\` as ` +
+    "MCP TOOLS in your available-tools list — already connected in this session. " +
+    "They are NOT shell commands: there is no `arc` CLI, so never run `arc ...` in a " +
+    "terminal, and never grep or list the repo to check whether they exist. Invoke " +
+    "them directly as tool calls by these exact names. If a call is rejected or " +
+    "errors, stop and report the exact error; never conclude the tools are missing."
+  const steps =
+    "Do these in order:\n" +
+    `1. Invoke the \`${name("arc.prime")}\` tool FIRST to load your full assignment and context.\n` +
+    "2. Carry out the work.\n" +
+    `3. Invoke the \`${name("arc.work.update")}\` tool as you go — comment on progress and ` +
+    "blockers, and set status to `done` only once the work is actually complete. " +
+    `Reporting back via \`${name("arc.work.update")}\` is part of finishing, not optional.\n` +
+    `(The \`${name("arc.search")}\` / \`${name("arc.get")}\` tools read the work graph if you need more context.)`
+  const assignment = `Assigned work ${work.id} [${work.priority}/${work.status}]: ${work.title}\n\n${work.body}`
+  const task = instructions?.trim()
+  return [header, steps, assignment, task ? `Task:\n${task}` : undefined].filter(Boolean).join("\n\n")
+}
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 // Services are acquired once in the build effect and closed over; each handler
@@ -148,6 +281,9 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
   Effect.gen(function* () {
     const work = yield* WorkService
     const read = yield* ReadService
+    const sessions = yield* TargetSessionManager
+    const chats = yield* ChatService
+    const inbox = yield* TargetInboxService
 
     return {
       // A client can't know its own chatId — that's transport context — so
@@ -243,6 +379,104 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
             result = loaded
           }
           return { work: result, comment }
+        }).pipe(Effect.orDie),
+
+      "arc.agent.spawn": (params) =>
+        Effect.gen(function* () {
+          const { chatId: headerChatId } = yield* readMcpProvenanceHeaders()
+          const headerChat = headerChatId ? arcId("chat", headerChatId) : undefined
+          // Don't let a caller launch the session under one chat while the
+          // work-link provenance is recorded under another: the session uses this
+          // `chatId`, but `resolveMcpWriteProvenance` below prefers the trusted
+          // header chat — so a mismatch would split the spawn across chats.
+          if (params.chatId && headerChat && params.chatId !== headerChat) {
+            return yield* Effect.fail(
+              arcRequestError("arc.agent.spawn chatId does not match MCP chat provenance"),
+            )
+          }
+          const chatId = headerChat ?? params.chatId
+          if (!chatId) {
+            return yield* Effect.fail(arcRequestError("arc.agent.spawn requires chatId or MCP chat provenance"))
+          }
+          // Resolve the assigned work first so its context can be pushed into the
+          // launch prompt (priming), then minted into the spawned session below.
+          const work0 = params.workRefId ? yield* work.get(params.workRefId) : null
+          const prompt = work0
+            ? buildOrchestrationPrompt(params.provider, work0, params.instructions)
+            : params.instructions
+          const session = yield* sessions.launch({
+            provider: params.provider,
+            chatId,
+            workspaceId: params.workspaceId,
+            preset: params.preset,
+            prompt,
+            autoSubmit: true,
+            cols: params.cols,
+            rows: params.rows,
+            origin: "orchestrated",
+            reuseExisting: false,
+          })
+          let assignedWork: Work | undefined
+          if (params.workRefId) {
+            const provenance = yield* resolveMcpWriteProvenance({ chatId, sessionId: session.id })
+            assignedWork = yield* work.linkTargetSession(params.workRefId, session.id, provenance, "orchestrated spawn")
+          }
+          return { session, assignedWork }
+        }).pipe(Effect.orDie),
+
+      "arc.prime": (params) =>
+        Effect.gen(function* () {
+          const ids = yield* readMcpProvenanceHeaders()
+          // Trusted transport provenance wins over the voluntary params (which are
+          // only a fallback for clients without stamped headers) — otherwise a
+          // target could read another session's assignment by passing a different
+          // id. Mirrors `resolveMcpWriteProvenance`'s header-first rule.
+          const sessionId = ids.sessionId ?? params.sessionId
+          const chatId = ids.chatId ? arcId("chat", ids.chatId) : params.chatId
+          const sessionList = yield* sessions.list
+          const target = sessionId ? sessionList.find((s) => s.id === sessionId) : undefined
+          const chatList = yield* chats.list
+          const chat = (target?.chatId ?? chatId) ? chatList.find((c) => c.id === (target?.chatId ?? chatId)) : undefined
+          const assignedWork = sessionId
+            ? (yield* work.listDelegatedTo(arcId("target", sessionId))).map((d) => d.work)
+            : []
+          // Project to the lean shape — only what a primed agent needs, never the
+          // full objects' provenance/citations/transcript-path noise.
+          return {
+            chat: chat ? { id: chat.id, title: chat.title } : undefined,
+            target: target ? { id: target.id, provider: target.provider, cwd: target.cwd } : undefined,
+            assignedWork: assignedWork.map((w) => ({
+              id: w.id,
+              title: w.title,
+              body: w.body,
+              status: w.status,
+              priority: w.priority,
+            })),
+          }
+        }).pipe(Effect.orDie),
+
+      "arc.agent.send": (params) =>
+        Effect.gen(function* () {
+          // Fail loud on an undeliverable target rather than silently queuing into
+          // the void — the caller should know the agent isn't there to receive it.
+          const sessionList = yield* sessions.list
+          const target = sessionList.find((s) => s.id === params.targetSessionId)
+          if (!target) {
+            return yield* Effect.fail(arcRequestError(`unknown target session: ${params.targetSessionId}`))
+          }
+          // The message must be surface-able. A target is deliverable if it has a
+          // live PTY now (`attached` — pasted when idle, or flushed on turn-close
+          // when busy) OR a resume path (a bound native session — the controller
+          // flushes the inbox on the resume binding). A detached/exited target with
+          // neither could never surface the message, so fail rather than return a
+          // misleading `{ queued: true }`.
+          if (target.attached !== true && !target.nativeSessionId) {
+            return yield* Effect.fail(
+              arcRequestError(`target session is not deliverable (no live session or resume path): ${params.targetSessionId}`),
+            )
+          }
+          yield* inbox.enqueue(params.targetSessionId, params.body, params.from)
+          return { queued: true, targetSessionId: params.targetSessionId }
         }).pipe(Effect.orDie),
     }
   }),

@@ -7,9 +7,9 @@ import { Schema } from "effect"
  * re-exports these. (Distinct from {@link ProviderSpec} below, which is a
  * provider's capability sheet; this is just its identity.)
  */
-export const Provider = Schema.Literals(["claude", "codex", "cursor"])
+export const Provider = Schema.Literals(["claude", "codex", "cursor", "pi"])
 export type Provider = typeof Provider.Type
-export const ALL_PROVIDERS: ReadonlyArray<Provider> = ["claude", "codex", "cursor"]
+export const ALL_PROVIDERS: ReadonlyArray<Provider> = ["claude", "codex", "cursor", "pi"]
 
 /**
  * Layer 1 — Provider (the "kind"): static capability sheet for a CLI agent.
@@ -26,6 +26,10 @@ export const PromptInjectionMode = Schema.Literals([
   "stdin-after-start",
   "flag-interactive",
   "flag-prompt-interactive",
+  // A long-lived JSONL command stream on stdin (pi `--mode rpc`): prompts are
+  // `{"type":"prompt","message":…}` lines, not terminal paste+Enter. The process
+  // stays resident between turns, so follow-up/inbox messages are just more lines.
+  "rpc-jsonl",
 ])
 export type PromptInjectionMode = typeof PromptInjectionMode.Type
 
@@ -50,6 +54,26 @@ export const InteractiveCapability = Schema.Struct({
   draftPromptFlag: Schema.optional(Schema.String),
   /** env prefill when no flag exists (set via the launched session's env) */
   draftPromptEnvVar: Schema.optional(Schema.String),
+  /**
+   * The glyph this CLI prints at its input prompt once the interactive session
+   * (and its MCP servers) is fully up — `❯` claude, `→` cursor, `›` codex.
+   * Arc watches the tail of PTY output for it and only then submits/pastes the
+   * seeded prompt, so a spawned agent's first turn sees its MCP tools rather
+   * than racing connection. Absent → fall back to first-output as the signal.
+   */
+  readyPromptGlyph: Schema.optional(Schema.String),
+  /**
+   * Pre-session gates this CLI parks at before its input prompt is ever reached
+   * — e.g. cursor-agent shows a "Workspace Trust Required" dialog (and, logged
+   * out, a "Press any key to log in" screen) in a fresh PTY. When a gate's
+   * `match` substring appears in early output, Arc sends its `key` once to
+   * advance past it, so the `readyPromptGlyph` can then appear and the seeded
+   * prompt deliver. Without this the glyph never shows and the prompt strands.
+   * Each gate fires at most once, in output order.
+   */
+  advanceGates: Schema.optional(
+    Schema.Array(Schema.Struct({ match: Schema.String, key: Schema.String })),
+  ),
 })
 export type InteractiveCapability = typeof InteractiveCapability.Type
 

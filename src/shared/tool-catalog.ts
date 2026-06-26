@@ -184,6 +184,14 @@ const SPECS: ReadonlyArray<{ provider: Provider; name: string; render: RenderSha
   { provider: "cursor", name: "Task", render: "fallback" },
   { provider: "cursor", name: "ReadLints", render: "fallback" },
   { provider: "cursor", name: "AskQuestion", render: "fallback" },
+  // ── pi (local) ───────────────────────────────────────────────────────────
+  { provider: "pi", name: "bash", render: "shell" },
+  { provider: "pi", name: "read", render: "path" },
+  { provider: "pi", name: "write", render: "write" },
+  { provider: "pi", name: "edit", render: "diff" },
+  { provider: "pi", name: "ls", render: "path" },
+  { provider: "pi", name: "grep", render: "path" },
+  { provider: "pi", name: "find", render: "path" },
 ]
 
 export const TOOL_CATALOG: ReadonlyArray<ToolEntry> = SPECS.map((spec) => ({

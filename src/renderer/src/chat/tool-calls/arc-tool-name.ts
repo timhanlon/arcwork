@@ -4,12 +4,15 @@
 //
 // Each target CLI flattens an `arc.<verb>` MCP tool name its own way, collapsing
 // the dots in the tool name to underscores but namespacing the server prefix
-// differently. Three shapes have been observed in ingested data, all sharing the
-// `arc_<verb>` tail (e.g. `arc.work.update` → `arc_work_update`):
-//   Claude → `mcp__arc__arc_<verb>`   (double-underscore namespacing)
-//   Cursor → `mcp_arc_arc_<verb>`     (single-underscore namespacing)
-//   Codex  → `arc_<verb>`             (no namespace — server prefix only)
-const ARC_NAMESPACE_PREFIXES = ["mcp__arc__", "mcp_arc_"] as const
+// differently. All shapes share the `arc_<verb>` tail (e.g. `arc.work.update` →
+// `arc_work_update`):
+//   Claude → `mcp__arc__arc_<verb>`                (double-underscore namespacing)
+//   Cursor → `mcp_plugin-arc-work-arc_arc_<verb>`  (our plugin server, the
+//             orchestrated path: `mcp_plugin-<plugin-name>-<server>_`)
+//   Cursor → `mcp_arc_arc_<verb>`                  (a home `~/.cursor/mcp.json`
+//             server named "arc" — the manual/legacy path)
+//   Codex  → `arc_<verb>`                          (no namespace — server prefix only)
+const ARC_NAMESPACE_PREFIXES = ["mcp__arc__", "mcp_plugin-arc-work-arc_", "mcp_arc_"] as const
 const ARC_VERB_PREFIX = "arc_"
 
 /** Drop the CLI's MCP namespace (if any), leaving the server-prefixed `arc_<verb>`. */

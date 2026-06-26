@@ -1,6 +1,7 @@
 import { Effect, Layer, Queue } from "effect"
-import { ipcMain, webContents, type IpcMainEvent } from "electron"
+import type { IpcMainEvent } from "electron"
 import { type RpcMessage, RpcServer } from "effect/unstable/rpc"
+import { ipcMain, webContents } from "./electron-optional.js"
 import { RPC_CHANNEL, RPC_REPLY_CHANNEL } from "../shared/rpc.js"
 
 /**
@@ -39,6 +40,14 @@ export const ElectronRpcServerProtocol = Layer.effect(
   RpcServer.Protocol,
   RpcServer.Protocol.make(
     Effect.fnUntraced(function* (writeRequest) {
+      // This transport bridges renderer windows, so it only runs inside a real
+      // Electron main process — never under the headless harness, which doesn't
+      // build the RPC server layer at all.
+      if (!ipcMain || !webContents) {
+        return yield* Effect.die(new Error("RPC transport requires an Electron main process"))
+      }
+      const ipcMainApi = ipcMain
+      const webContentsApi = webContents
       const disconnects = yield* Queue.make<number>()
       const inbox = yield* Queue.make<{
         readonly clientId: number
@@ -87,9 +96,9 @@ export const ElectronRpcServerProtocol = Layer.effect(
         }
         Queue.offerUnsafe(inbox, { clientId: clientIdFor(wcId), message })
       }
-      ipcMain.on(RPC_CHANNEL, onMessage)
+      ipcMainApi.on(RPC_CHANNEL, onMessage)
       yield* Effect.addFinalizer(() =>
-        Effect.sync(() => ipcMain.removeListener(RPC_CHANNEL, onMessage)),
+        Effect.sync(() => ipcMainApi.removeListener(RPC_CHANNEL, onMessage)),
       )
 
       // Raw listener -> queue -> server receive loop, so each message is fed to
@@ -106,7 +115,7 @@ export const ElectronRpcServerProtocol = Layer.effect(
           Effect.sync(() => {
             const wcId = wcByClientId.get(clientId)
             if (wcId === undefined) return
-            const wc = webContents.fromId(wcId)
+            const wc = webContentsApi.fromId(wcId)
             if (wc && !wc.isDestroyed()) wc.send(RPC_REPLY_CHANNEL, response)
           }),
         end: () => Effect.void,

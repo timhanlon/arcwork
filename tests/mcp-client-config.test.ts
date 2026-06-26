@@ -129,7 +129,7 @@ describe("repo-clean MCP launch args", () => {
     ])
   })
 
-  it("cursor only needs --approve-mcps (server lives in the plugin's mcp.json)", () => {
-    expect(providerMcpLaunchArgs("cursor", "stable")).toEqual(["--approve-mcps"])
+  it("cursor auto-approves + force-allows its MCP server (declared in the plugin's mcp.json)", () => {
+    expect(providerMcpLaunchArgs("cursor", "stable")).toEqual(["--approve-mcps", "--force"])
   })
 })

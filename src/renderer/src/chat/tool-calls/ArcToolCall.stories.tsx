@@ -7,7 +7,7 @@ import { ToolCall } from "./ToolCall.js"
 // replace the generic raw-JSON MCP fallback. Samples are trimmed real shapes
 // (args + result JSON) drawn from ingested transcripts, so the grid exercises the
 // exact payloads the renderer must handle — including the per-CLI name flattening
-// (Claude `mcp__arc__arc_*`, Cursor `mcp_arc_arc_*`, Codex `arc_*`). Sibling story
+// (Claude `mcp__arc__arc_*`, Cursor `mcp_plugin-arc-work-arc_arc_*`, Codex `arc_*`). Sibling story
 // `Chat / ToolCall` covers the first-party (catalog) tools.
 export default {
   title: "Chat / ArcToolCall",

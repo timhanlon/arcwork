@@ -21,9 +21,9 @@ import type { ShellPane } from "./arcShellMachine.js"
  *    gap between its pane opening (`TARGET_LAUNCH_REQUESTED`) and its session id
  *    binding (`TARGET_BOUND`). The session is broadcast the instant
  *    `TargetSessionManager.launch` writes the store, which can beat the launch
- *    rpc's response that binds the pane; one-session-per-`(chat, provider)` makes
- *    this key match unambiguous, so adoption never races a manual launch into a
- *    duplicate pane.
+ *    rpc's response that binds the pane. This guard is only for manual/default
+ *    sessions; orchestrated sessions can share a provider with the pending
+ *    manual launch and still need their own pane.
  *
  * Pure and idempotent: once a session has been adopted it carries a bound pane,
  * so a later call excludes it — the App effect can run on every `arc:sessions`
@@ -44,6 +44,7 @@ export function unadoptedSessions(
       session.attached === true &&
       session.state !== "exited" &&
       !boundIds.has(session.id) &&
-      !pendingKeys.has(`${session.chatId}:${session.provider}`),
+      ((session.origin ?? "manual") !== "manual" ||
+        !pendingKeys.has(`${session.chatId}:${session.provider}`)),
   )
 }

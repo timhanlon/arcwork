@@ -22,6 +22,8 @@ export type ArcIdPrefix =
   | "work_edge"
   // a comment on a work revision node or its durable ref
   | "comment"
+  // a message queued for delivery into a running target session's inbox
+  | "inbox"
 
 /**
  * The suffix every TypeID carries after `prefix_`: 26 chars of Crockford base32

@@ -8,6 +8,9 @@ import { WorkService, WorkServiceLive } from "../src/main/work/service.js"
 import { WorkStoreLive } from "../src/main/work/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
 import { ReadService } from "../src/main/read/service.js"
+import { ChatService } from "../src/main/services/ChatService.js"
+import { TargetSessionManager } from "../src/main/services/TargetSessionManager.js"
+import { TargetInboxService } from "../src/main/services/TargetInboxService.js"
 import { WORK_STATUSES } from "../src/shared/work.js"
 
 /**
@@ -28,9 +31,21 @@ const RealWorkService = WorkServiceLive.pipe(
   Layer.provide(WorkStoreLive),
   Layer.provide(sqliteLayer(":memory:")),
 )
+// Controllable state for the orchestration-tool stubs (arc.agent.send).
+const stubTargets: Array<{ id: string; state: string; attached: boolean; nativeSessionId?: string }> = []
+const stubEnqueued: Array<{ targetSessionId: string; body: string }> = []
+
 const StubServices = Layer.mergeAll(
   RealWorkService,
   Layer.succeed(ReadService, {} as never),
+  Layer.succeed(ChatService, {} as never),
+  Layer.succeed(TargetSessionManager, { list: Effect.sync(() => stubTargets) } as never),
+  Layer.succeed(TargetInboxService, {
+    enqueue: (targetSessionId: string, body: string) =>
+      Effect.sync(() => {
+        stubEnqueued.push({ targetSessionId, body })
+      }),
+  } as never),
 )
 
 const EXPECTED_TOOLS = [
@@ -38,6 +53,9 @@ const EXPECTED_TOOLS = [
   "arc.get",
   "arc.work.create",
   "arc.work.update",
+  "arc.agent.spawn",
+  "arc.prime",
+  "arc.agent.send",
 ] as const
 
 interface PostResult {
@@ -287,6 +305,58 @@ describe("Arc MCP server", () => {
     expect(payload.work.priority).toBe("p1")
     expect(payload.comment?.body).toBe("started")
     expect(payload.comment?.workRefId).toBe(work.id)
+  })
+
+  it("arc.agent.send only queues for a deliverable target (live PTY or resume path)", async () => {
+    // Valid target typeids (the tool's TargetId schema validates the argument).
+    const liveId = "target_01kw09f93fenb8tagr6z6y4992" // attached: deliver now / on turn-close
+    const resumableId = "target_01kw0669hfferbxf2tayrtvabz" // detached but bound: delivers on resume
+    const orphanId = "target_01kw060khqferbxez0mg1ctbpa" // detached, never bound: undeliverable
+    stubTargets.length = 0
+    stubTargets.push({ id: liveId, state: "running", attached: true })
+    stubTargets.push({ id: resumableId, state: "exited", attached: false, nativeSessionId: "native-1" })
+    stubTargets.push({ id: orphanId, state: "exited", attached: false })
+    stubEnqueued.length = 0
+
+    const init = await post(url, {
+      jsonrpc: "2.0",
+      id: 11,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "arc-mcp-test", version: "1.0.0" },
+      },
+    })
+    const send = (targetSessionId: string, id: number): Promise<PostResult> =>
+      post(
+        url,
+        {
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "arc.agent.send", arguments: { targetSessionId, body: "ping" } },
+        },
+        init.sessionId!,
+      )
+
+    // Attached (live PTY) → queues + reports success.
+    const live = parseCallResult((await send(liveId, 12)).text)
+    expect(live.isError).toBeFalsy()
+    expect(live.structuredContent).toMatchObject({ queued: true })
+    expect(stubEnqueued).toHaveLength(1)
+
+    // Detached but resumable (bound native session) → still queues; the controller
+    // flushes it when the target resumes.
+    const resumable = parseCallResult((await send(resumableId, 13)).text)
+    expect(resumable.isError).toBeFalsy()
+    expect(stubEnqueued).toHaveLength(2)
+
+    // No live PTY and no resume path → rejected loudly, and crucially NOT queued
+    // (it could never be surfaced), unlike the old `{ queued: true }`.
+    const orphan = parseCallResult((await send(orphanId, 14)).text)
+    expect(orphan.isError).toBe(true)
+    expect(stubEnqueued).toHaveLength(2)
   })
 
   it("arc.work.update rejects a call with no operation", async () => {

@@ -20,6 +20,7 @@ const providers: ReadonlyArray<ProviderSpec> = [
       // `claude --prefill <text>` seeds the input box without submitting —
       // eliminates the paste-after-ready race (see orca audit).
       draftPromptFlag: "--prefill",
+      readyPromptGlyph: "❯",
     },
   },
   {
@@ -31,7 +32,8 @@ const providers: ReadonlyArray<ProviderSpec> = [
     interactive: {
       launchCmd: "codex",
       expectedProcess: "codex",
-      promptInjectionMode: "argv",
+      promptInjectionMode: "stdin-after-start",
+      readyPromptGlyph: "›",
     },
   },
   {
@@ -45,7 +47,38 @@ const providers: ReadonlyArray<ProviderSpec> = [
     interactive: {
       launchCmd: "cursor-agent",
       expectedProcess: "cursor-agent",
-      // stdin-after-start uses delayed submit in TargetSessionManager (text, then \r).
+      // Paste-after-ready (gated on the `→` glyph below), not a positional argv
+      // prompt: an argv prompt starts turn 1 during early startup, before the
+      // plugin's HTTP MCP servers connect, so the agent's first turn sees no arc
+      // tools. Waiting for the prompt glyph lets MCP come up first.
+      promptInjectionMode: "stdin-after-start",
+      readyPromptGlyph: "→",
+      // Fresh PTY launches park at a gate before the agent TUI (and its `→`
+      // prompt) appear: a workspace-trust dialog (select `[a] Trust`) and, when
+      // logged out, a "press any key to log in" screen (Enter). Clear each so
+      // the ready glyph can show.
+      advanceGates: [
+        { match: "Workspace Trust Required", key: "a" },
+        { match: "Press any key to log in", key: "\r" },
+      ],
+    },
+  },
+  {
+    kind: "pi",
+    displayName: "pi (local)",
+    detectCmd: "pi",
+    // Local-model agent (via LM Studio). No machine-wide singleton constraint and
+    // no cloud/approval gate, so it's the workhorse for orchestration testing.
+    concurrency: "per-worktree",
+    batch: { commandName: "pi", promptFlag: "-p", modelFlag: "--model" },
+    interactive: {
+      launchCmd: "pi",
+      expectedProcess: "pi",
+      // A normal interactive TUI, human-drivable like the other providers; the
+      // arc toolkit + lifecycle hook relay come from the `-e` extension, and the
+      // inbox pastes follow-ups. (pi can also run as a JSONL rpc server — see
+      // piLaunchArgs `rpc` + the `rpc-jsonl` injection mode — but the TUI is the
+      // default so pi is launchable by hand.)
       promptInjectionMode: "stdin-after-start",
     },
   },

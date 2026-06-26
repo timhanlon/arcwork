@@ -140,6 +140,17 @@ export interface ChatRow {
   readonly createdAt: string
 }
 
+/** A message queued for delivery into a running target session (see the
+ * `0011_target_messages` migration). `deliveredAt` NULL = still pending. */
+export interface TargetMessageRow {
+  readonly id: string
+  readonly targetSessionId: TargetId
+  readonly body: string
+  readonly sender: string | null
+  readonly createdAt: string
+  readonly deliveredAt: string | null
+}
+
 /** A communication endpoint — the "where turns flow" half of a worker: the
  * harness/provider, the (eventually selectable) model, and a preset. `kind` is
  * `'local'` today; the remote tier adds `'remote'`/`'cloudflare-sandbox'`
@@ -158,15 +169,18 @@ export interface ChannelRow {
   readonly lastUsedAt: string
 }
 
-/** One row per interactive PTY target session, keyed `(chatId, provider)` — the
- * worker, i.e. the bound pair of a comm endpoint (`channelId` → `channels`) and
- * a diff endpoint (`workspaceId` → `workspaces`). `provider`/`preset`/`cwd` are
- * the pre-split inlined values, kept dual-written until the launch path reads
- * the refs; `channelId`/`workspaceId` are null only for backfill orphans. */
+/** One row per interactive PTY target session, keyed by its `target_…` TypeID —
+ * the worker, i.e. the bound pair of a comm endpoint (`channelId` → `channels`)
+ * and a diff endpoint (`workspaceId` → `workspaces`). `provider`/`preset`/`cwd`
+ * are the pre-split inlined values, kept dual-written until the launch path
+ * reads the refs; `channelId`/`workspaceId` are null only for backfill orphans.
+ * `origin` distinguishes the user's default/manual target from independently
+ * spawned orchestration targets; it is not part of identity. */
 export interface TargetSessionRow {
   readonly id: TargetId
   readonly chatId: ChatId
   readonly provider: string
+  readonly origin?: string
   readonly preset: string | null
   readonly cwd: string
   /** comm endpoint: the `channels` row this worker talks through */
@@ -266,13 +280,13 @@ export const arcMigrations: Migrations = {
     id TEXT PRIMARY KEY,
     chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     provider TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT 'manual',
     preset TEXT,
     cwd TEXT NOT NULL,
     native_session_id TEXT,
     native_transcript_path TEXT,
     state TEXT NOT NULL,
-    started_at TEXT NOT NULL,
-    UNIQUE(chat_id, provider)
+    started_at TEXT NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS chats_workspace ON chats(workspace_id, created_at, id)`,
   `CREATE INDEX IF NOT EXISTS target_sessions_chat ON target_sessions(chat_id)`,
@@ -823,5 +837,58 @@ export const arcMigrations: Migrations = {
   "0009_workspace_archive": sqlMigration(
     `ALTER TABLE workspaces ADD COLUMN archived_at TEXT`,
     `CREATE INDEX IF NOT EXISTS workspaces_archived ON workspaces(archived_at, last_opened_at, id)`,
+  ),
+  "0010_target_sessions_typeid_identity": Effect.gen(function* () {
+    const sql = yield* SqlClient
+    const columns = yield* sql.unsafe<{ name: string }>("PRAGMA table_info(target_sessions)")
+    if (!columns.some((column) => column.name === "origin")) {
+      yield* sql.unsafe(`ALTER TABLE target_sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual'`)
+    }
+    yield* sql.unsafe(`DROP TABLE IF EXISTS target_sessions_next`)
+    yield* sql.unsafe(`CREATE TABLE target_sessions_next (
+      id TEXT PRIMARY KEY,
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      origin TEXT NOT NULL DEFAULT 'manual',
+      preset TEXT,
+      cwd TEXT NOT NULL,
+      native_session_id TEXT,
+      native_transcript_path TEXT,
+      state TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      channel_id TEXT REFERENCES channels(id),
+      workspace_id TEXT REFERENCES workspaces(id)
+    )`)
+    yield* sql.unsafe(`INSERT INTO target_sessions_next (
+      id, chat_id, provider, origin, preset, cwd, native_session_id,
+      native_transcript_path, state, started_at, channel_id, workspace_id
+    )
+    SELECT
+      id, chat_id, provider, origin, preset, cwd, native_session_id,
+      native_transcript_path, state, started_at, channel_id, workspace_id
+    FROM target_sessions`)
+    yield* sql.unsafe(`DROP TABLE target_sessions`)
+    yield* sql.unsafe(`ALTER TABLE target_sessions_next RENAME TO target_sessions`)
+    yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS target_sessions_chat ON target_sessions(chat_id)`)
+    yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS target_sessions_native ON target_sessions(provider, native_session_id)`)
+    yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS target_sessions_channel ON target_sessions(channel_id)`)
+    yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS target_sessions_workspace ON target_sessions(workspace_id)`)
+    yield* sql.unsafe(`CREATE INDEX IF NOT EXISTS target_sessions_manual_slot ON target_sessions(chat_id, provider, origin, state, started_at)`)
+  }),
+  // A per-target-session inbox of messages to deliver INTO a running agent (a
+  // parent's follow-up, a user nudge, a peer message). `delivered_at` is the
+  // ack: NULL = still pending, set only once the message has been surfaced to
+  // the agent (pasted into its PTY). Ack-on-surface means a crash before
+  // delivery leaves the row pending, so it redelivers on the next idle turn.
+  "0011_target_messages": sqlMigration(
+    `CREATE TABLE IF NOT EXISTS target_messages (
+      id TEXT PRIMARY KEY,
+      target_session_id TEXT NOT NULL REFERENCES target_sessions(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      sender TEXT,
+      created_at TEXT NOT NULL,
+      delivered_at TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS target_messages_pending ON target_messages(target_session_id, delivered_at, created_at, id)`,
   ),
 }

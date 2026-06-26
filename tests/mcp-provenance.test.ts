@@ -14,19 +14,19 @@ describe("MCP provenance headers", () => {
   it("maps env tags to proxy headers and back", () => {
     const prevSession = process.env["ARC_TARGET_SESSION_ID"]
     const prevChat = process.env["ARC_CHAT_ID"]
-    process.env["ARC_TARGET_SESSION_ID"] = "target_abc"
-    process.env["ARC_CHAT_ID"] = "chat_xyz"
+    process.env["ARC_TARGET_SESSION_ID"] = TARGET
+    process.env["ARC_CHAT_ID"] = CHAT
     try {
       expect(provenanceToProxyHeaders(provenanceFromEnv())).toEqual({
-        [ARC_MCP_SESSION_HEADER]: "target_abc",
-        [ARC_MCP_CHAT_HEADER]: "chat_xyz",
+        [ARC_MCP_SESSION_HEADER]: TARGET,
+        [ARC_MCP_CHAT_HEADER]: CHAT,
       })
       expect(
         provenanceFromHttpHeaders({
-          [ARC_MCP_SESSION_HEADER]: "target_abc",
-          [ARC_MCP_CHAT_HEADER]: "chat_xyz",
+          [ARC_MCP_SESSION_HEADER]: TARGET,
+          [ARC_MCP_CHAT_HEADER]: CHAT,
         }),
-      ).toEqual({ sessionId: "target_abc", chatId: "chat_xyz" })
+      ).toEqual({ sessionId: TARGET, chatId: CHAT })
     } finally {
       if (prevSession === undefined) delete process.env["ARC_TARGET_SESSION_ID"]
       else process.env["ARC_TARGET_SESSION_ID"] = prevSession
@@ -45,13 +45,15 @@ describe("MCP provenance headers", () => {
     expect(mergeProvenanceIds({}, { sessionId: "from-param" })).toEqual({ sessionId: "from-param" })
   })
 
+  // Real TypeIDs — the bearer parser enforces the full `prefix_<26 base32>` shape,
+  // so a toy `target_abc`/`chat_xyz` is (correctly) rejected as malformed.
+  const TARGET = "target_01kvy60sapfvmsv62zb4jc9ewk"
+  const CHAT = "chat_01kvy2h0qke8gvv1vt37fzg5tr"
+
   it("round-trips arcMcpBearerToken through the bearer parser", () => {
-    const token = arcMcpBearerToken({ targetSessionId: "target_abc", chatId: "chat_xyz" })
-    expect(token).toBe("target_abc:chat_xyz")
-    expect(provenanceFromBearerToken(`Bearer ${token}`)).toEqual({
-      sessionId: "target_abc",
-      chatId: "chat_xyz",
-    })
+    const token = arcMcpBearerToken({ targetSessionId: TARGET, chatId: CHAT })
+    expect(token).toBe(`${TARGET}:${CHAT}`)
+    expect(provenanceFromBearerToken(`Bearer ${token}`)).toEqual({ sessionId: TARGET, chatId: CHAT })
   })
 
   it("ignores absent or non-Bearer authorization", () => {
@@ -60,20 +62,43 @@ describe("MCP provenance headers", () => {
     expect(provenanceFromBearerToken("Bearer ")).toEqual({})
   })
 
+  it("drops a placeholder bearer the client failed to interpolate", () => {
+    // Cursor ships `${env:ARC_MCP_TOKEN}` verbatim; split on ":" yields `${env` /
+    // `ARC_MCP_TOKEN}`, neither a well-formed id — so nothing is stamped (rather
+    // than poisoning a write's provenance and crashing its result encoding).
+    expect(provenanceFromBearerToken("Bearer ${env:ARC_MCP_TOKEN}")).toEqual({})
+    // A well-formed prefix but malformed suffix is rejected too.
+    expect(provenanceFromBearerToken("Bearer target_abc:chat_xyz")).toEqual({})
+  })
+
   it("derives provenance from a bearer token on the HTTP request", () => {
-    expect(provenanceFromHttpHeaders({ authorization: "Bearer target_abc:chat_xyz" })).toEqual({
-      sessionId: "target_abc",
-      chatId: "chat_xyz",
+    expect(provenanceFromHttpHeaders({ authorization: `Bearer ${TARGET}:${CHAT}` })).toEqual({
+      sessionId: TARGET,
+      chatId: CHAT,
     })
   })
 
-  it("prefers proxy stamp headers over the bearer token", () => {
+  it("uses the proxy stamp headers when there is no bearer (the trusted proxy path)", () => {
+    expect(
+      provenanceFromHttpHeaders({ [ARC_MCP_SESSION_HEADER]: TARGET, [ARC_MCP_CHAT_HEADER]: CHAT }),
+    ).toEqual({ sessionId: TARGET, chatId: CHAT })
+  })
+
+  it("does not let a forged x-arc-* header override the authenticated bearer", () => {
+    // A direct caller with a valid bearer for its own target also sends an
+    // x-arc-session-id for ANOTHER target. The bearer must win, or arc.prime would
+    // read the other target's delegated work.
+    const OTHER = "target_01kvy999sapfvmsv62zb4jc9ewk"
     expect(
       provenanceFromHttpHeaders({
-        [ARC_MCP_SESSION_HEADER]: "from-proxy",
-        authorization: "Bearer from-bearer:chat-bearer",
+        [ARC_MCP_SESSION_HEADER]: OTHER,
+        authorization: `Bearer ${TARGET}:${CHAT}`,
       }),
-    ).toEqual({ sessionId: "from-proxy", chatId: "chat-bearer" })
+    ).toEqual({ sessionId: TARGET, chatId: CHAT })
+  })
+
+  it("drops a malformed proxy header rather than stamping it as provenance", () => {
+    expect(provenanceFromHttpHeaders({ [ARC_MCP_SESSION_HEADER]: "target_not_a_typeid" })).toEqual({})
   })
 })
 

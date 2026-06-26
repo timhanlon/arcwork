@@ -6,14 +6,15 @@ import { sqliteLayer } from "./db/sqlite.js"
 import { makeClaudeProvider } from "./providers/claude.js"
 import { makeCodexProvider } from "./providers/codex.js"
 import { makeCursorProvider } from "./providers/cursor.js"
+import { makePiProvider } from "./providers/pi.js"
 import type { AgentProvider } from "./providers/provider.js"
 
-/** Build the three providers (each captures FileSystem/Path once). */
+/** Build the providers (each captures FileSystem/Path once). */
 export const makeProviders: Effect.Effect<
   ReadonlyArray<AgentProvider>,
   never,
   FileSystem.FileSystem | Path.Path
-> = Effect.all([makeClaudeProvider, makeCodexProvider, makeCursorProvider])
+> = Effect.all([makeClaudeProvider, makeCodexProvider, makeCursorProvider, makePiProvider])
 
 /**
  * Composition root: the IngestStore (over a SqliteClient pointed at `dbPath`)

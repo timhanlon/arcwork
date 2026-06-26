@@ -15,6 +15,7 @@ import { LocalModelServiceLive } from "./services/LocalModelService.js"
 import { RawHookSignalServiceLive } from "./services/RawHookSignalService.js"
 import { ArtifactIngestServiceLive } from "./services/ArtifactIngestService.js"
 import { TargetSessionManagerLive } from "./services/TargetSessionManager.js"
+import { TargetInboxServiceLive } from "./services/TargetInboxService.js"
 import { ArcStoreLive } from "./db/store.js"
 import { sqliteLayer } from "./db/sqlite.js"
 import { arcDbPath } from "./db/paths.js"
@@ -76,6 +77,13 @@ const LiveTargetStatesLive = LiveTargetStateServiceLive.pipe(
   Layer.provide(SessionsLive),
   Layer.provide(ChatMessagesLive),
 )
+// Deliver messages into a running target session: queues on the inbox, pastes
+// when the target is idle (reads live activity + drives the PTY).
+const TargetInboxLive = TargetInboxServiceLive.pipe(
+  Layer.provide(StoreLive),
+  Layer.provide(SessionsLive),
+  Layer.provide(LiveTargetStatesLive),
+)
 
 const DomainServiceLayers = [
   WorkLive,
@@ -88,6 +96,7 @@ const DomainServiceLayers = [
   ActivityEventsLive,
   ChatMessagesLive,
   LiveTargetStatesLive,
+  TargetInboxLive,
   SessionsLive,
 ] as const
 

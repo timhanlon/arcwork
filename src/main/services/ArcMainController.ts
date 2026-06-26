@@ -1,13 +1,13 @@
 import { Clock, Effect, FiberMap, Queue, Schedule, type Scope, Stream } from "effect"
 import type { EventEmitter } from "node:events"
 import * as fs from "node:fs"
-import { ipcMain } from "electron"
 import type { TargetSession } from "../../shared/instance.js"
 import { TargetSessionManager } from "./TargetSessionManager.js"
 import { HookSignalServer } from "./HookSignalServer.js"
 import { ActivityEventService } from "./ActivityEventService.js"
 import { ChatMessageService } from "./ChatMessageService.js"
 import { LiveTargetStateService } from "./LiveTargetStateService.js"
+import { TargetInboxService } from "./TargetInboxService.js"
 import { RawHookSignalService } from "./RawHookSignalService.js"
 import { ArtifactIngestService } from "./ArtifactIngestService.js"
 import { ingestHookSignal } from "./HookSignalIngestion.js"
@@ -24,6 +24,7 @@ import type { Provider } from "../ingest/db/schema.js"
 import type { HookBinding, HookSignal } from "../hooks/signals.js"
 import { hookSignalToAssistantStreamDelta } from "../hooks/assistant-stream-delta.js"
 import { PTY_TRACE_ENABLED, tracePtySend } from "./pty-trace.js"
+import { ipcMain } from "../electron-optional.js"
 
 /** How the controller reaches renderer windows. The Electron implementation
  * lives at the bootstrap boundary (`index.ts`); the controller stays unaware of
@@ -164,6 +165,7 @@ export const launchArcMainController = (
   | ActivityEventService
   | ChatMessageService
   | LiveTargetStateService
+  | TargetInboxService
   | ArtifactIngestService
   | WorkService
   | GitService
@@ -175,6 +177,7 @@ export const launchArcMainController = (
     const activityEvents = yield* ActivityEventService
     const chatMessages = yield* ChatMessageService
     const liveStates = yield* LiveTargetStateService
+    const inbox = yield* TargetInboxService
     const artifactIngest = yield* ArtifactIngestService
     const work = yield* WorkService
     const git = yield* GitService
@@ -399,24 +402,39 @@ export const launchArcMainController = (
         ),
       )
     }
-    ipcMain.on("arc:pty-write", onPtyWrite)
-    ipcMain.on("arc:pty-resize", onPtyResize)
-    ipcMain.on("arc:pty-replayed", onPtyReplayed)
-    ipcMain.on("arc:pty-dropped", onPtyDropped)
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        ipcMain.removeListener("arc:pty-write", onPtyWrite)
-        ipcMain.removeListener("arc:pty-resize", onPtyResize)
-        ipcMain.removeListener("arc:pty-replayed", onPtyReplayed)
-        ipcMain.removeListener("arc:pty-dropped", onPtyDropped)
-      }),
-    )
+    // The PTY-input bridge is renderer→main IPC, so it only exists when Electron's
+    // `ipcMain` does. Under ELECTRON_RUN_AS_NODE (the headless test harness) there
+    // is no renderer and `ipcMain` is undefined; the rest of the controller — the
+    // hook/PTY data plane and orchestration below — runs unchanged without it.
+    if (ipcMain) {
+      const ipc = ipcMain
+      ipc.on("arc:pty-write", onPtyWrite)
+      ipc.on("arc:pty-resize", onPtyResize)
+      ipc.on("arc:pty-replayed", onPtyReplayed)
+      ipc.on("arc:pty-dropped", onPtyDropped)
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          ipc.removeListener("arc:pty-write", onPtyWrite)
+          ipc.removeListener("arc:pty-resize", onPtyResize)
+          ipc.removeListener("arc:pty-replayed", onPtyReplayed)
+          ipc.removeListener("arc:pty-dropped", onPtyDropped)
+        }),
+      )
+    }
 
     // --- Hook signals (control plane): supervised stream consumers. ---
     // A hook revealed a child's native session id — bind it onto the session.
     // The mutation flows to renderers through the `changes` broadcasts below.
     yield* streamFromEmitter<HookBinding>(hookServer.events, "binding").pipe(
-      Stream.runForEach((b) => sessions.bindNative(b.targetSessionId, b.nativeSessionId, b.transcriptPath)),
+      Stream.runForEach((b) =>
+        sessions.bindNative(b.targetSessionId, b.nativeSessionId, b.transcriptPath).pipe(
+          // A binding fires on SessionStart — including a resume, which otherwise
+          // never delivers messages queued while the target was detached/exited.
+          // The flush no-ops unless the target is idle with pending rows, so it's
+          // harmless for a fresh spawn (which has nothing queued yet).
+          Effect.andThen(inbox.flushTo(b.targetSessionId)),
+        ),
+      ),
       Effect.forkScoped,
     )
 
@@ -495,6 +513,9 @@ export const launchArcMainController = (
           const lifecycle = turnLifecycle(signal)
           if (lifecycle && signal.arcTargetSessionId) {
             yield* liveStates.noteTurn(signal.arcTargetSessionId, lifecycle === "open")
+            // A closing turn is the moment a busy target becomes idle — flush any
+            // messages that queued while it was mid-turn. Best-effort (never fails).
+            if (lifecycle === "close") yield* inbox.flushTo(signal.arcTargetSessionId)
           }
           if (shouldBackfillArtifacts(signal) && signal.cwd) {
             // Only the session that just stopped changed — persist just it (the
