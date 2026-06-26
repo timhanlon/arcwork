@@ -189,8 +189,14 @@ const maybePrime = async () => {
     const payload = parseMcpPayload(prime.text)
     const context = payload?.result?.structuredContent
     if (context) {
+      // Provider hooks (Claude Code, Codex) share one SessionStart output schema:
+      // the context must ride under hookSpecificOutput.additionalContext. A bare
+      // top-level field is rejected as "invalid session start JSON output".
       process.stdout.write(JSON.stringify({
-        additional_context: "Arc prime context from MCP arc.prime:\\n" + JSON.stringify(context, null, 2),
+        hookSpecificOutput: {
+          hookEventName: "SessionStart",
+          additionalContext: "Arc prime context from MCP arc.prime:\\n" + JSON.stringify(context, null, 2),
+        },
       }) + "\\n")
     }
   } catch {
