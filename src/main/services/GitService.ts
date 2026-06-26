@@ -1,5 +1,4 @@
 import { Cause, Context, Duration, Effect, Fiber, Layer, PubSub, Queue, type Scope, Stream } from "effect"
-import * as fs from "node:fs/promises"
 import { watch as watchFs, type FSWatcher } from "node:fs"
 import * as path from "node:path"
 import type {
@@ -17,8 +16,15 @@ import { WorkspaceService } from "./WorkspaceService.js"
 import { ArcStore } from "../db/store.js"
 import { newArcId } from "../../shared/ids.js"
 import { nowIso } from "../clock.js"
-import { arcWorkWorktreePath, resolveProfile } from "../db/paths.js"
-import { runGh, runGit, runGitCapture } from "./git/exec.js"
+import { resolveProfile } from "../db/paths.js"
+import { runGh, runGit } from "./git/exec.js"
+import {
+  createWorktree as createWorktreeEffect,
+  openWorktree as openWorktreeEffect,
+  pruneWorktrees as pruneWorktreesEffect,
+  removeWorktree as removeWorktreeEffect,
+  type WorktreeDeps,
+} from "./git/worktree.js"
 import {
   bool,
   defaultBranchRemote,
@@ -707,25 +713,18 @@ export const GitServiceLive = Layer.effect(
     // have one, else the clone's directory name.
     const repoSlugFor = (repo: RepositoryRow): string => repo.githubRepo ?? path.basename(repo.rootPath)
 
-    // Run `git worktree remove` then drop the persisted row. Returns the git
-    // failure text rather than raising so explicit remove can reconcile rows
-    // when Git already forgot the worktree.
-    const removeManagedTree = (
-      repo: RepositoryRow,
-      worktreePath: string,
-      options?: { readonly force?: boolean },
-    ): Effect.Effect<{ readonly ok: true } | { readonly ok: false; readonly error: string }, ArcRequestError> =>
-      Effect.gen(function* () {
-        const args = ["worktree", "remove", ...(options?.force ? ["--force"] : []), worktreePath]
-        const result = yield* Effect.promise(() => runGitCapture(repo.rootPath, args))
-        if (result.exitCode !== 0) {
-          return { ok: false, error: result.stderr.trim() || `exit ${result.exitCode}` }
-        }
-        yield* store
-          .deleteWorktreeByPath(worktreePath)
-          .pipe(Effect.mapError((e) => arcRequestError(`worktree row delete failed: ${e}`)))
-        return { ok: true }
-      })
+    const worktreeDeps: WorktreeDeps = {
+      store,
+      profile,
+      repoSlugFor,
+      requireRepository,
+      detectRepository,
+      publishChange,
+      listWorkspaces: workspaces.list,
+      openWorkspaceAt: (worktreePath) =>
+        workspaces.openAt(worktreePath).pipe(Effect.mapError((e) => arcRequestError(`open worktree failed: ${e}`))),
+      nowIso,
+    }
 
     const createWorktree = (
       workspaceId: WorkspaceId,
@@ -735,242 +734,19 @@ export const GitServiceLive = Layer.effect(
         readonly createBranch?: boolean
         readonly carryChanges?: boolean
       },
-    ): Effect.Effect<WorktreeRow, ArcRequestError> =>
-      Effect.gen(function* () {
-        const repo = yield* requireRepository(workspaceId)
-        const sourceWorkspace = resolveWorkspace(yield* workspaces.list, workspaceId)
-        if (!sourceWorkspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
-        const dest = arcWorkWorktreePath(profile, repoSlugFor(repo), options.branch)
-        // `git worktree add` creates the leaf dir; ensure the repo-slug parent exists.
-        yield* Effect.tryPromise({
-          try: () => fs.mkdir(path.dirname(dest), { recursive: true }),
-          catch: (e) => arcRequestError(`worktree dir create failed: ${e}`),
-        })
-        const baseRef = options.baseRef ?? repo.defaultBranch ?? "HEAD"
-        const baseExists = options.createBranch
-          ? (yield* Effect.promise(() =>
-              runGit(repo.rootPath, ["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`]),
-            ))
-              .exitCode === 0
-          : true
-        const createOrphan = options.baseRef === undefined && repo.defaultBranch === null && !baseExists
-        if (createOrphan && options.carryChanges === true) {
-          return yield* Effect.fail(
-            arcRequestError(
-              "Cannot carry changes from a repository with no commits yet. Make an initial commit first, or create an empty orphan worktree.",
-            ),
-          )
-        }
-        const splitNul = (stdout: string): ReadonlyArray<string> =>
-          stdout.split("\0").filter((value) => value.length > 0)
-        const dirty = options.carryChanges === true &&
-          ((yield* Effect.promise(() => runGit(sourceWorkspace.path, ["diff", "--quiet"]))).exitCode !== 0 ||
-            (yield* Effect.promise(() => runGit(sourceWorkspace.path, ["diff", "--cached", "--quiet"]))).exitCode !== 0 ||
-            splitNul(
-              (yield* Effect.promise(() =>
-                runGit(sourceWorkspace.path, ["ls-files", "-z", "--others", "--exclude-standard"]),
-              )).stdout,
-            ).length > 0)
-        let stashRef: string | null = null
-        if (dirty) {
-          const stash = yield* Effect.promise(() =>
-            runGitCapture(sourceWorkspace.path, [
-              "stash",
-              "push",
-              "--include-untracked",
-              "--message",
-              `arc carry changes to ${options.branch}`,
-            ]),
-          )
-          if (stash.exitCode !== 0) {
-            return yield* Effect.fail(
-              arcRequestError(`git stash failed before creating worktree: ${stash.stderr.trim() || `exit ${stash.exitCode}`}`),
-            )
-          }
-          // Resolve the pushed stash to a stable OID for every `apply` — a raw
-          // commit is unambiguous and can't drift to another entry. `drop` still
-          // needs the `stash@{0}` reflog slot (it rejects bare OIDs), which is
-          // ours here because the push just created it and nothing else stashes
-          // before we drop it.
-          const stashSha = (yield* Effect.promise(() =>
-            runGit(sourceWorkspace.path, ["rev-parse", "stash@{0}"]),
-          )).stdout.trim()
-          if (!stashSha) {
-            return yield* Effect.fail(
-              arcRequestError("git stash push succeeded but stash@{0} could not be resolved"),
-            )
-          }
-          stashRef = stashSha
-        }
-        // Put the carried changes back in the source workspace so any failure
-        // leaves the user exactly where they started — dirty source, no leftover
-        // worktree, branch, or stash. This apply can't conflict: the source still
-        // sits on the commit the stash was made from. Returns a suffix for the
-        // error message describing where the changes ended up.
-        const restoreToSource = (ref: string): Effect.Effect<string> =>
-          Effect.gen(function* () {
-            const restore = yield* Effect.promise(() =>
-              runGitCapture(sourceWorkspace.path, ["stash", "apply", "--index", ref]),
-            )
-            if (restore.exitCode !== 0) {
-              yield* Effect.logWarning(`git stash restore to source failed: ${restore.stderr.trim()}`)
-              return `; changes are stashed but could not be restored — recover with 'git stash apply ${ref}'`
-            }
-            const drop = yield* Effect.promise(() => runGitCapture(sourceWorkspace.path, ["stash", "drop", "stash@{0}"]))
-            if (drop.exitCode !== 0) yield* Effect.logWarning(`git stash drop failed after restore: ${drop.stderr.trim()}`)
-            return "; your changes were restored to the original workspace"
-          })
-
-        const args = options.createBranch
-          ? createOrphan
-            ? ["worktree", "add", "--orphan", "-b", options.branch, dest]
-            : ["worktree", "add", "-b", options.branch, dest, baseRef]
-          : ["worktree", "add", dest, options.branch]
-        const result = yield* Effect.promise(() => runGitCapture(repo.rootPath, args))
-        if (result.exitCode !== 0) {
-          const hint = stashRef ? yield* restoreToSource(stashRef) : ""
-          return yield* Effect.fail(
-            arcRequestError(`git worktree add failed: ${result.stderr.trim() || `exit ${result.exitCode}`}${hint}`),
-          )
-        }
-        if (stashRef) {
-          const apply = yield* Effect.promise(() => runGitCapture(dest, ["stash", "apply", "--index", stashRef]))
-          if (apply.exitCode !== 0) {
-            // `worktree add` already succeeded, so the tree and branch exist on
-            // disk; tear them down (best-effort) so the same branch name can be
-            // retried, then restore the carried changes to the source. Delete the
-            // branch only after the tree is gone (a checked-out branch can't be
-            // deleted) and only if we created it.
-            const removeTree = yield* Effect.promise(() =>
-              runGitCapture(repo.rootPath, ["worktree", "remove", "--force", dest]),
-            )
-            if (removeTree.exitCode !== 0) {
-              yield* Effect.logWarning(`worktree cleanup failed after stash apply failure: ${removeTree.stderr.trim()}`)
-            } else if (options.createBranch) {
-              const deleteBranch = yield* Effect.promise(() =>
-                runGitCapture(repo.rootPath, ["branch", "-D", options.branch]),
-              )
-              if (deleteBranch.exitCode !== 0) {
-                yield* Effect.logWarning(`branch cleanup failed after stash apply failure: ${deleteBranch.stderr.trim()}`)
-              }
-            }
-            const hint = yield* restoreToSource(stashRef)
-            return yield* Effect.fail(
-              arcRequestError(
-                `git stash apply failed in new worktree: ${apply.stderr.trim() || `exit ${apply.exitCode}`}${hint}`,
-              ),
-            )
-          }
-          const drop = yield* Effect.promise(() => runGitCapture(repo.rootPath, ["stash", "drop", "stash@{0}"]))
-          if (drop.exitCode !== 0) yield* Effect.logWarning(`git stash drop failed after carry: ${drop.stderr.trim()}`)
-        }
-        // detectRepository re-enumerates every worktree under the common git dir,
-        // so the new tree lands in the read model; read it back to return its row.
-        const detectedRepo = yield* detectRepository(workspaceId)
-        const repository = detectedRepo ?? repo
-        const rows = yield* store
-          .loadWorktreesForRepository(repository.id)
-          .pipe(Effect.mapError((e) => arcRequestError(`worktree load failed: ${e}`)))
-        // Match on branch, not path: git reports the canonical (symlink-resolved)
-        // path, which can differ from `dest` (e.g. /private/var vs /var on macOS),
-        // and a branch is checked out in at most one worktree.
-        let created = rows.find((w) => w.branch === options.branch)
-        if (!created) {
-          const liveWorktrees = parseWorktreeList(
-            (yield* Effect.promise(() => runGit(repo.rootPath, ["worktree", "list", "--porcelain"]))).stdout,
-          )
-          const liveCreated = liveWorktrees.find((w) => w.branch === options.branch)
-          if (liveCreated) {
-            const now = yield* nowIso
-            created = yield* store.upsertWorktree({
-              id: newArcId("worktree"),
-              repositoryId: repository.id,
-              path: liveCreated.path,
-              branch: liveCreated.branch,
-              headSha: liveCreated.headSha,
-              isDetached: bool(liveCreated.isDetached),
-              isBare: bool(liveCreated.isBare),
-              isLocked: bool(liveCreated.isLocked),
-              lockedReason: liveCreated.lockedReason,
-              isPrunable: bool(liveCreated.isPrunable),
-              prunableReason: liveCreated.prunableReason,
-              createdAt: now,
-              lastSeenAt: now,
-            }).pipe(Effect.mapError((e) => arcRequestError(`worktree persist failed: ${e}`)))
-          }
-        }
-        if (!created) return yield* Effect.fail(arcRequestError(`worktree created but not found for ${options.branch}`))
-        yield* publishChange(workspaceId)
-        return created
-      }).pipe(Effect.withSpan("arc.git.create_worktree", { attributes: { "arc.workspace_id": workspaceId } }))
+    ): Effect.Effect<WorktreeRow, ArcRequestError> => createWorktreeEffect(worktreeDeps, workspaceId, options)
 
     const openWorktree = (worktreePath: string): Effect.Effect<Workspace, ArcRequestError> =>
-      Effect.gen(function* () {
-        const workspace = yield* workspaces
-          .openAt(worktreePath)
-          .pipe(Effect.mapError((e) => arcRequestError(`open worktree failed: ${e}`)))
-        yield* detectRepository(workspace.id)
-        yield* publishChange(workspace.id)
-        return workspace
-      }).pipe(Effect.withSpan("arc.git.open_worktree", { attributes: { "arc.worktree_path": worktreePath } }))
+      openWorktreeEffect(worktreeDeps, worktreePath)
 
     const removeWorktree = (
       workspaceId: WorkspaceId,
       worktreePath: string,
       options?: { readonly force?: boolean },
-    ): Effect.Effect<void, ArcRequestError> =>
-      Effect.gen(function* () {
-        const repo = yield* requireRepository(workspaceId)
-        if (path.resolve(worktreePath) === path.resolve(repo.rootPath)) {
-          return yield* Effect.fail(arcRequestError("Refusing to remove the main worktree"))
-        }
-        const outcome = yield* removeManagedTree(repo, worktreePath, options)
-        if (!outcome.ok) {
-          const live = parseWorktreeList(
-            (yield* Effect.promise(() => runGit(repo.rootPath, ["worktree", "list", "--porcelain"]))).stdout,
-          )
-          const stillRegistered = live.some((w) => path.resolve(w.path) === path.resolve(worktreePath))
-          if (!stillRegistered) {
-            yield* store
-              .deleteWorktreeByPath(worktreePath)
-              .pipe(Effect.mapError((e) => arcRequestError(`worktree row delete failed: ${e}`)))
-            yield* publishChange(workspaceId)
-            return
-          }
-          return yield* Effect.fail(arcRequestError(`git worktree remove failed: ${outcome.error}`))
-        }
-        yield* publishChange(workspaceId)
-      }).pipe(Effect.withSpan("arc.git.remove_worktree", { attributes: { "arc.workspace_id": workspaceId } }))
+    ): Effect.Effect<void, ArcRequestError> => removeWorktreeEffect(worktreeDeps, workspaceId, worktreePath, options)
 
     const pruneWorktrees = (workspaceId: WorkspaceId): Effect.Effect<number, ArcRequestError> =>
-      Effect.gen(function* () {
-        const repo = yield* requireRepository(workspaceId)
-        const result = yield* Effect.promise(() => runGitCapture(repo.rootPath, ["worktree", "prune"]))
-        if (result.exitCode !== 0) {
-          return yield* Effect.fail(
-            arcRequestError(`git worktree prune failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`),
-          )
-        }
-        // Reconcile: git no longer lists pruned trees, so drop their stale rows
-        // (detectRepository only upserts; it never deletes vanished worktrees).
-        const live = parseWorktreeList(
-          (yield* Effect.promise(() => runGit(repo.rootPath, ["worktree", "list", "--porcelain"]))).stdout,
-        )
-        const livePaths = new Set(live.map((w) => path.resolve(w.path)))
-        const persisted = yield* store
-          .loadWorktreesForRepository(repo.id)
-          .pipe(Effect.mapError((e) => arcRequestError(`worktree load failed: ${e}`)))
-        let removed = 0
-        for (const row of persisted) {
-          if (livePaths.has(path.resolve(row.path))) continue
-          yield* store
-            .deleteWorktreeByPath(row.path)
-            .pipe(Effect.mapError((e) => arcRequestError(`worktree row delete failed: ${e}`)))
-          removed++
-        }
-        if (removed > 0) yield* publishChange(workspaceId)
-        return removed
-      }).pipe(Effect.withSpan("arc.git.prune_worktrees", { attributes: { "arc.workspace_id": workspaceId } }))
+      pruneWorktreesEffect(worktreeDeps, workspaceId)
 
     const createPullRequest = (
       workspaceId: WorkspaceId,
