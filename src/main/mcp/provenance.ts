@@ -39,17 +39,23 @@ export const provenanceFromBearerToken = (authorization: string | undefined): Ar
   }
 }
 
-/** Parse provenance ids stamped by the stdio proxy onto an HTTP MCP request. */
+/**
+ * Resolve provenance for an HTTP MCP request. The `Authorization: Bearer
+ * target:chat` token is the authenticated, Arc-baked identity; the `x-arc-*`
+ * headers are a stamp the trusted stdio proxy adds for bearer-less clients. So
+ * the BEARER WINS when present — a direct caller can't override its own identity
+ * by also sending an `x-arc-session-id`/`x-arc-chat-id` for another target (which
+ * would otherwise let it read that target's assignment via `arc.prime`). The
+ * header ids are themselves validated as well-formed TypeIDs, so a malformed
+ * proxy stamp (or a forged header on the bearer-less path) can't poison provenance.
+ */
 export const provenanceFromHttpHeaders = (
   headers: Readonly<Record<string, string | undefined>>,
 ): ArcMcpProvenanceIds =>
-  mergeProvenanceIds(
-    {
-      sessionId: headers[ARC_MCP_SESSION_HEADER] || undefined,
-      chatId: headers[ARC_MCP_CHAT_HEADER] || undefined,
-    },
-    provenanceFromBearerToken(headers["authorization"]),
-  )
+  mergeProvenanceIds(provenanceFromBearerToken(headers["authorization"]), {
+    sessionId: wellFormedArcId("target", headers[ARC_MCP_SESSION_HEADER] || undefined),
+    chatId: wellFormedArcId("chat", headers[ARC_MCP_CHAT_HEADER] || undefined),
+  })
 
 /** Headers the stdio proxy attaches when forwarding to the in-app HTTP MCP server. */
 export const provenanceToProxyHeaders = (
