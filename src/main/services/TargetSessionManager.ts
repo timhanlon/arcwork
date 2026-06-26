@@ -90,6 +90,33 @@ const tailShowsGlyph = (tail: string, glyph: string): boolean =>
     .split(/\r?\n/)
     .slice(-5)
     .some((line) => line.includes(glyph))
+/** Everything `spawnAttached` needs beyond the session itself. An options object
+ * (not a positional tail) so call sites read by name — launch and resume diverge
+ * only in a few fields, and `undefined, {}, false` in argument position hid that. */
+interface SpawnOptions {
+  readonly launchCmd: string
+  readonly args: ReadonlyArray<string>
+  readonly cols: number | undefined
+  readonly rows: number | undefined
+  readonly sockPath: string
+  readonly writeAfterStart?: string
+  readonly extraEnv?: Readonly<Record<string, string>>
+  /** When the prompt was *seeded* (prefill) rather than submitted, submit it
+   * once the session is ready (its prompt glyph appears). */
+  readonly submitSeededAfterReady?: boolean
+  /** The CLI's input-prompt glyph; we hold the seeded prompt's paste/submit
+   * until it shows in recent output, so the agent's first turn has its MCP tools
+   * connected. Absent → first PTY output is the readiness signal. */
+  readonly readyGlyph?: string
+  /** How prompts reach this CLI: terminal paste+Enter, or a JSONL command line
+   * (rpc providers). Determines both the seeded-prompt and inbox wire format. */
+  readonly promptInjectionMode?: string
+  /** Pre-session gates to clear before the ready glyph can appear (cursor's
+   * workspace-trust / login screens): send each gate's key once when its match
+   * string shows in output. */
+  readonly advanceGates?: ReadonlyArray<{ readonly match: string; readonly key: string }>
+}
+
 export interface SubmitRequest {
   readonly instanceId: string
   readonly text: string
@@ -423,31 +450,21 @@ export const TargetSessionManagerLive = Layer.effect(
       }
     }
 
-    const spawnAttached = (
-      session: TargetSession,
-      launchCmd: string,
-      args: ReadonlyArray<string>,
-      cols: number | undefined,
-      rows: number | undefined,
-      sockPath: string,
-      writeAfterStart?: string,
-      extraEnv: Readonly<Record<string, string>> = {},
-      // When the prompt was *seeded* (prefill) rather than submitted, submit it
-      // once the session is ready (its prompt glyph appears below).
-      submitSeededAfterReady = false,
-      // The CLI's input-prompt glyph; we hold the seeded prompt's paste/submit
-      // until it shows in recent output, so the agent's first turn has its MCP
-      // tools connected. Absent → first PTY output is the readiness signal.
-      readyGlyph?: string,
-      // How prompts reach this CLI: terminal paste+Enter, or a JSONL command line
-      // (rpc providers). Determines both the seeded-prompt and inbox wire format.
-      promptInjectionMode?: string,
-      // Pre-session gates to clear before the ready glyph can appear (cursor's
-      // workspace-trust / login screens): send each gate's key once when its
-      // match string shows in output.
-      advanceGates: ReadonlyArray<{ readonly match: string; readonly key: string }> = [],
-    ) =>
+    const spawnAttached = (session: TargetSession, opts: SpawnOptions) =>
       Effect.sync(() => {
+        const {
+          launchCmd,
+          args,
+          cols,
+          rows,
+          sockPath,
+          writeAfterStart,
+          extraEnv = {},
+          submitSeededAfterReady = false,
+          readyGlyph,
+          promptInjectionMode,
+          advanceGates = [],
+        } = opts
         const spawnedAt = Date.now()
         const child = pty.spawn(launchCmd, [...args], {
           name: "xterm-color",
@@ -677,20 +694,19 @@ export const TargetSessionManagerLive = Layer.effect(
           state: "running",
           startedAt: yield* nowIso,
         }
-        yield* spawnAttached(
-          session,
-          cap.launchCmd,
+        yield* spawnAttached(session, {
+          launchCmd: cap.launchCmd,
           args,
-          req.cols,
-          req.rows,
+          cols: req.cols,
+          rows: req.rows,
           sockPath,
           writeAfterStart,
           extraEnv,
           submitSeededAfterReady,
-          cap.readyPromptGlyph,
-          cap.promptInjectionMode,
-          cap.advanceGates,
-        ).pipe(
+          readyGlyph: cap.readyPromptGlyph,
+          promptInjectionMode: cap.promptInjectionMode,
+          advanceGates: cap.advanceGates,
+        }).pipe(
           Effect.withSpan("arc.target.spawn", {
             attributes: { "arc.provider": req.provider, "arc.target_session_id": id },
           }),
@@ -758,22 +774,19 @@ export const TargetSessionManagerLive = Layer.effect(
         ]
 
         const session: TargetSession = { ...existing, attached: true, state: "running" }
-        // No seeded prompt on resume, but pass the injection mode so the prompt
-        // writer is registered — a later inbox send must reach the resumed session.
-        yield* spawnAttached(
-          session,
-          spec.interactive.launchCmd,
+        // No seeded prompt on resume (writeAfterStart/submitSeededAfterReady left
+        // at defaults), but pass the injection mode so the prompt writer is
+        // registered — a later inbox send must reach the resumed session.
+        yield* spawnAttached(session, {
+          launchCmd: spec.interactive.launchCmd,
           args,
-          req.cols,
-          req.rows,
+          cols: req.cols,
+          rows: req.rows,
           sockPath,
-          undefined,
-          {},
-          false,
-          spec.interactive.readyPromptGlyph,
-          spec.interactive.promptInjectionMode,
-          spec.interactive.advanceGates,
-        )
+          readyGlyph: spec.interactive.readyPromptGlyph,
+          promptInjectionMode: spec.interactive.promptInjectionMode,
+          advanceGates: spec.interactive.advanceGates,
+        })
         yield* SubscriptionRef.update(store, (m) => new Map(m).set(session.id, session))
         yield* persistSession(session)
         yield* Effect.logInfo(

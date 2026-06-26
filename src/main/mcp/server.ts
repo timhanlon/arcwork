@@ -325,12 +325,11 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
       "arc.work.update": (params) =>
         Effect.gen(function* () {
           const provenance = yield* resolveMcpWriteProvenance(params)
-          const set = params.set
+          const { title, body, labels, status, priority } = params.set ?? {}
           const addComment = params.addComment
-          const willRevise =
-            set?.title !== undefined || set?.body !== undefined || set?.labels !== undefined
-          const willSetStatus = set?.status !== undefined
-          const willSetPriority = set?.priority !== undefined
+          const willRevise = title !== undefined || body !== undefined || labels !== undefined
+          const willSetStatus = status !== undefined
+          const willSetPriority = priority !== undefined
           const willComment = addComment !== undefined
           // At-least-one-operation can't be expressed in the JSON Schema, so guard
           // here; an empty update is a caller mistake, not a silent no-op.
@@ -348,17 +347,13 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
           // payload (comment doesn't change the work, so it never overrides).
           let result: Work | undefined
           if (willRevise) {
-            result = yield* work.revise(
-              params.workRefId,
-              { title: set!.title, body: set!.body, labels: set!.labels },
-              provenance,
-            )
+            result = yield* work.revise(params.workRefId, { title, body, labels }, provenance)
           }
           if (willSetStatus) {
-            result = yield* work.updateStatus(params.workRefId, set!.status!, provenance)
+            result = yield* work.updateStatus(params.workRefId, status, provenance)
           }
           if (willSetPriority) {
-            result = yield* work.updatePriority(params.workRefId, set!.priority!, provenance)
+            result = yield* work.updatePriority(params.workRefId, priority, provenance)
           }
           let comment: WorkComment | undefined
           if (addComment) {
