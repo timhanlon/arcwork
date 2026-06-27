@@ -5,36 +5,10 @@ import {
   ARC_MCP_SESSION_HEADER,
   mergeProvenanceIds,
   provenanceFromBearerToken,
-  provenanceFromEnv,
   provenanceFromHttpHeaders,
-  provenanceToProxyHeaders,
 } from "../src/main/mcp/provenance.js"
 
 describe("MCP provenance headers", () => {
-  it("maps env tags to proxy headers and back", () => {
-    const prevSession = process.env["ARC_TARGET_SESSION_ID"]
-    const prevChat = process.env["ARC_CHAT_ID"]
-    process.env["ARC_TARGET_SESSION_ID"] = TARGET
-    process.env["ARC_CHAT_ID"] = CHAT
-    try {
-      expect(provenanceToProxyHeaders(provenanceFromEnv())).toEqual({
-        [ARC_MCP_SESSION_HEADER]: TARGET,
-        [ARC_MCP_CHAT_HEADER]: CHAT,
-      })
-      expect(
-        provenanceFromHttpHeaders({
-          [ARC_MCP_SESSION_HEADER]: TARGET,
-          [ARC_MCP_CHAT_HEADER]: CHAT,
-        }),
-      ).toEqual({ sessionId: TARGET, chatId: CHAT })
-    } finally {
-      if (prevSession === undefined) delete process.env["ARC_TARGET_SESSION_ID"]
-      else process.env["ARC_TARGET_SESSION_ID"] = prevSession
-      if (prevChat === undefined) delete process.env["ARC_CHAT_ID"]
-      else process.env["ARC_CHAT_ID"] = prevChat
-    }
-  })
-
   it("prefers transport headers over voluntary tool params", () => {
     expect(
       mergeProvenanceIds(

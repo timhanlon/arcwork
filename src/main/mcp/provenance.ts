@@ -1,11 +1,12 @@
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest"
 import { Effect } from "effect"
-import { ArcEnvTags } from "../../shared/env-tags.js"
 import { arcId } from "../../shared/ids.js"
 import type { WorkProvenance } from "../../shared/work.js"
 
-/** HTTP headers the per-session stdio proxy stamps on upstream MCP requests.
- * Lowercase keys match Effect's `HttpServerRequest.headers` record shape. */
+/** Bearer-less fallback headers carrying Arc provenance ids on an HTTP MCP
+ * request. Lowercase keys match Effect's `HttpServerRequest.headers` record
+ * shape. They are validated as well-formed TypeIDs at read time and the
+ * authenticated bearer always wins over them (see provenanceFromHttpHeaders). */
 export const ARC_MCP_SESSION_HEADER = "x-arc-session-id"
 export const ARC_MCP_CHAT_HEADER = "x-arc-chat-id"
 const BEARER_PREFIX = "Bearer "
@@ -14,12 +15,6 @@ export interface ArcMcpProvenanceIds {
   readonly sessionId?: string | undefined
   readonly chatId?: string | undefined
 }
-
-/** Read session/chat ids the proxy derived from the launched target's env. */
-export const provenanceFromEnv = (): ArcMcpProvenanceIds => ({
-  sessionId: process.env[ArcEnvTags.targetSessionId] || undefined,
-  chatId: process.env[ArcEnvTags.chatId] || undefined,
-})
 
 /** A bearer segment is trusted only if it's a well-formed TypeID for its prefix.
  * Mirrors `ArcId`'s own suffix pattern (26 Crockford-base32 chars). This is the
@@ -40,14 +35,14 @@ export const provenanceFromBearerToken = (authorization: string | undefined): Ar
 }
 
 /**
- * Resolve provenance for an HTTP MCP request. The `Authorization: Bearer
- * target:chat` token is the authenticated, Arc-baked identity; the `x-arc-*`
- * headers are a stamp the trusted stdio proxy adds for bearer-less clients. So
- * the BEARER WINS when present — a direct caller can't override its own identity
- * by also sending an `x-arc-session-id`/`x-arc-chat-id` for another target (which
- * would otherwise let it read that target's assignment via `arc.prime`). The
- * header ids are themselves validated as well-formed TypeIDs, so a malformed
- * proxy stamp (or a forged header on the bearer-less path) can't poison provenance.
+ * Resolve provenance for an HTTP MCP request from the two live sources. The
+ * `Authorization: Bearer target:chat` token is the authenticated, Arc-baked
+ * identity; the `x-arc-*` headers are an unauthenticated fallback for bearer-less
+ * clients. So the BEARER WINS when present — a direct caller can't override its
+ * own identity by also sending an `x-arc-session-id`/`x-arc-chat-id` for another
+ * target (which would otherwise let it read that target's assignment via
+ * `arc.prime`). Both header ids are validated as well-formed TypeIDs, so a forged
+ * or malformed header on the bearer-less path can't poison provenance.
  */
 export const provenanceFromHttpHeaders = (
   headers: Readonly<Record<string, string | undefined>>,
@@ -57,17 +52,7 @@ export const provenanceFromHttpHeaders = (
     chatId: wellFormedArcId("chat", headers[ARC_MCP_CHAT_HEADER] || undefined),
   })
 
-/** Headers the stdio proxy attaches when forwarding to the in-app HTTP MCP server. */
-export const provenanceToProxyHeaders = (
-  ids: ArcMcpProvenanceIds,
-): Record<string, string> => {
-  const headers: Record<string, string> = {}
-  if (ids.sessionId) headers[ARC_MCP_SESSION_HEADER] = ids.sessionId
-  if (ids.chatId) headers[ARC_MCP_CHAT_HEADER] = ids.chatId
-  return headers
-}
-
-/** Prefer transport-stamped headers (trusted proxy) over voluntary tool params. */
+/** Prefer transport-derived ids (bearer / validated headers) over voluntary tool params. */
 export const mergeProvenanceIds = (
   fromHeaders: ArcMcpProvenanceIds,
   fromParams: ArcMcpProvenanceIds,
