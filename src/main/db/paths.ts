@@ -30,7 +30,15 @@ import * as path from "node:path"
  * (see src/main/index.ts), keeping the two in lockstep.
  */
 
-export type ArcProfile = "dev" | "stable"
+/**
+ * A run's profile. `dev` and `stable` are the blessed, well-known profiles with
+ * fixed MCP ports (7794 / 7793); any other value is a *sandbox* profile — a fully
+ * isolated instance with its own userData dir, DB, and a name-derived MCP port —
+ * so a packaged build can run beside `pnpm dev`/`pnpm start` without fighting
+ * stable/dev for a port or a database. The `string & {}` arm keeps `dev`/`stable`
+ * autocomplete while admitting arbitrary sandbox names.
+ */
+export type ArcProfile = "dev" | "stable" | (string & {})
 
 /**
  * Electron `app.getName()` value. Shared across profiles — the profile is a
@@ -44,15 +52,24 @@ const ARCWORK_DIRNAME = ".arcwork"
 export const ARC_DB_FILENAME = "arc.sqlite"
 
 /**
- * Which profile are we? Explicit `ARC_PROFILE=dev|stable` wins; otherwise we
- * treat the presence of `ELECTRON_RENDERER_URL` (which electron-vite sets only
- * under `pnpm dev`) as dev, and default to stable. The app stamps the resolved
- * value back onto `process.env.ARC_PROFILE`, so sessions it launches — and the
- * `arc-mcp` CLI inside them — inherit and agree on the same profile.
+ * Which profile are we? Explicit `ARC_PROFILE` wins: `dev`/`stable` select the
+ * blessed profiles; any other value is sanitized to a filesystem-safe slug and
+ * used as a *sandbox* profile (own userData/DB + a name-derived MCP port — see
+ * {@link arcMcpPort}). With no explicit value we treat the presence of
+ * `ELECTRON_RENDERER_URL` (which electron-vite sets only under `pnpm dev`) as dev,
+ * and default to stable. The app stamps the resolved value back onto
+ * `process.env.ARC_PROFILE`, so sessions it launches — and the `arc-mcp` CLI
+ * inside them — inherit and agree on the same profile.
  */
 export const resolveProfile = (env: NodeJS.ProcessEnv = process.env): ArcProfile => {
   const explicit = env["ARC_PROFILE"]?.trim().toLowerCase()
   if (explicit === "dev" || explicit === "stable") return explicit
+  if (explicit) {
+    // A sandbox profile names a userData/DB directory, so slug it the same way a
+    // worktree segment is slugged — non-alphanumerics collapse to `-`.
+    const slug = explicit.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+    if (slug) return slug
+  }
   if (env["ELECTRON_RENDERER_URL"]) return "dev"
   return "stable"
 }

@@ -30,12 +30,37 @@ export const ARC_MCP_STABLE_PORT = 7793
  * either stealing the other's endpoint. */
 export const ARC_MCP_DEV_PORT = 7794
 
+/** Base of the sandbox MCP port range. A sandbox (non-dev/stable) profile derives
+ * a deterministic port from its name in `[BASE, BASE+SPAN)`, kept clear of
+ * 7793/7794 so a sandbox never fights the blessed profiles. Same name → same port
+ * across restarts (its installed client configs stay valid); distinct names
+ * rarely collide, which is acceptable for throwaway isolation. */
+export const ARC_MCP_SANDBOX_PORT_BASE = 7795
+
+/** Size of the sandbox port range above the base. */
+export const ARC_MCP_SANDBOX_PORT_SPAN = 200
+
+/** Deterministic port for a sandbox profile name (FNV-1a hash, no deps). */
+const sandboxMcpPort = (profile: string): number => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < profile.length; i++) {
+    h ^= profile.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return ARC_MCP_SANDBOX_PORT_BASE + ((h >>> 0) % ARC_MCP_SANDBOX_PORT_SPAN)
+}
+
 /** The persistent loopback port a given profile binds. This is what that
- * profile's installed client configs point at and what survives a restart.
+ * profile's installed client configs point at and what survives a restart:
+ * stable→7793, dev→7794, and a sandbox profile→a name-derived port (above).
  * Override at runtime with `ARC_MCP_PORT`; opt into ephemeral with
  * `ARC_MCP_PORT=0` or `ARC_MCP_ALLOW_EPHEMERAL=1`. */
 export const arcMcpPort = (profile: ArcProfile): number =>
-  profile === "dev" ? ARC_MCP_DEV_PORT : ARC_MCP_STABLE_PORT
+  profile === "dev"
+    ? ARC_MCP_DEV_PORT
+    : profile === "stable"
+      ? ARC_MCP_STABLE_PORT
+      : sandboxMcpPort(profile)
 
 /** POST endpoint path; the discovery file records the full `http://127.0.0.1:<port>/mcp` URL. */
 export const ARC_MCP_PATH = "/mcp"

@@ -34,9 +34,18 @@ describe("resolveProfile", () => {
     expect(resolveProfile({})).toBe("stable")
   })
 
-  it("ignores an unrecognised ARC_PROFILE and falls back", () => {
-    expect(resolveProfile({ ARC_PROFILE: "weird" })).toBe("stable")
-    expect(resolveProfile({ ARC_PROFILE: "weird", ELECTRON_RENDERER_URL: "x" })).toBe("dev")
+  it("treats any other ARC_PROFILE as an isolated sandbox profile", () => {
+    // A non-blessed value is a sandbox: kept as a filesystem-safe slug, and
+    // explicit still wins over the dev heuristic.
+    expect(resolveProfile({ ARC_PROFILE: "weird" })).toBe("weird")
+    expect(resolveProfile({ ARC_PROFILE: "weird", ELECTRON_RENDERER_URL: "x" })).toBe("weird")
+    // Sanitised to the worktree-style slug (lowercased, non-alphanumerics → `-`).
+    expect(resolveProfile({ ARC_PROFILE: "Pkg Test!" })).toBe("pkg-test")
+  })
+
+  it("falls back when ARC_PROFILE slugs to nothing", () => {
+    expect(resolveProfile({ ARC_PROFILE: "!!!" })).toBe("stable")
+    expect(resolveProfile({ ARC_PROFILE: "  ", ELECTRON_RENDERER_URL: "x" })).toBe("dev")
   })
 })
 
