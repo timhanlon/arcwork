@@ -130,7 +130,7 @@ export const SubagentShort = () => (
 
 /** Explore/Task subagents often open with a markdown H1 — the bold heading should
  * fade behind the collapse gradient, not bleed through it. Regression fixture for
- * the subagent card's `Collapsible` + `MarkdownBody` stack. */
+ * the subagent card's `Collapsible` + `WorkMarkdown` stack. */
 export const SubagentExploreWithHeading = () => (
   <List>
     <Message

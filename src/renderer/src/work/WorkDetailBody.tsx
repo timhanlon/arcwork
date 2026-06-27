@@ -1,7 +1,7 @@
 import type { JSX } from "react"
 import type { Work, WorkCommentListing } from "../../../shared/work.js"
 import { formatActivityDateTime } from "../chat/activity-event-display.js"
-import { MarkdownBody } from "../ui/MarkdownBody.js"
+import { WorkMarkdown } from "./WorkMarkdown.js"
 import { FIELD_LABEL, LABEL_CHIP } from "./styles.js"
 import { WorkComments } from "./WorkComments.js"
 
@@ -19,7 +19,7 @@ export function WorkDetailBody(props: WorkDetailBodyProps): JSX.Element {
   return (
     <>
       {work.body.trim().length > 0 ? (
-        <MarkdownBody compact>{work.body}</MarkdownBody>
+        <WorkMarkdown compact>{work.body}</WorkMarkdown>
       ) : (
         <p className="m-0 text-[13px] text-fg-faint">no description</p>
       )}

@@ -1,7 +1,7 @@
 // `style.css` is structural only (list markers, placeholder, gap cursor). We
 // deliberately skip ProseKit's `typography.css` — its full-page theme sizes h1
 // at 40px in a sans font, which is alien next to the pane's compact mono body.
-// The look is set below to mirror `MarkdownBody` instead.
+// The look is set below to mirror `WorkMarkdown` instead.
 import "prosekit/basic/style.css"
 
 import { defineBasicExtension } from "prosekit/basic"
@@ -29,7 +29,7 @@ export interface WorkBodyEditorProps {
 const EDITOR_SHELL =
   "prosekit-body min-h-[12rem] w-full rounded-[var(--radius)] border border-border bg-input px-2 py-1.5 text-[13px] leading-[1.5] text-foreground focus-within:border-accent"
 
-// Mirror `MarkdownBody` (compact): mono, 12px, modest headings, accent links,
+// Mirror `WorkMarkdown` (compact): mono, 12px, modest headings, accent links,
 // blue inline code. Child selectors keep it scoped to the editor's content.
 const EDITOR_CONTENT = [
   "ProseMirror min-h-[10rem] font-mono text-xs leading-[1.5] text-foreground outline-none [overflow-wrap:anywhere]",

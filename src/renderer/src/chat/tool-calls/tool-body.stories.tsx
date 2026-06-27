@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { MarkdownBody } from "../../ui/MarkdownBody.js"
+import { WorkMarkdown } from "../../work/WorkMarkdown.js"
 import { CodeBlock, Collapsible } from "./tool-body.js"
 
 export default {
@@ -40,7 +40,7 @@ const LONG_OUTPUT = Array.from(
 export const SubagentMarkdown = () => (
   <Row>
     <Collapsible collapsedHeight={64}>
-      <MarkdownBody compact>{EXPLORE_PROMPT}</MarkdownBody>
+      <WorkMarkdown compact>{EXPLORE_PROMPT}</WorkMarkdown>
     </Collapsible>
   </Row>
 )

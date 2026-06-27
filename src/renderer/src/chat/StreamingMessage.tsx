@@ -1,6 +1,6 @@
 import type { JSX } from "react"
 import { StickToBottom } from "use-stick-to-bottom"
-import { MarkdownBody } from "../ui/MarkdownBody.js"
+import { WorkMarkdown } from "../work/WorkMarkdown.js"
 
 // Mirrors Message's assistant card, minus the transcript-item concerns: this is
 // a standalone block pinned above the composer, not an `<li>` in the `ol.grid`.
@@ -43,9 +43,9 @@ export function StreamingMessage({
           releasing the lock if the reader scrolls up. */}
       <StickToBottom className="min-h-0 flex-1" resize="smooth" initial="instant">
         <StickToBottom.Content>
-          <MarkdownBody compact streaming>
+          <WorkMarkdown compact streaming>
             {text}
-          </MarkdownBody>
+          </WorkMarkdown>
         </StickToBottom.Content>
       </StickToBottom>
     </div>

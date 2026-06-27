@@ -1,18 +1,9 @@
 import type { JSX, MouseEvent, ReactNode } from "react"
 import { arcId, type WorkId } from "../../../shared/ids.js"
-import remarkGfm from "remark-gfm"
-import { Streamdown } from "streamdown"
-import { code } from "@streamdown/code"
-import { mermaid } from "@streamdown/mermaid"
+import { Markdown, baseComponents } from "../ui/Markdown.js"
+import { Button } from "../ui/Button.js"
 import { useShellActions } from "../shell/ShellActionsContext.js"
-import { Button } from "./Button.js"
 
-// Styling is Streamdown's own (its Tailwind utilities resolve against our @theme
-// tokens) — we only set the prose's base size/color and layout containment on the
-// wrapper. The one exception is inline code: Streamdown sizes it at a fixed 14px,
-// which looks oversized next to our 12px compact body, so we size it relative to
-// the surrounding text instead. (Fenced code blocks are sized down via a
-// `[data-streamdown="code-block-body"]` rule in tailwind.css.)
 const WORK_ID_PATTERN = /^work_[a-z0-9]+$/i
 const HAS_WORK_ID_TEXT_PATTERN = /\bwork_[a-z0-9]+\b/i
 const WORK_ID_TEXT_PATTERN = /\bwork_[a-z0-9]+\b/gi
@@ -24,13 +15,7 @@ interface MarkdownNode {
   readonly [key: string]: unknown
 }
 
-const SKIP_WORK_LINKIFY = new Set([
-  "code",
-  "definition",
-  "inlineCode",
-  "link",
-  "linkReference",
-])
+const SKIP_WORK_LINKIFY = new Set(["code", "definition", "inlineCode", "link", "linkReference"])
 
 const linkifyWorkIdsInText = (value: string): Array<MarkdownNode> => {
   const nodes: Array<MarkdownNode> = []
@@ -73,24 +58,10 @@ const remarkWorkLinks = () => {
   return visit
 }
 
-const components = (onOpenWork?: (workId: WorkId) => void) => ({
-  h1: ({ children }: { readonly children?: ReactNode }) => (
-    <h1 className="text-sm font-bold">{children}</h1>
-  ),
-  h2: ({ children }: { readonly children?: ReactNode }) => (
-    <h2 className="text-sm font-semibold">{children}</h2>
-  ),
-  h3: ({ children }: { readonly children?: ReactNode }) => (
-    <h3 className="text-xs font-semibold">{children}</h3>
-  ),
-  a: ({
-    children,
-    href,
-  }: {
-    readonly children?: ReactNode
-    readonly href?: string
-  }) => {
-    if (href?.startsWith("arc://work/") && onOpenWork) {
+const workComponents = (onOpenWork: (workId: WorkId) => void) => ({
+  ...baseComponents,
+  a: ({ children, href }: { readonly children?: ReactNode; readonly href?: string }) => {
+    if (href?.startsWith("arc://work/")) {
       const workId = arcId("work", href.slice("arc://work/".length))
       return (
         <Button
@@ -113,7 +84,7 @@ const components = (onOpenWork?: (workId: WorkId) => void) => ({
   },
   inlineCode: ({ children }: { readonly children?: ReactNode }) => {
     const text = typeof children === "string" ? children : undefined
-    if (text && WORK_ID_PATTERN.test(text) && onOpenWork) {
+    if (text && WORK_ID_PATTERN.test(text)) {
       return (
         <Button
           variant="link"
@@ -124,15 +95,20 @@ const components = (onOpenWork?: (workId: WorkId) => void) => ({
         </Button>
       )
     }
-    return (
-      <code className="text-blue-300">
-        {children}
-      </code>
-    )
+    return <code className="text-blue-300">{children}</code>
   },
 })
 
-export function MarkdownBody({
+/**
+ * The domain-aware Markdown surface for chat/work bodies: the {@link Markdown}
+ * primitive plus a remark plugin that linkifies bare `work_*` ids and an
+ * `a`/`inlineCode` override that turns them into buttons opening the work pane.
+ *
+ * Opening a work item is a shell action, pulled from context rather than
+ * threaded through every transcript/detail ancestor. Work ids are always
+ * linkified — outside a provider (Storybook) the click is a safe no-op.
+ */
+export function WorkMarkdown({
   children,
   streaming = false,
   compact = false,
@@ -141,24 +117,15 @@ export function MarkdownBody({
   readonly streaming?: boolean
   readonly compact?: boolean
 }): JSX.Element {
-  // Opening a work item is a shell action, pulled from context rather than
-  // threaded through every transcript/detail ancestor. Work ids are always
-  // linkified — outside a provider (Storybook) the click is a safe no-op.
   const { open } = useShellActions()
   return (
-    <Streamdown
-      className={`min-w-0 font-mono ${compact ? "text-xs" : "text-sm"} text-foreground [overflow-wrap:anywhere]`}
-      mode={streaming ? "streaming" : "static"}
-      parseIncompleteMarkdown={streaming}
-      components={components((workId) => open({ kind: "work", workId }, "right"))}
-      // Passing `remarkPlugins` REPLACES Streamdown's defaults (incl. remark-gfm),
-      // so we must re-add gfm ourselves or tables/strikethrough/task-lists stop
-      // parsing — see the work-link plugin below.
-      remarkPlugins={[remarkGfm, remarkWorkLinks]}
-      plugins={{ code, mermaid }}
-      skipHtml
+    <Markdown
+      compact={compact}
+      streaming={streaming}
+      components={workComponents((workId) => open({ kind: "work", workId }, "right"))}
+      remarkPlugins={[remarkWorkLinks]}
     >
       {children}
-    </Streamdown>
+    </Markdown>
   )
 }

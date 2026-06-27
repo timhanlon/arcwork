@@ -2,7 +2,7 @@ import type { JSX } from "react"
 import type { WorkCommentListing } from "../../../shared/work.js"
 import { formatActivityDateTime, formatRelativeTime } from "../chat/activity-event-display.js"
 import { Button } from "../ui/Button.js"
-import { MarkdownBody } from "../ui/MarkdownBody.js"
+import { WorkMarkdown } from "./WorkMarkdown.js"
 import { FIELD_LABEL } from "./styles.js"
 
 export interface WorkCommentsProps {
@@ -72,7 +72,7 @@ export function WorkComments(props: WorkCommentsProps): JSX.Element | null {
                     {formatRelativeTime(c.createdAt)}
                   </time>
                 </div>
-                <MarkdownBody compact>{c.body}</MarkdownBody>
+                <WorkMarkdown compact>{c.body}</WorkMarkdown>
               </li>
           ))}
         </ul>

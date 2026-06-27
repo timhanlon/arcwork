@@ -4,7 +4,7 @@ import type { JSX } from "react"
 import type { ChatMessage } from "../../../shared/chat-message.js"
 import { parseRecap } from "../../../shared/recap.js"
 import { formatActivityTime } from "./activity-event-display.js"
-import { MarkdownBody } from "../ui/MarkdownBody.js"
+import { WorkMarkdown } from "../work/WorkMarkdown.js"
 import { Question } from "./Question.js"
 import { Collapsible } from "./tool-calls/tool-body.js"
 import { ToolCall } from "./tool-calls/ToolCall.js"
@@ -99,9 +99,9 @@ function MessageBody({
   }
   if (message.role === "recap") return <RecapBody body={message.body} />
   const body = (
-    <MarkdownBody compact streaming={message.status === "streaming"}>
+    <WorkMarkdown compact streaming={message.status === "streaming"}>
       {message.body}
-    </MarkdownBody>
+    </WorkMarkdown>
   )
   // A subagent's body is the entire prompt it was dispatched with — visible (it
   // tells you what the subagent is doing) but collapsed by default so it doesn't
