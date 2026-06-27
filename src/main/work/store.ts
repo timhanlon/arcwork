@@ -12,6 +12,7 @@ import {
 } from "./schema.js"
 import type { TargetId } from "../../shared/ids.js"
 import { runMigrations } from "../db/migrator.js"
+import { latestStatus } from "./work-sql.js"
 
 /**
  * SQL layer over the work graph substrate — the low-level door (mirrors
@@ -282,19 +283,17 @@ export const WorkStoreLive = Layer.effect(
       )
 
     // Current status is the latest `status_set` event for the ref, falling back
-    // to the node's authored status (stated intent at creation) when none exist.
-    // The content node is never rewritten for a status flip.
-    const projectionBody = `
+    // to the node's authored status (stated intent at creation) when none exist
+    // — the `latestStatus` builder shared with the search triggers. The content
+    // node is never rewritten for a status flip. A parameter-free `sql` fragment
+    // interpolated into every read below; the priority subquery is read-only.
+    const projection = sql`
         r.id AS "id",
         r.current_node_id AS "nodeId",
         n.title AS "title",
         n.body AS "body",
         n.labels_json AS "labelsJson",
-        COALESCE((
-          SELECT se.to_id FROM graph_edge se
-          WHERE se.from_id = r.id AND se.type = 'status_set'
-          ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-        ), n.status) AS "status",
+        ${sql.literal(latestStatus("r.id"))} AS "status",
         (
           SELECT pe.to_id FROM graph_edge pe
           WHERE pe.from_id = r.id AND pe.type = 'priority_set'
@@ -318,53 +317,27 @@ export const WorkStoreLive = Layer.effect(
     const PRIORITY_ORDER = `CASE WHEN "priority" IS NULL THEN 1 ELSE 0 END, "priority"`
 
     // Filter on the *derived* status, so it must wrap the projection (a computed
-    // alias is not visible to WHERE on the same SELECT in SQLite). No user input
-    // reaches this string, so `unsafe` is safe here.
-    const loadOpenWork = sql.unsafe<WorkProjectionRow>(`
+    // alias is not visible to WHERE on the same SELECT in SQLite).
+    const loadOpenWork = sql<WorkProjectionRow>`
       SELECT * FROM (
-        SELECT ${projectionBody}
+        SELECT ${projection}
         WHERE r.kind = 'work'
       ) AS w
       WHERE w."status" IN ('open', 'active', 'blocked')
-      ORDER BY ${PRIORITY_ORDER}, w."updatedAt" DESC, w."id"`)
+      ORDER BY ${sql.literal(PRIORITY_ORDER)}, w."updatedAt" DESC, w."id"`
 
     // Every unit of work regardless of status — the global navigator filters by
     // status client-side, so it needs done/superseded too (which `loadOpenWork`
     // drops). No derived-status WHERE here, so no projection wrapper is needed.
-    const loadAllWork = sql.unsafe<WorkProjectionRow>(`
-      SELECT ${projectionBody}
+    const loadAllWork = sql<WorkProjectionRow>`
+      SELECT ${projection}
       WHERE r.kind = 'work'
-      ORDER BY ${PRIORITY_ORDER}, r.updated_at DESC, r.id`)
+      ORDER BY ${sql.literal(PRIORITY_ORDER)}, r.updated_at DESC, r.id`
 
     const loadWork = (refId: string) =>
       Effect.gen(function* () {
         const rows = yield* sql<WorkProjectionRow>`
-          SELECT
-            r.id AS "id",
-            r.current_node_id AS "nodeId",
-            n.title AS "title",
-            n.body AS "body",
-            n.labels_json AS "labelsJson",
-            COALESCE((
-              SELECT se.to_id FROM graph_edge se
-              WHERE se.from_id = r.id AND se.type = 'status_set'
-              ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-            ), n.status) AS "status",
-            (
-              SELECT pe.to_id FROM graph_edge pe
-              WHERE pe.from_id = r.id AND pe.type = 'priority_set'
-              ORDER BY pe.created_at DESC, pe.id DESC LIMIT 1
-            ) AS "priority",
-            r.created_at AS "createdAt",
-            r.updated_at AS "updatedAt",
-            n.actor AS "actor",
-            n.session_id AS "sessionId",
-            n.chat_id AS "chatId",
-            n.workspace_id AS "workspaceId",
-            n.observed_source AS "observedSource",
-            n.execution_json AS "executionJson"
-          FROM graph_ref r
-          JOIN graph_node n ON n.id = r.current_node_id
+          SELECT ${projection}
           WHERE r.kind = 'work' AND r.id = ${refId}
           LIMIT 1`
         return rows[0] ?? null
@@ -384,8 +357,8 @@ export const WorkStoreLive = Layer.effect(
     // Content filters read the base columns (title/body/labels), so they live in
     // the inner SELECT; the status filter reads the *derived* status alias, so it
     // must wrap the projection in an outer WHERE — same reason `loadOpenWork`
-    // does. All user input is parameterized; only `projectionBody` (a constant)
-    // is interpolated raw via `sql.literal`.
+    // does. All user input is parameterized; the `projection` fragment carries no
+    // params of its own.
     const searchWork = (opts: {
       readonly terms: ReadonlyArray<string>
       readonly labels: ReadonlyArray<string>
@@ -416,7 +389,7 @@ export const WorkStoreLive = Layer.effect(
       const limitClause = opts.limit !== undefined ? sql` LIMIT ${opts.limit}` : sql``
       return sql<WorkProjectionRow>`
         SELECT * FROM (
-          SELECT ${sql.literal(projectionBody)}
+          SELECT ${projection}
           WHERE r.kind = 'work'${innerWhere}
         ) AS w${outerWhere}
         ORDER BY ${sql.literal(PRIORITY_ORDER)}, w."updatedAt" DESC, w."id"${limitClause}`
@@ -424,83 +397,42 @@ export const WorkStoreLive = Layer.effect(
 
     const loadWorkForChat = (chatId: string) =>
       sql<WorkProjectionRow>`
-        SELECT
-          r.id AS "id",
-          r.current_node_id AS "nodeId",
-          n.title AS "title",
-          n.body AS "body",
-          n.labels_json AS "labelsJson",
-          COALESCE((
-            SELECT se.to_id FROM graph_edge se
-            WHERE se.from_id = r.id AND se.type = 'status_set'
-            ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-          ), n.status) AS "status",
-          (
-            SELECT pe.to_id FROM graph_edge pe
-            WHERE pe.from_id = r.id AND pe.type = 'priority_set'
-            ORDER BY pe.created_at DESC, pe.id DESC LIMIT 1
-          ) AS "priority",
-          r.created_at AS "createdAt",
-          r.updated_at AS "updatedAt",
-          n.actor AS "actor",
-          n.session_id AS "sessionId",
-          n.chat_id AS "chatId",
-          n.workspace_id AS "workspaceId",
-          n.observed_source AS "observedSource",
-          n.execution_json AS "executionJson"
-        FROM graph_ref r
-        JOIN graph_node n ON n.id = r.current_node_id
+        SELECT ${projection}
         WHERE r.kind = 'work' AND n.chat_id = ${chatId}
         ORDER BY ${sql.literal(PRIORITY_ORDER)}, r.updated_at DESC, r.id`
 
     // Delegated work + its current implementer. Inner-join the projection to the
     // *latest* `delegated_to` edge per ref (a re-delegated work keeps only its
     // newest target). The MAX(created_at, id) tie-break makes "latest" total even
-    // when two edges share a millisecond. No user input, so `unsafe` is safe.
-    const loadDelegatedWork = sql.unsafe<DelegatedWorkRow>(`
-      SELECT w.*, d.target_session_id AS "targetSessionId", d.delegated_at AS "delegatedAt"
-      FROM (
-        SELECT ${projectionBody}
-        WHERE r.kind = 'work'
-      ) AS w
-      JOIN (
-        SELECT e.from_id AS from_id, e.to_id AS target_session_id, e.created_at AS delegated_at
-        FROM graph_edge e
-        WHERE e.type = 'delegated_to'
-          AND (e.created_at, e.id) = (
-            SELECT e2.created_at, e2.id FROM graph_edge e2
-            WHERE e2.from_id = e.from_id AND e2.type = 'delegated_to'
-            ORDER BY e2.created_at DESC, e2.id DESC LIMIT 1
-          )
-      ) AS d ON d.from_id = w."id"
-      ORDER BY ${PRIORITY_ORDER}, d.delegated_at DESC, w."id"`)
+    // when two edges share a millisecond. Given a target id, admit only refs whose
+    // latest edge points at it ("what is on this implementer right now?"); that id
+    // binds as a parameter (it can originate from a tool caller).
+    const delegatedWork = (targetSessionId?: string) => {
+      const targetFilter =
+        targetSessionId !== undefined ? sql`WHERE d.target_session_id = ${targetSessionId}` : sql``
+      return sql<DelegatedWorkRow>`
+        SELECT w.*, d.target_session_id AS "targetSessionId", d.delegated_at AS "delegatedAt"
+        FROM (
+          SELECT ${projection}
+          WHERE r.kind = 'work'
+        ) AS w
+        JOIN (
+          SELECT e.from_id AS from_id, e.to_id AS target_session_id, e.created_at AS delegated_at
+          FROM graph_edge e
+          WHERE e.type = 'delegated_to'
+            AND (e.created_at, e.id) = (
+              SELECT e2.created_at, e2.id FROM graph_edge e2
+              WHERE e2.from_id = e.from_id AND e2.type = 'delegated_to'
+              ORDER BY e2.created_at DESC, e2.id DESC LIMIT 1
+            )
+        ) AS d ON d.from_id = w."id"
+        ${targetFilter}
+        ORDER BY ${sql.literal(PRIORITY_ORDER)}, d.delegated_at DESC, w."id"`
+    }
 
-    // Same shape as loadDelegatedWork, filtered to one implementer: keep the
-    // latest `delegated_to` edge per ref, then admit only those whose latest
-    // edge points at this target. The session id binds as a parameter (it can
-    // originate from a tool caller), so only the static projection is unsafe.
-    const loadDelegatedWorkForTarget = (targetSessionId: string) =>
-      sql.unsafe<DelegatedWorkRow>(
-        `
-      SELECT w.*, d.target_session_id AS "targetSessionId", d.delegated_at AS "delegatedAt"
-      FROM (
-        SELECT ${projectionBody}
-        WHERE r.kind = 'work'
-      ) AS w
-      JOIN (
-        SELECT e.from_id AS from_id, e.to_id AS target_session_id, e.created_at AS delegated_at
-        FROM graph_edge e
-        WHERE e.type = 'delegated_to'
-          AND (e.created_at, e.id) = (
-            SELECT e2.created_at, e2.id FROM graph_edge e2
-            WHERE e2.from_id = e.from_id AND e2.type = 'delegated_to'
-            ORDER BY e2.created_at DESC, e2.id DESC LIMIT 1
-          )
-      ) AS d ON d.from_id = w."id"
-      WHERE d.target_session_id = ?
-      ORDER BY ${PRIORITY_ORDER}, d.delegated_at DESC, w."id"`,
-        [targetSessionId],
-      )
+    const loadDelegatedWork = delegatedWork()
+
+    const loadDelegatedWorkForTarget = (targetSessionId: string) => delegatedWork(targetSessionId)
 
     // For a ref endpoint, join the cited ref to read its real `kind` rather than
     // assuming 'work' — so a future second ref kind decodes correctly. External

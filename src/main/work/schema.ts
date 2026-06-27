@@ -16,6 +16,14 @@ import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
 import type { ChatId, CommentId, WorkEdgeId, WorkId, WorkRevId, WorkspaceId } from "../../shared/ids.js"
 import { sqlMigration, type Migrations } from "../db/migrator.js"
+import {
+  commentSearchBackfill,
+  graphRefSearchAiTrigger,
+  graphRefSearchAuTrigger,
+  refreshCommentStatusBackfill,
+  workCommentSearchAiTrigger,
+  workSearchBackfill,
+} from "./work-sql.js"
 
 const addSearchDocumentWorkspaceColumn = Effect.gen(function* () {
   const sql = yield* SqlClient
@@ -358,72 +366,8 @@ export const workMigrations: Migrations = {
     INSERT INTO search_document_fts(rowid, title, body, metadata_text)
     VALUES (new.rowid, new.title, new.body, new.metadata_text);
   END`,
-    `CREATE TRIGGER IF NOT EXISTS graph_ref_search_ai AFTER INSERT ON graph_ref
-  WHEN new.kind = 'work' AND new.current_node_id IS NOT NULL
-  BEGIN
-    INSERT OR REPLACE INTO search_document(
-      id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
-      labels_json, status, created_at, updated_at
-    )
-    SELECT
-      'work:' || new.id,
-      new.id,
-      'work',
-      'work',
-      NULL,
-      n.chat_id,
-      COALESCE(n.workspace_id, new.workspace_id),
-      n.title,
-      n.body,
-      n.labels_json || ' ' || COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      n.labels_json,
-      COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      new.created_at,
-      new.updated_at
-    FROM graph_node n
-    WHERE n.id = new.current_node_id;
-  END`,
-    `CREATE TRIGGER IF NOT EXISTS graph_ref_search_au AFTER UPDATE OF current_node_id, updated_at ON graph_ref
-  WHEN new.kind = 'work' AND new.current_node_id IS NOT NULL
-  BEGIN
-    INSERT OR REPLACE INTO search_document(
-      id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
-      labels_json, status, created_at, updated_at
-    )
-    SELECT
-      'work:' || new.id,
-      new.id,
-      'work',
-      'work',
-      NULL,
-      n.chat_id,
-      COALESCE(n.workspace_id, new.workspace_id),
-      n.title,
-      n.body,
-      n.labels_json || ' ' || COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      n.labels_json,
-      COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      new.created_at,
-      new.updated_at
-    FROM graph_node n
-    WHERE n.id = new.current_node_id;
-  END`,
+    graphRefSearchAiTrigger({ ifNotExists: true }),
+    graphRefSearchAuTrigger({ ifNotExists: true, refreshCommentStatus: false }),
     `CREATE TRIGGER IF NOT EXISTS graph_ref_search_ad AFTER DELETE ON graph_ref BEGIN
     DELETE FROM search_document WHERE id = 'work:' || old.id OR parent_ref = old.id;
   END`,
@@ -433,93 +377,12 @@ export const workMigrations: Migrations = {
     UPDATE graph_ref SET updated_at = MAX(updated_at, new.created_at)
     WHERE id = new.from_id AND kind = 'work';
   END`,
-    `CREATE TRIGGER IF NOT EXISTS work_comment_search_ai AFTER INSERT ON work_comment BEGIN
-    INSERT OR REPLACE INTO search_document(
-      id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
-      labels_json, status, created_at, updated_at
-    )
-    SELECT
-      'comment:' || new.id,
-      new.work_ref_id,
-      'work',
-      'comment',
-      new.work_ref_id,
-      COALESCE(new.chat_id, n.chat_id),
-      COALESCE(new.workspace_id, n.workspace_id, r.workspace_id),
-      n.title,
-      new.body,
-      new.kind,
-      n.labels_json,
-      COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.work_ref_id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      new.created_at,
-      new.created_at
-    FROM graph_ref r
-    JOIN graph_node n ON n.id = r.current_node_id
-    WHERE r.id = new.work_ref_id;
-  END`,
+    workCommentSearchAiTrigger({ ifNotExists: true, metadataText: "new.kind" }),
     `CREATE TRIGGER IF NOT EXISTS work_comment_search_ad AFTER DELETE ON work_comment BEGIN
     DELETE FROM search_document WHERE id = 'comment:' || old.id;
   END`,
-    `INSERT OR REPLACE INTO search_document(
-    id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
-    labels_json, status, created_at, updated_at
-  )
-  SELECT
-    'work:' || r.id,
-    r.id,
-    'work',
-    'work',
-    NULL,
-    n.chat_id,
-    COALESCE(n.workspace_id, r.workspace_id),
-    n.title,
-    n.body,
-    n.labels_json || ' ' || COALESCE((
-      SELECT se.to_id FROM graph_edge se
-      WHERE se.from_id = r.id AND se.type = 'status_set'
-      ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-    ), n.status),
-    n.labels_json,
-    COALESCE((
-      SELECT se.to_id FROM graph_edge se
-      WHERE se.from_id = r.id AND se.type = 'status_set'
-      ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-    ), n.status),
-    r.created_at,
-    r.updated_at
-  FROM graph_ref r
-  JOIN graph_node n ON n.id = r.current_node_id
-  WHERE r.kind = 'work'`,
-    `INSERT OR REPLACE INTO search_document(
-    id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
-    labels_json, status, created_at, updated_at
-  )
-  SELECT
-    'comment:' || c.id,
-    c.work_ref_id,
-    'work',
-    'comment',
-    c.work_ref_id,
-    COALESCE(c.chat_id, n.chat_id),
-    COALESCE(c.workspace_id, n.workspace_id, r.workspace_id),
-    n.title,
-    c.body,
-    c.kind,
-    n.labels_json,
-    COALESCE((
-      SELECT se.to_id FROM graph_edge se
-      WHERE se.from_id = c.work_ref_id AND se.type = 'status_set'
-      ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-    ), n.status),
-    c.created_at,
-    c.created_at
-  FROM work_comment c
-  JOIN graph_ref r ON r.id = c.work_ref_id
-  JOIN graph_node n ON n.id = r.current_node_id`,
+    workSearchBackfill(),
+    commentSearchBackfill("c.kind"),
     `INSERT INTO search_document_fts(search_document_fts) VALUES ('rebuild')`,
   ),
   "0004_search_documents_workspace": sqlMigrationAfterWorkspaceColumn(
@@ -527,100 +390,9 @@ export const workMigrations: Migrations = {
     `DROP TRIGGER graph_ref_search_ai`,
     `DROP TRIGGER graph_ref_search_au`,
     `DROP TRIGGER work_comment_search_ai`,
-    `CREATE TRIGGER graph_ref_search_ai AFTER INSERT ON graph_ref
-  WHEN new.kind = 'work' AND new.current_node_id IS NOT NULL
-  BEGIN
-    INSERT OR REPLACE INTO search_document(
-      id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
-      labels_json, status, created_at, updated_at
-    )
-    SELECT
-      'work:' || new.id,
-      new.id,
-      'work',
-      'work',
-      NULL,
-      n.chat_id,
-      COALESCE(n.workspace_id, new.workspace_id),
-      n.title,
-      n.body,
-      n.labels_json || ' ' || COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      n.labels_json,
-      COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      new.created_at,
-      new.updated_at
-    FROM graph_node n
-    WHERE n.id = new.current_node_id;
-  END`,
-    `CREATE TRIGGER graph_ref_search_au AFTER UPDATE OF current_node_id, updated_at ON graph_ref
-  WHEN new.kind = 'work' AND new.current_node_id IS NOT NULL
-  BEGIN
-    INSERT OR REPLACE INTO search_document(
-      id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
-      labels_json, status, created_at, updated_at
-    )
-    SELECT
-      'work:' || new.id,
-      new.id,
-      'work',
-      'work',
-      NULL,
-      n.chat_id,
-      COALESCE(n.workspace_id, new.workspace_id),
-      n.title,
-      n.body,
-      n.labels_json || ' ' || COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      n.labels_json,
-      COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      new.created_at,
-      new.updated_at
-    FROM graph_node n
-    WHERE n.id = new.current_node_id;
-  END`,
-    `CREATE TRIGGER work_comment_search_ai AFTER INSERT ON work_comment BEGIN
-    INSERT OR REPLACE INTO search_document(
-      id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
-      labels_json, status, created_at, updated_at
-    )
-    SELECT
-      'comment:' || new.id,
-      new.work_ref_id,
-      'work',
-      'comment',
-      new.work_ref_id,
-      COALESCE(new.chat_id, n.chat_id),
-      COALESCE(new.workspace_id, n.workspace_id, r.workspace_id),
-      n.title,
-      new.body,
-      new.kind,
-      n.labels_json,
-      COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.work_ref_id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      new.created_at,
-      new.created_at
-    FROM graph_ref r
-    JOIN graph_node n ON n.id = r.current_node_id
-    WHERE r.id = new.work_ref_id;
-  END`,
+    graphRefSearchAiTrigger({ ifNotExists: false }),
+    graphRefSearchAuTrigger({ ifNotExists: false, refreshCommentStatus: false }),
+    workCommentSearchAiTrigger({ ifNotExists: false, metadataText: "new.kind" }),
     `UPDATE search_document
       SET workspace_id = (
         SELECT COALESCE(n.workspace_id, r.workspace_id)
@@ -652,57 +424,8 @@ export const workMigrations: Migrations = {
   // same trigger that already refreshes the ref row, then backfill existing rows.
   "0007_refresh_comment_status_on_status_change": sqlMigration(
     `DROP TRIGGER graph_ref_search_au`,
-    `CREATE TRIGGER graph_ref_search_au AFTER UPDATE OF current_node_id, updated_at ON graph_ref
-  WHEN new.kind = 'work' AND new.current_node_id IS NOT NULL
-  BEGIN
-    INSERT OR REPLACE INTO search_document(
-      id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
-      labels_json, status, created_at, updated_at
-    )
-    SELECT
-      'work:' || new.id,
-      new.id,
-      'work',
-      'work',
-      NULL,
-      n.chat_id,
-      COALESCE(n.workspace_id, new.workspace_id),
-      n.title,
-      n.body,
-      n.labels_json || ' ' || COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      n.labels_json,
-      COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      new.created_at,
-      new.updated_at
-    FROM graph_node n
-    WHERE n.id = new.current_node_id;
-    UPDATE search_document
-      SET status = COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), (SELECT n.status FROM graph_node n WHERE n.id = new.current_node_id))
-      WHERE ref = new.id AND source_kind = 'comment';
-  END`,
-    `UPDATE search_document
-      SET status = COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = search_document.ref AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), (
-        SELECT n.status FROM graph_ref r
-        JOIN graph_node n ON n.id = r.current_node_id
-        WHERE r.id = search_document.ref
-      ))
-      WHERE source_kind = 'comment'`,
+    graphRefSearchAuTrigger({ ifNotExists: false, refreshCommentStatus: true }),
+    refreshCommentStatusBackfill(),
   ),
   // Comment `kind` (comment/review/decision-note) was a write-only vocabulary —
   // no read path or UI ever branched on it. Cut to a single comment type before
@@ -710,34 +433,7 @@ export const workMigrations: Migrations = {
   // column (metadata_text becomes empty for comment rows), then drop it.
   "0008_drop_comment_kind": sqlMigration(
     `DROP TRIGGER work_comment_search_ai`,
-    `CREATE TRIGGER work_comment_search_ai AFTER INSERT ON work_comment BEGIN
-    INSERT OR REPLACE INTO search_document(
-      id, ref, kind, source_kind, parent_ref, chat_id, workspace_id, title, body, metadata_text,
-      labels_json, status, created_at, updated_at
-    )
-    SELECT
-      'comment:' || new.id,
-      new.work_ref_id,
-      'work',
-      'comment',
-      new.work_ref_id,
-      COALESCE(new.chat_id, n.chat_id),
-      COALESCE(new.workspace_id, n.workspace_id, r.workspace_id),
-      n.title,
-      new.body,
-      '',
-      n.labels_json,
-      COALESCE((
-        SELECT se.to_id FROM graph_edge se
-        WHERE se.from_id = new.work_ref_id AND se.type = 'status_set'
-        ORDER BY se.created_at DESC, se.id DESC LIMIT 1
-      ), n.status),
-      new.created_at,
-      new.created_at
-    FROM graph_ref r
-    JOIN graph_node n ON n.id = r.current_node_id
-    WHERE r.id = new.work_ref_id;
-  END`,
+    workCommentSearchAiTrigger({ ifNotExists: false, metadataText: "''" }),
     `ALTER TABLE work_comment DROP COLUMN kind`,
   ),
 }
