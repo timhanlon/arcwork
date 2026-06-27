@@ -27,6 +27,9 @@
     "prepare": "git config core.hooksPath .githooks || true",
     "dev": "ARC_PROFILE=dev electron-vite dev",
     "build": "electron-vite build",
+    "icons": "./scripts/gen-icons.sh",
+    "package": "pnpm run icons && pnpm run build && electron-builder --dir",
+    "dist": "pnpm run icons && pnpm run build && electron-builder",
     "start": "ARC_PROFILE=stable electron-vite preview",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
@@ -68,6 +71,7 @@
     "xstate": "^5.32.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.2",
     "@effect/vitest": "4.0.0-beta.74",
     "@electron/rebuild": "^3.7.1",
     "@storybook/react-vite": "^10.4.2",
@@ -78,6 +82,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^42.5.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "oxlint": "^1.70.0",
     "playwright": "^1.60.0",
@@ -85,6 +90,7 @@
     "react-dom": "^19.2.7",
     "storybook": "^10.4.2",
     "tailwindcss": "^4.3.0",
+    "typebox": "1.1.38",
     "typescript": "^5.8.3",
     "vite": "^7.3.5",
     "vitest": "^4.1.9"
