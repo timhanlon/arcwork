@@ -2,7 +2,6 @@ import { type JSX, useEffect, useMemo, useRef, useState } from "react"
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import { Exit } from "effect"
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels"
-import { rpc } from "./rpc-client.js"
 import { isDevProfile, subscribeWhenReady } from "./bridge.js"
 import {
   chatsAtom,
@@ -15,7 +14,6 @@ import {
   workspacesAtom,
 } from "./atoms.js"
 import type { ChatId, PaneId, TargetId, WorkspaceId } from "../../shared/ids.js"
-import { arcId } from "../../shared/ids.js"
 import { ArcSidebarTree } from "./sidebar/ArcSidebarTree.js"
 import { TargetSessionPane } from "./chat/TargetSessionPane.js"
 import { sync as syncTerminals } from "./terminal/terminalRegistry.js"
@@ -26,14 +24,14 @@ import { GitPrefetch } from "./git/GitPrefetch.js"
 import { NavBar } from "./shell/NavBar.js"
 import { ArcSearchPanel } from "./search/ArcSearchPanel.js"
 import { CommandPalette } from "./shell/CommandPalette.js"
-import type { Command } from "./shell/commandPaletteModel.js"
 import { useArcShell } from "./shell/useArcShell.js"
 import { ShellActionsProvider } from "./shell/ShellActionsContext.js"
 import { ShellStateProvider } from "./shell/ShellStateContext.js"
 import { unadoptedSessions } from "./shell/sessionAdoption.js"
 import { deriveShellViewModel } from "./shell/shellSelectors.js"
 import { useKeyboardShortcuts } from "./shell/useKeyboardShortcuts.js"
-import { bindingFor, focusRequestId, REQUEST_SLOTS, type GlobalCommandId } from "./shell/keybindings.js"
+import { focusRequestId, REQUEST_SLOTS, type GlobalCommandId } from "./shell/keybindings.js"
+import { buildPaletteCommands } from "./shell/paletteCommands.js"
 import { useChatMutations } from "./shell/useChatMutations.js"
 import { useSessionActivityProjection } from "./sidebar/useSessionActivityProjection.js"
 
@@ -214,124 +212,13 @@ export function App(): JSX.Element {
   }, [shell.actions, pendingOrder, vm.detachedSession, vm.workId, vm.workspaceId, workspaces, createChat])
   useKeyboardShortcuts(shortcutHandlers)
 
-  // Open a worktree as a workspace (minting its row if needed), then start a
-  // chat in it — for a worktree that already exists.
-  const openWorktreeChat = async (worktreePath: string): Promise<void> => {
-    const workspace = await rpc("OpenWorktree", { worktreePath })
-    await createChat(workspace.id)
-  }
-
-  // Branch a fresh worktree off the repo's default branch, open it, and chat in
-  // it — the "start a new isolated line of work" path. baseRef is omitted, so
-  // the main side defaults it to the repo's default branch.
-  const newWorktreeChat = async (branch: string, carryChanges = false): Promise<void> => {
-    if (!vm.workspaceId) return
-    const worktree = await rpc("CreateWorktree", {
-      workspaceId: vm.workspaceId,
-      branch,
-      createBranch: true,
-      carryChanges,
-    })
-    await openWorktreeChat(worktree.path)
-  }
-
-  const removeWorktree = async (worktreePath: string): Promise<void> => {
-    if (!vm.workspaceId) return
-    await rpc("RemoveWorktree", { workspaceId: vm.workspaceId, worktreePath })
-  }
-
-  // Commands for the ⌘K palette. Leaf commands reuse the shortcut handlers (and
-  // borrow their combo for the on-row hint); "New chat in workspace…" opens a
-  // second stage over the open workspaces and lands the chat in the chosen one.
-  const leafCommand = (id: GlobalCommandId, title: string): Command => ({
-    id,
-    title,
-    combo: bindingFor(id)?.combo,
-    run: shortcutHandlers[id],
+  const paletteCommands = buildPaletteCommands({
+    workspaceId: vm.workspaceId,
+    workspacePath: vm.workspace?.path,
+    workspaces,
+    createChat,
+    shortcutHandlers,
   })
-  // The worktree commands act on the active workspace, so they only appear when
-  // one is selected — otherwise selecting them would silently do nothing.
-  const loadRemovableWorktreeChoices = async () => {
-    if (!vm.workspaceId) return []
-    const context = await rpc("GetWorkspaceGitContext", { workspaceId: vm.workspaceId })
-    const mainPath = context.repository?.rootPath
-    // Exclude the main worktree (never removable) and the one we're viewing —
-    // removing the active workspace would archive it out from under the session.
-    // Identify the active worktree by branch (as createWorktree does), not path:
-    // git reports symlink-resolved paths that needn't match the workspace's
-    // stored path on macOS; the stored path is kept only as a secondary guard.
-    const activePath = vm.workspace?.path
-    const activeBranch = context.branch
-    return context.worktrees
-      .filter(
-        (worktree) =>
-          worktree.path !== mainPath &&
-          worktree.path !== activePath &&
-          (activeBranch == null || worktree.branch !== activeBranch),
-      )
-      .map((worktree) => ({
-        id: worktree.path,
-        title: worktree.branch ?? (worktree.path.split("/").pop() ?? worktree.path),
-        subtitle: worktree.path,
-      }))
-  }
-  const worktreeCommands: ReadonlyArray<Command> = vm.workspaceId
-    ? [
-        {
-          id: "newWorktree",
-          title: "New worktree…",
-          promptPlaceholder: "new branch name",
-          onSubmit: (branch) => void newWorktreeChat(branch),
-        },
-        {
-          id: "newWorktreeWithChanges",
-          title: "New worktree with current changes…",
-          promptPlaceholder: "new branch name",
-          onSubmit: (branch) => void newWorktreeChat(branch, true),
-        },
-        {
-          id: "openWorktree",
-          title: "Open worktree…",
-          choosePlaceholder: "choose a worktree",
-          loadChoices: async () => {
-            if (!vm.workspaceId) return []
-            const context = await rpc("GetWorkspaceGitContext", { workspaceId: vm.workspaceId })
-            return context.worktrees.map((worktree) => ({
-              id: worktree.path,
-              title: worktree.branch ?? (worktree.path.split("/").pop() ?? worktree.path),
-              subtitle: worktree.path,
-            }))
-          },
-          onChoose: (worktreePath) => void openWorktreeChat(worktreePath),
-        },
-        {
-          id: "removeWorktree",
-          title: "Remove Git worktree…",
-          choosePlaceholder: "choose a Git worktree to remove",
-          loadChoices: loadRemovableWorktreeChoices,
-          onChoose: (worktreePath) => void removeWorktree(worktreePath),
-        },
-      ]
-    : []
-  const paletteCommands: ReadonlyArray<Command> = [
-    {
-      id: "newChatInWorkspace",
-      title: "New chat in workspace…",
-      choosePlaceholder: "choose a workspace",
-      choices: workspaces.map((w) => ({ id: w.id, title: w.name, subtitle: w.path })),
-      onChoose: (workspaceId) => void createChat(arcId("workspace", workspaceId)),
-    },
-    ...worktreeCommands,
-    leafCommand("createChat", "New chat"),
-    leafCommand("createWork", "New work item"),
-    leafCommand("showChatView", "Show chat"),
-    leafCommand("showWorkView", "Show work"),
-    leafCommand("showTerminalView", "Show terminal"),
-    leafCommand("showGitView", "Show git"),
-    leafCommand("toggleLeftPanel", "Toggle left panel"),
-    leafCommand("toggleRightPanel", "Toggle right panel"),
-    leafCommand("openSearchPalette", "Search…"),
-  ]
 
   const selectChat = (workspaceId: WorkspaceId, chatId: ChatId): void => {
     shell.actions.selectChat(workspaceId, chatId)
