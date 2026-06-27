@@ -13,6 +13,21 @@ import * as ids from "./ids.js"
 type Rec = Record<string, unknown>
 
 /**
+ * One in-progress assistant turn's accumulator, returned by
+ * {@link SessionRowBuilder.assistantTurn}. See that method for the flush model.
+ */
+export interface AssistantTurn {
+  /** Accumulate a text part; empty/undefined is ignored. */
+  text(value: string | undefined): void
+  /** Accumulate a thinking/reasoning part; empty/undefined is ignored. */
+  thinking(value: string | undefined): void
+  /** Emit the accumulated text+thinking as one assistant message (if any), then reset. */
+  flush(): void
+  /** Id of the most recently flushed chunk in this turn; null before the first flush. */
+  readonly messageId: string | null
+}
+
+/**
  * The mechanical half of every provider normalizer, behind one small interface.
  *
  * Each provider walks a different source shape (Claude's DAG-flattened records,
@@ -93,6 +108,59 @@ export class SessionRowBuilder {
     // First real user prompt seeds the session title (see finish).
     if (opts.role === "user" && opts.text) this.firstUserText ??= opts.text
     return id
+  }
+
+  /**
+   * Begin an assistant turn that can interleave text, thinking, and tool calls.
+   *
+   * Claude and Cursor both hold a whole assistant turn as a content-part array
+   * where a tool call can interrupt a run of text/thinking. The true display
+   * order is recovered by flushing the accumulated text+thinking as its own
+   * message chunk at each tool boundary (and once at the end), so each chunk
+   * lands on its own {@link MessageRow.ordinal} between the surrounding tools.
+   *
+   * The provider feeds decoded parts via {@link AssistantTurn.text} /
+   * {@link AssistantTurn.thinking}, calls {@link AssistantTurn.flush} right
+   * before emitting a tool row, and reads {@link AssistantTurn.messageId} to
+   * attach that tool to the chunk it follows. The provider keeps ownership of
+   * the provider-specific tool decode + {@link tool}/{@link hint} calls; only
+   * the shared accumulate/flush state machine lives here.
+   */
+  assistantTurn(common: {
+    readonly model?: string | null
+    readonly createdAt?: string | null
+    readonly nativeMessageId?: string | null
+  }): AssistantTurn {
+    let pendingText: Array<string> = []
+    let pendingThinking: Array<string> = []
+    let messageId: string | null = null
+
+    const flush = (): void => {
+      if (pendingText.length === 0 && pendingThinking.length === 0) return
+      messageId = this.message({
+        role: "assistant",
+        model: common.model ?? null,
+        createdAt: common.createdAt ?? null,
+        nativeMessageId: common.nativeMessageId ?? null,
+        text: pendingText.length > 0 ? pendingText.join("\n\n") : null,
+        thinking: pendingThinking.length > 0 ? pendingThinking.join("\n\n") : null,
+      })
+      pendingText = []
+      pendingThinking = []
+    }
+
+    return {
+      text: (value) => {
+        if (value) pendingText.push(value)
+      },
+      thinking: (value) => {
+        if (value) pendingThinking.push(value)
+      },
+      flush,
+      get messageId() {
+        return messageId
+      },
+    }
   }
 
   /**

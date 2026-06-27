@@ -210,55 +210,38 @@ export const normalizeClaudeSession = (
       const model = str(message?.["model"]) ?? null
 
       // Walk content parts in source order, flushing accumulated text/thinking as
-      // a message chunk whenever a tool_use interrupts it. This records the true
-      // `text → tool → text` display order in the shared `ordinal`. Claude almost
-      // always emits thinking+text *before* any tools (one chunk), so the flush
-      // only ever splits the rare interleaved turn; the common case is unchanged.
-      let pendingText: Array<string> = []
-      let pendingThinking: Array<string> = []
-      let turnMessageId: string | null = null
-
-      const flushMessage = (): void => {
-        if (pendingText.length === 0 && pendingThinking.length === 0) return
-        turnMessageId = b.message({
-          role: "assistant",
-          model,
-          createdAt: timestamp,
-          nativeMessageId: uuid,
-          text: pendingText.length > 0 ? pendingText.join("\n\n") : null,
-          thinking: pendingThinking.length > 0 ? pendingThinking.join("\n\n") : null,
-        })
-        pendingText = []
-        pendingThinking = []
-      }
+      // a message chunk whenever a tool_use interrupts it (see assistantTurn).
+      // Claude almost always emits thinking+text *before* any tools (one chunk),
+      // so the flush only ever splits the rare interleaved turn.
+      const turn = b.assistantTurn({ model, createdAt: timestamp, nativeMessageId: uuid })
 
       for (const item of contentArray) {
         const p = decodeContentPart(item)
         if (Option.isNone(p)) continue
         switch (p.value.type) {
           case "text":
-            if (p.value.text) pendingText.push(p.value.text)
+            turn.text(p.value.text)
             break
           case "thinking":
-            if (p.value.thinking) pendingThinking.push(p.value.thinking)
+            turn.thinking(p.value.thinking)
             break
           case "tool_use": {
-            flushMessage() // emit any text/thinking that preceded this tool
+            turn.flush() // emit any text/thinking that preceded this tool
             const name = p.value.name
             const input = obj(p.value.input)
             const row = b.tool({
               name: name ?? null,
               kind: classifyTool("claude", name),
               nativeToolId: p.value.id ?? null,
-              messageId: turnMessageId,
+              messageId: turn.messageId,
               inputJson: input ? JSON.stringify(input) : null,
             })
-            b.hint(name, input, turnMessageId, row.id)
+            b.hint(name, input, turn.messageId, row.id)
             break
           }
         }
       }
-      flushMessage() // trailing text after the last tool
+      turn.flush() // trailing text after the last tool
     }
   }
 

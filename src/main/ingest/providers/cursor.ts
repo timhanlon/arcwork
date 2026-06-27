@@ -226,51 +226,38 @@ export const normalizeCursorBlobs = (
       // A Cursor assistant blob holds the whole turn and can genuinely interleave
       // text, reasoning, and tool-calls. Walk parts in source order, flushing
       // accumulated text/thinking as a message chunk whenever a tool-call
-      // interrupts it, so the shared `ordinal` records true display order.
-      let pendingText: Array<string> = []
-      let pendingThinking: Array<string> = []
-      let turnMessageId: string | null = null
-
-      const flushMessage = (): void => {
-        if (pendingText.length === 0 && pendingThinking.length === 0) return
-        turnMessageId = b.message({
-          role: "assistant",
-          nativeMessageId: nativeId,
-          text: pendingText.length > 0 ? pendingText.join("\n\n") : null,
-          thinking: pendingThinking.length > 0 ? pendingThinking.join("\n\n") : null,
-        })
-        pendingText = []
-        pendingThinking = []
-      }
+      // interrupts it (see assistantTurn), so the shared `ordinal` records true
+      // display order.
+      const turn = b.assistantTurn({ nativeMessageId: nativeId })
 
       for (const item of content) {
         const p = decodeCursorPart(item)
         if (Option.isNone(p)) continue
         switch (p.value.type) {
           case "text":
-            if (p.value.text) pendingText.push(p.value.text)
+            turn.text(p.value.text)
             break
           case "reasoning":
           case "redacted-reasoning":
-            if (p.value.text) pendingThinking.push(p.value.text)
+            turn.thinking(p.value.text)
             break
           case "tool-call": {
-            flushMessage() // emit any text/reasoning that preceded this tool
+            turn.flush() // emit any text/reasoning that preceded this tool
             const name = p.value.toolName
             const input = obj(p.value.args)
             const row = b.tool({
               name: name ?? null,
               kind: classifyTool("cursor", name),
               nativeToolId: p.value.toolCallId ?? null,
-              messageId: turnMessageId,
+              messageId: turn.messageId,
               inputJson: input ? JSON.stringify(input) : null,
             })
-            b.hint(name, input, turnMessageId, row.id)
+            b.hint(name, input, turn.messageId, row.id)
             break
           }
         }
       }
-      flushMessage() // trailing text after the last tool
+      turn.flush() // trailing text after the last tool
       continue
     }
 
