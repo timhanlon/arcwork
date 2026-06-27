@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Arc Work app icon">
+  <!-- App-icon master: white mark centered on a dark squircle tile.
+       rx≈21.9% approximates the macOS icon corner. -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="#111111" />
+  <g transform="translate(92,134) scale(8.4)">
+    <path d="M 53.44 17.77 L 77.56 72.23 Q 81 80 75.09 73.89 Q 50 48 24.91 73.89 Q 19 80 22.44 72.23 L 46.56 17.77 Q 50 10 53.44 17.77 Z"
+          fill="none" stroke="#fafafa" stroke-width="6"
+          stroke-linejoin="round" stroke-linecap="round" />
+  </g>
+</svg>

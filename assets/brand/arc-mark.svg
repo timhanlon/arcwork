@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Arc Work">
+  <!-- Canonical Arc Work mark: one closed stroked path (apex + two feet, bowed base).
+       Uses currentColor so it inherits text color wherever it's embedded. -->
+  <path d="M 53.44 17.77 L 77.56 72.23 Q 81 80 75.09 73.89 Q 50 48 24.91 73.89 Q 19 80 22.44 72.23 L 46.56 17.77 Q 50 10 53.44 17.77 Z"
+        fill="none" stroke="currentColor" stroke-width="6"
+        stroke-linejoin="round" stroke-linecap="round" />
+</svg>
