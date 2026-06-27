@@ -6,7 +6,6 @@ import { rpc } from "./rpc-client.js"
 import { isDevProfile, subscribeWhenReady } from "./bridge.js"
 import {
   chatsAtom,
-  createChatAtom,
   launchTargetAtom,
   openWorkspaceAtom,
   providersAtom,
@@ -35,6 +34,7 @@ import { unadoptedSessions } from "./shell/sessionAdoption.js"
 import { deriveShellViewModel } from "./shell/shellSelectors.js"
 import { useKeyboardShortcuts } from "./shell/useKeyboardShortcuts.js"
 import { bindingFor, focusRequestId, REQUEST_SLOTS, type GlobalCommandId } from "./shell/keybindings.js"
+import { useChatMutations } from "./shell/useChatMutations.js"
 import { useSessionActivityProjection } from "./sidebar/useSessionActivityProjection.js"
 
 /**
@@ -72,16 +72,16 @@ export function App(): JSX.Element {
   const chats = successList(useAtomValue(chatsAtom))
 
   // Imperative RPC commands as mutation atoms (see atoms.ts). `promiseExit` for
-  // the ones whose result drives a follow-up (the new chat / bound session);
-  // plain set for fire-and-forget. Failures land in each atom's `AsyncResult`,
-  // never a `.catch(console.error)`.
-  const runCreateChat = useAtomSet(createChatAtom, { mode: "promiseExit" })
+  // the ones whose result drives a follow-up (the bound session); plain set for
+  // fire-and-forget. Failures land in each atom's `AsyncResult`, never a
+  // `.catch(console.error)`. (Chat create/rename live in useChatMutations.)
   const runOpenWorkspace = useAtomSet(openWorkspaceAtom)
   const runLaunchTarget = useAtomSet(launchTargetAtom, { mode: "promiseExit" })
   const runResumeTarget = useAtomSet(resumeTargetAtom, { mode: "promiseExit" })
   const { liveStateById, pendingOrder } = useSessionActivityProjection({ workspaces, chats, sessions })
 
   const shell = useArcShell({ workspaces, chats, sessions })
+  const { createChat, renameChat } = useChatMutations(shell.actions.selectChat)
   const { layout, panes } = shell.state
   const { left, center, right } = layout
 
@@ -187,15 +187,11 @@ export function App(): JSX.Element {
       // absent workId would read as a deselect and clear the pick.
       showWorkView: () => shell.actions.open({ kind: "work", workId: vm.workId }, "center"),
       // New chat lands in the selected workspace, falling back to the first — a
-      // no-op when none are open yet. Unlike createWork it's an async RPC, so it
-      // runs here rather than as a machine transition (inlined off the stable
-      // atom setter to keep this handler map memoized).
+      // no-op when none are open yet. Unlike createWork it's an async RPC
+      // (useChatMutations), so it runs here rather than as a machine transition.
       createChat: () => {
         const workspaceId = vm.workspaceId ?? workspaces[0]?.id
-        if (!workspaceId) return
-        void runCreateChat({ payload: { workspaceId } }).then((exit) => {
-          if (Exit.isSuccess(exit)) shell.actions.selectChat(workspaceId, exit.value.id)
-        })
+        if (workspaceId) void createChat(workspaceId)
       },
       createWork: shell.actions.createWork,
       showTerminalView: () => shell.actions.open({ kind: "terminal" }, "right"),
@@ -215,13 +211,8 @@ export function App(): JSX.Element {
       }
     }
     return handlers
-  }, [shell.actions, pendingOrder, vm.detachedSession, vm.workId, vm.workspaceId, workspaces, runCreateChat])
+  }, [shell.actions, pendingOrder, vm.detachedSession, vm.workId, vm.workspaceId, workspaces, createChat])
   useKeyboardShortcuts(shortcutHandlers)
-
-  const createChat = async (workspaceId: WorkspaceId): Promise<void> => {
-    const exit = await runCreateChat({ payload: { workspaceId } })
-    if (Exit.isSuccess(exit)) shell.actions.selectChat(workspaceId, exit.value.id)
-  }
 
   // Open a worktree as a workspace (minting its row if needed), then start a
   // chat in it — for a worktree that already exists.
@@ -247,10 +238,6 @@ export function App(): JSX.Element {
   const removeWorktree = async (worktreePath: string): Promise<void> => {
     if (!vm.workspaceId) return
     await rpc("RemoveWorktree", { workspaceId: vm.workspaceId, worktreePath })
-  }
-
-  const renameChat = async (chatId: ChatId, title: string): Promise<void> => {
-    await rpc("UpdateChatTitle", { chatId, title })
   }
 
   // Commands for the ⌘K palette. Leaf commands reuse the shortcut handlers (and

@@ -11,13 +11,12 @@ import {
 import type { ChatId, TargetId, WorkspaceId } from "../../../shared/ids.js"
 import { Collapsible } from "@base-ui/react/collapsible"
 import { Button } from "@base-ui/react/button"
-import { Exit } from "effect"
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { Chat } from "../../../shared/chat.js"
 import type { TargetSession } from "../../../shared/instance.js"
-import { chatsAtom, createChatAtom, sessionsAtom, stopTargetAtom, successList, workspacesAtom } from "../atoms.js"
-import { rpc } from "../rpc-client.js"
+import { chatsAtom, sessionsAtom, stopTargetAtom, successList, workspacesAtom } from "../atoms.js"
 import { useShellActions } from "../shell/ShellActionsContext.js"
+import { useChatMutations } from "../shell/useChatMutations.js"
 import { useShellState } from "../shell/ShellStateContext.js"
 import { deriveShellViewModel } from "../shell/shellSelectors.js"
 import {
@@ -400,18 +399,8 @@ export function ArcSidebarTree(): JSX.Element {
     sessions,
   })
 
-  const runCreateChat = useAtomSet(createChatAtom, { mode: "promiseExit" })
   const runStopTarget = useAtomSet(stopTargetAtom)
-  const createChat = useCallback(
-    async (workspaceId: WorkspaceId): Promise<void> => {
-      const exit = await runCreateChat({ payload: { workspaceId } })
-      if (Exit.isSuccess(exit)) shellActions.selectChat(workspaceId, exit.value.id)
-    },
-    [runCreateChat, shellActions],
-  )
-  const renameChat = useCallback(async (chatId: ChatId, title: string): Promise<void> => {
-    await rpc("UpdateChatTitle", { chatId, title })
-  }, [])
+  const { createChat, renameChat } = useChatMutations(shellActions.selectChat)
   const stopSession = useCallback(
     (sessionId: TargetId): void => {
       shellActions.stopSession(sessionId)
