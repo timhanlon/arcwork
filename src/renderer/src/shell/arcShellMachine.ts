@@ -275,6 +275,57 @@ const selectChat = (
   layout: showCenter(context.layout, { kind: "chat" }),
 })
 
+/**
+ * Reveal a live session's terminal: select its chat (or just show the chat
+ * center), open the right terminal surface, and either focus the pane already
+ * showing that session or append a fresh one. `resume` marks a newly-created pane
+ * as a detached resume so the terminal remounts the prior PTY. Both paths clear
+ * `detachedSessionId` since the session is now bound to a pane.
+ *
+ * Shared by SESSION_FOCUSED (live branch) and DETACHED_RESUME_REQUESTED, which
+ * differ only in that flag. TARGET_LAUNCH_REQUESTED is deliberately not routed
+ * here: it mints a pane before any session id exists, so it has no find-or-create
+ * step to share.
+ */
+const attachSessionPane = (
+  context: ArcShellContext,
+  opts: {
+    readonly session: ShellSessionRef
+    readonly workspaceId: WorkspaceId | undefined
+    readonly paneId: PaneId
+    readonly resume?: boolean
+  },
+): ArcShellContext => {
+  const { session, workspaceId, paneId, resume } = opts
+  const base = workspaceId
+    ? selectChat(context, workspaceId, session.chatId)
+    : { ...context, layout: showCenter(context.layout, { kind: "chat" as const }) }
+  const right = { surface: { kind: "terminal" as const }, collapsed: false }
+  const existing = base.panes.find((pane) => pane.sessionId === session.id)
+  if (existing) {
+    return {
+      ...base,
+      layout: { ...base.layout, right },
+      selection: { ...base.selection, terminalPaneId: existing.id },
+      detachedSessionId: undefined,
+    }
+  }
+  const pane: ShellPane = {
+    id: paneId,
+    provider: session.provider,
+    chatId: session.chatId,
+    sessionId: session.id,
+    ...(resume ? { resumeSessionId: session.id } : {}),
+  }
+  return {
+    ...base,
+    layout: { ...base.layout, right },
+    panes: [...base.panes, pane],
+    selection: { ...base.selection, terminalPaneId: pane.id },
+    detachedSessionId: undefined,
+  }
+}
+
 const closePaneForSession = (
   context: ArcShellContext,
   sessionId: TargetId,
@@ -428,15 +479,19 @@ export const arcShellMachine = createMachine({
           // bare action list.
           actions: enqueueActions(({ enqueue, event }) => {
             enqueue.assign(({ context, event }) => {
-              const base = event.workspaceId
-                ? selectChat(context, event.workspaceId, event.session.chatId)
-                : { ...context, layout: showCenter(context.layout, { kind: "chat" as const }) }
-              const right = { surface: { kind: "terminal" as const }, collapsed: false }
-
+              // Detached: show the resume prompt instead of mounting a pane — keep
+              // the session selected but don't grab the terminal (the emit below
+              // is gated on `attached`). Live: find-or-create the pane.
               if (!event.session.attached) {
+                const base = event.workspaceId
+                  ? selectChat(context, event.workspaceId, event.session.chatId)
+                  : { ...context, layout: showCenter(context.layout, { kind: "chat" as const }) }
                 return {
                   ...base,
-                  layout: { ...base.layout, right },
+                  layout: {
+                    ...base.layout,
+                    right: { surface: { kind: "terminal" as const }, collapsed: false },
+                  },
                   detachedSessionId: event.session.id,
                   selection: {
                     ...base.selection,
@@ -446,30 +501,11 @@ export const arcShellMachine = createMachine({
                   },
                 }
               }
-
-              const existing = base.panes.find((pane) => pane.sessionId === event.session.id)
-              if (existing) {
-                return {
-                  ...base,
-                  layout: { ...base.layout, right },
-                  selection: { ...base.selection, terminalPaneId: existing.id },
-                  detachedSessionId: undefined,
-                }
-              }
-
-              const pane: ShellPane = {
-                id: event.paneId,
-                provider: event.session.provider,
-                chatId: event.session.chatId,
-                sessionId: event.session.id,
-              }
-              return {
-                ...base,
-                layout: { ...base.layout, right },
-                panes: [...base.panes, pane],
-                selection: { ...base.selection, terminalPaneId: pane.id },
-                detachedSessionId: undefined,
-              }
+              return attachSessionPane(context, {
+                session: event.session,
+                workspaceId: event.workspaceId,
+                paneId: event.paneId,
+              })
             })
             if (event.type === "SESSION_FOCUSED" && event.session.attached) {
               enqueue.emit({ type: "focusTerminal" })
@@ -478,35 +514,14 @@ export const arcShellMachine = createMachine({
         },
         DETACHED_RESUME_REQUESTED: {
           actions: [
-            assign(({ context, event }) => {
-              const base = event.workspaceId
-                ? selectChat(context, event.workspaceId, event.session.chatId)
-                : { ...context, layout: showCenter(context.layout, { kind: "chat" as const }) }
-              const right = { surface: { kind: "terminal" as const }, collapsed: false }
-              const existing = base.panes.find((pane) => pane.sessionId === event.session.id)
-              if (existing) {
-                return {
-                  ...base,
-                  layout: { ...base.layout, right },
-                  selection: { ...base.selection, terminalPaneId: existing.id },
-                  detachedSessionId: undefined,
-                }
-              }
-              const pane: ShellPane = {
-                id: event.paneId,
-                provider: event.session.provider,
-                chatId: event.session.chatId,
-                sessionId: event.session.id,
-                resumeSessionId: event.session.id,
-              }
-              return {
-                ...base,
-                layout: { ...base.layout, right },
-                panes: [...base.panes, pane],
-                selection: { ...base.selection, terminalPaneId: pane.id },
-                detachedSessionId: undefined,
-              }
-            }),
+            assign(({ context, event }) =>
+              attachSessionPane(context, {
+                session: event.session,
+                workspaceId: event.workspaceId,
+                paneId: event.paneId,
+                resume: true,
+              }),
+            ),
             // Resuming is an explicit "take me to that session" — focus its terminal.
             emit({ type: "focusTerminal" }),
           ],
