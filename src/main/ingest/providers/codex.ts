@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Path } from "effect"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
 import { homedir } from "node:os"
 import type { DiagnosticRow, ExtractedRows } from "../db/schema.js"
 import type { IngestError } from "../errors.js"
@@ -6,20 +6,59 @@ import { classifyTool } from "../extract/tool-kind.js"
 import { SessionRowBuilder } from "../extract/session-row-builder.js"
 import { readJsonl } from "./jsonl.js"
 import type { AgentProvider } from "./provider.js"
+import { type Rec, obj, parseJson, str } from "../extract/json.js"
 
-type Rec = Record<string, unknown>
+// --- record payload schemas ------------------------------------------------
+// A Codex record is `{ type, timestamp, payload }`; the payload's own `type`
+// discriminates the variants. Decoding each payload into a Schema.Union gives
+// typed fields with no `str(payload["…"])` plucking — and because an unknown or
+// malformed shape decodes to None, the variant is skipped, exactly as the prior
+// `if (str(...)) …` guards did. `NonEmptyString` mirrors str()'s treatment of
+// "" as absent; fields the old code required for an action are required members
+// (a missing one drops the variant, matching the old `if (!name) break` / the
+// `callId && output` guard). The trivial envelope reads (type/timestamp) and the
+// raw session_meta passthrough stay as direct reads — decoding them would only
+// add fragility (one malformed top-level field would drop the whole record).
+const NeStr = Schema.NonEmptyString
 
-const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined)
-const obj = (v: unknown): Rec | undefined =>
-  v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : undefined
+const EventMsgPayload = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("user_message"), message: NeStr }),
+  Schema.Struct({ type: Schema.Literal("agent_message"), message: NeStr }),
+  Schema.Struct({ type: Schema.Literal("agent_reasoning"), text: NeStr }),
+])
+const decodeEventMsg = Schema.decodeUnknownOption(EventMsgPayload)
 
-const parseJson = (raw: string): Rec | undefined => {
-  try {
-    return obj(JSON.parse(raw))
-  } catch {
-    return undefined
-  }
-}
+const ResponseItemPayload = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("function_call"),
+    name: NeStr,
+    call_id: Schema.optional(NeStr),
+    arguments: Schema.optional(NeStr),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("custom_tool_call"),
+    name: NeStr,
+    call_id: Schema.optional(NeStr),
+    // input may legitimately be the empty string (the old code defaulted it to
+    // ""), so it's a plain optional String, not NonEmptyString.
+    input: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({ type: Schema.Literal("function_call_output"), call_id: NeStr, output: NeStr }),
+  Schema.Struct({ type: Schema.Literal("custom_tool_call_output"), call_id: NeStr, output: NeStr }),
+])
+const decodeResponseItem = Schema.decodeUnknownOption(ResponseItemPayload)
+
+const decodeTurnContext = Schema.decodeUnknownOption(Schema.Struct({ model: Schema.optional(NeStr) }))
+
+const SessionMetaHeader = Schema.Struct({
+  type: Schema.Literal("session_meta"),
+  payload: Schema.Struct({
+    id: Schema.optional(NeStr),
+    cwd: Schema.optional(NeStr),
+    timestamp: Schema.optional(NeStr),
+  }),
+})
+const decodeSessionMetaLine = Schema.decodeUnknownOption(Schema.fromJsonString(SessionMetaHeader))
 
 // Codex wraps tool results in a fixed telemetry preamble before the real output.
 // Two shapes occur in practice:
@@ -85,74 +124,62 @@ export const normalizeCodexRecords = (
     const type = str(record["type"])
     const timestamp = str(record["timestamp"]) ?? null
     if (timestamp) b.updatedAt = timestamp
-    const payload = obj(record["payload"])
+    const payload = record["payload"]
 
     if (type === "turn_context") {
-      const model = str(payload?.["model"])
-      if (model) currentModel = model
+      const tc = decodeTurnContext(payload)
+      if (Option.isSome(tc) && tc.value.model) currentModel = tc.value.model
       continue
     }
 
     if (type === "event_msg") {
-      switch (payload?.["type"]) {
-        case "user_message": {
-          const text = str(payload["message"])
-          if (text) b.message({ role: "user", text, createdAt: timestamp })
+      const ev = decodeEventMsg(payload)
+      if (Option.isNone(ev)) continue
+      switch (ev.value.type) {
+        case "user_message":
+          b.message({ role: "user", text: ev.value.message, createdAt: timestamp })
           break
-        }
-        case "agent_message": {
-          const text = str(payload["message"])
-          if (text) b.message({ role: "assistant", text, model: currentModel, createdAt: timestamp })
+        case "agent_message":
+          b.message({ role: "assistant", text: ev.value.message, model: currentModel, createdAt: timestamp })
           break
-        }
-        case "agent_reasoning": {
-          const text = str(payload["text"])
-          if (text)
-            b.message({ role: "assistant", thinking: text, model: currentModel, createdAt: timestamp })
+        case "agent_reasoning":
+          b.message({ role: "assistant", thinking: ev.value.text, model: currentModel, createdAt: timestamp })
           break
-        }
       }
       continue
     }
 
     if (type === "response_item") {
-      switch (payload?.["type"]) {
+      const ri = decodeResponseItem(payload)
+      if (Option.isNone(ri)) continue
+      const p = ri.value
+      switch (p.type) {
         case "function_call": {
-          const name = str(payload["name"])
-          if (!name) break
-          const callId = str(payload["call_id"])
-          const argsRaw = str(payload["arguments"])
-          const input = argsRaw ? parseJson(argsRaw) : undefined
+          const input = p.arguments ? parseJson(p.arguments) : undefined
           const row = b.tool({
-            name,
-            kind: classifyTool("codex", name),
-            nativeToolId: callId ?? null,
-            inputJson: argsRaw ?? null,
+            name: p.name,
+            kind: classifyTool("codex", p.name),
+            nativeToolId: p.call_id ?? null,
+            inputJson: p.arguments ?? null,
           })
-          b.hint(name, input, null, row.id)
+          b.hint(p.name, input, null, row.id)
           break
         }
         case "custom_tool_call": {
-          const name = str(payload["name"])
-          if (!name) break
-          const callId = str(payload["call_id"])
-          const inputText = str(payload["input"]) ?? ""
+          const inputText = p.input ?? ""
           const row = b.tool({
-            name,
-            kind: classifyTool("codex", name),
-            nativeToolId: callId ?? null,
+            name: p.name,
+            kind: classifyTool("codex", p.name),
+            nativeToolId: p.call_id ?? null,
             inputJson: JSON.stringify({ input: inputText }),
           })
-          b.hint(name, { input: inputText }, null, row.id)
+          b.hint(p.name, { input: inputText }, null, row.id)
           break
         }
         case "function_call_output":
-        case "custom_tool_call_output": {
-          const callId = str(payload["call_id"])
-          const output = str(payload["output"])
-          if (callId && output) b.result(callId, unwrapExecOutput(output))
+        case "custom_tool_call_output":
+          b.result(p.call_id, unwrapExecOutput(p.output))
           break
-        }
       }
     }
   }
@@ -211,17 +238,15 @@ export const makeCodexProvider: Effect.Effect<AgentProvider, never, FileSystem.F
       for (const file of files) {
         const line = yield* readFirstLine(fs, file)
         if (line.length === 0) continue
-        const parsed = parseJson(line)
-        if (!parsed || parsed["type"] !== "session_meta") continue
-        const payload = obj(parsed["payload"])
-        const nativeSessionId = str(payload?.["id"])
-        const cwd = str(payload?.["cwd"])
-        if (!nativeSessionId || !cwd) continue
+        const header = decodeSessionMetaLine(line)
+        if (Option.isNone(header)) continue
+        const { id, cwd, timestamp } = header.value.payload
+        if (!id || !cwd) continue
         metas.push({
           path: file,
-          nativeSessionId,
+          nativeSessionId: id,
           cwd,
-          ...(str(payload?.["timestamp"]) ? { createdAt: str(payload?.["timestamp"])! } : {}),
+          ...(timestamp ? { createdAt: timestamp } : {}),
         })
       }
       return metas
