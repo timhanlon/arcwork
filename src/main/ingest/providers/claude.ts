@@ -6,11 +6,8 @@ import { classifyTool } from "../extract/tool-kind.js"
 import { SessionRowBuilder } from "../extract/session-row-builder.js"
 import { readJsonl } from "./jsonl.js"
 import type { AgentProvider } from "./provider.js"
-import { type ClaudeSession, type Rec, parseClaudeSessions, str } from "./claude-dag.js"
-
-const obj = (v: unknown): Rec | undefined =>
-  v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : undefined
-const arr = (v: unknown): ReadonlyArray<unknown> | undefined => (Array.isArray(v) ? v : undefined)
+import { type ClaudeSession, parseClaudeSessions } from "./claude-dag.js"
+import { type Rec, arr, obj, str } from "../extract/json.js"
 
 const skillBaseDirectoryPrefix = "Base directory for this skill:"
 
@@ -76,10 +73,8 @@ const toolResultBlockText = (block: typeof ToolResultBlock.Type): string => {
 const toolResultText = (content: unknown): string => {
   const s = str(content)
   if (s !== undefined) return s
-  const list = arr(content)
-  if (!list) return ""
   const parts: Array<string> = []
-  for (const item of list) {
+  for (const item of arr(content)) {
     const block = decodeToolResultBlock(item)
     // Unknown block shapes decode to None and are skipped rather than emitting
     // an empty string; add a schema member above to capture a new shape.
@@ -127,8 +122,7 @@ export const normalizeClaudeSession = (
     if (type === "user") {
       const content = message?.["content"]
       const contentArray = arr(content)
-      const isToolResult =
-        contentArray !== undefined && obj(contentArray[0])?.["type"] === "tool_result"
+      const isToolResult = obj(contentArray[0])?.["type"] === "tool_result"
 
       if (isToolResult) {
         // AskUserQuestion's chosen-answer map lives in the structured
@@ -190,7 +184,7 @@ export const normalizeClaudeSession = (
     }
 
     if (type === "assistant") {
-      const contentArray = arr(message?.["content"]) ?? []
+      const contentArray = arr(message?.["content"])
       const model = str(message?.["model"]) ?? null
 
       // Walk content parts in source order, flushing accumulated text/thinking as

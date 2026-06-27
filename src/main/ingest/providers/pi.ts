@@ -6,6 +6,7 @@ import { classifyTool } from "../extract/tool-kind.js"
 import { SessionRowBuilder } from "../extract/session-row-builder.js"
 import { readJsonl } from "./jsonl.js"
 import type { AgentProvider } from "./provider.js"
+import { type Rec, arr, obj, parseJson, str } from "../extract/json.js"
 
 // pi (@earendil-works/pi-coding-agent) writes one JSONL session file per session
 // under `~/.pi/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl`. The first line is
@@ -14,21 +15,6 @@ import type { AgentProvider } from "./provider.js"
 //   user      → content `text` parts
 //   assistant → content `thinking` / `text` / `toolCall {id,name,arguments}` parts
 //   toolResult→ `{toolCallId, toolName, content[], isError}` (the call's output)
-
-type Rec = Record<string, unknown>
-
-const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined)
-const obj = (v: unknown): Rec | undefined =>
-  v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : undefined
-const arr = (v: unknown): ReadonlyArray<unknown> => (Array.isArray(v) ? v : [])
-
-const parseJson = (raw: string): Rec | undefined => {
-  try {
-    return obj(JSON.parse(raw))
-  } catch {
-    return undefined
-  }
-}
 
 /** Join the `text` parts of a content array (used for toolResult output). */
 const textOf = (content: unknown): string =>

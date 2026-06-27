@@ -4,14 +4,9 @@
 // DAGs, merged across resumed sessions, and flattened by timestamp.
 //
 // Split out of claude.ts: this is the gnarliest, self-contained part of the
-// provider and depends on nothing but these local narrowing helpers, so it lives
-// on its own (and its tests need not drag in the normalize/IO surface). claude.ts
-// imports `Rec`/`str` from here for its normalize pass.
-
-export type Rec = Record<string, unknown>
-
-export const str = (v: unknown): string | undefined =>
-  typeof v === "string" && v.length > 0 ? v : undefined
+// provider and depends on nothing but the shared narrowing helpers, so it lives
+// on its own (and its tests need not drag in the normalize/IO surface).
+import { type Rec, str } from "../extract/json.js"
 
 const cmpStr = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 

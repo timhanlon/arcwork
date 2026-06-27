@@ -11,19 +11,7 @@ import { CursorReadError, type IngestError } from "../errors.js"
 import { classifyTool } from "../extract/tool-kind.js"
 import { SessionRowBuilder } from "../extract/session-row-builder.js"
 import type { AgentProvider } from "./provider.js"
-
-type Rec = Record<string, unknown>
-
-const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined)
-const obj = (v: unknown): Rec | undefined =>
-  v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : undefined
-const parseJson = (raw: string): Rec | undefined => {
-  try {
-    return obj(JSON.parse(raw))
-  } catch {
-    return undefined
-  }
-}
+import { type Rec, obj, parseJson, str } from "../extract/json.js"
 
 /** A tool-result's `result` as display text: strings pass through; objects/arrays
  * (how Cursor stores MCP results) are JSON-serialized; null/empty becomes undefined. */
