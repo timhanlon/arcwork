@@ -152,10 +152,7 @@ export const ChatMessageServiceLive = Layer.effect(
     // artifact projection lands here, so the upsert precedence (the mode) and the
     // best-effort logging policy are applied in one place.
     const upsertProjected = (row: ChatMessageRow, mode: ChatMessageUpsertMode, label: string) =>
-      db.upsertChatMessage(row, mode).pipe(
-        Effect.tapError((e: SqlError) => Effect.logWarning(`${label} persist failed: ${e}`)),
-        Effect.orElseSucceed(() => false),
-      )
+      db.upsertChatMessage(row, mode).pipe(bestEffort(`${label} persist failed`, false))
 
     const persistSignalDrafts = (
       signal: HookSignal,
@@ -216,12 +213,9 @@ export const ChatMessageServiceLive = Layer.effect(
           }
           let ok = false
           if (draft.role === "user" && draft.mode === "insert") {
-            ok = yield* db.reconcileComposerOptimisticUser(row).pipe(
-              Effect.tapError((e: SqlError) =>
-                Effect.logWarning(`composer user reconcile failed: ${e}`),
-              ),
-              Effect.orElseSucceed(() => false),
-            )
+            ok = yield* db
+              .reconcileComposerOptimisticUser(row)
+              .pipe(bestEffort("composer user reconcile failed", false))
           }
           if (!ok) {
             ok = yield* upsertProjected(row, draft.mode, `chat message (${draft.role})`)
@@ -253,12 +247,9 @@ export const ChatMessageServiceLive = Layer.effect(
     // projection context, so artifact-projection.ts stays free of the store.
     const reconcileComposerUser = USER_OPTIMISTIC_ECHO
       ? (row: ChatMessageRow) =>
-          db.reconcileComposerOptimisticUser(row).pipe(
-            Effect.tapError((e: SqlError) =>
-              Effect.logWarning(`artifact user reconcile failed: ${e}`),
-            ),
-            Effect.orElseSucceed(() => false),
-          )
+          db
+            .reconcileComposerOptimisticUser(row)
+            .pipe(bestEffort("artifact user reconcile failed", false))
       : undefined
 
     const relabelHookUserAsMeta = (params: {
@@ -267,12 +258,7 @@ export const ChatMessageServiceLive = Layer.effect(
       readonly dedupKey: string
       readonly messageId: string
     }) =>
-      db.relabelHookUserAsMeta(params).pipe(
-        Effect.tapError((e: SqlError) =>
-          Effect.logWarning(`artifact meta relabel failed: ${e}`),
-        ),
-        Effect.orElseSucceed(() => false),
-      )
+      db.relabelHookUserAsMeta(params).pipe(bestEffort("artifact meta relabel failed", false))
 
     const projectArtifactSession = (
       rows: ExtractedRows,
@@ -435,12 +421,9 @@ export const ChatMessageServiceLive = Layer.effect(
         // owned and reconciled onto this one when it lands. Skipped in the
         // pure-transcript mode, where the bubble appears on the next projection.
         if (USER_OPTIMISTIC_ECHO) {
-          const ok = yield* db.upsertChatMessage(row, "insert").pipe(
-            Effect.tapError((e: SqlError) =>
-              Effect.logWarning(`composer prompt persist failed: ${e}`),
-            ),
-            Effect.orElseSucceed(() => false),
-          )
+          const ok = yield* db
+            .upsertChatMessage(row, "insert")
+            .pipe(bestEffort("composer prompt persist failed", false))
           if (!ok) {
             return yield* Effect.fail(arcRequestError("Failed to record prompt in chat transcript"))
           }

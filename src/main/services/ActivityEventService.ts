@@ -94,12 +94,9 @@ export const ActivityEventServiceLive = Layer.effect(
       db.loadActivityEventsForWork(workRefId).pipe(Effect.map((rows) => rows.map(rowToActivityEvent)))
 
     const persistDraft = (signal: HookSignal, draft: ActivityEventDraft) =>
-      db.insertActivityEvent(draftToRow(signal, draft)).pipe(
-        Effect.tapError((e: SqlError) =>
-          Effect.logWarning(`activity event persist failed (${draft.kind}): ${e}`),
-        ),
-        Effect.orElseSucceed(() => false),
-      )
+      db
+        .insertActivityEvent(draftToRow(signal, draft))
+        .pipe(bestEffort(`activity event persist failed (${draft.kind})`, false))
 
     const record = (event: {
       readonly workspaceRoot?: string | null
@@ -141,12 +138,9 @@ export const ActivityEventServiceLive = Layer.effect(
           provenanceJson: JSON.stringify({ source: event.source }),
           dedupKey: event.dedupKey ?? null,
         }
-        const inserted = yield* db.insertActivityEvent(row).pipe(
-          Effect.tapError((e: SqlError) =>
-            Effect.logWarning(`activity event persist failed (${event.kind}): ${e}`),
-          ),
-          Effect.orElseSucceed(() => false),
-        )
+        const inserted = yield* db
+          .insertActivityEvent(row)
+          .pipe(bestEffort(`activity event persist failed (${event.kind})`, false))
         if (inserted && event.chatId) {
           yield* PubSub.publish(updates, { chatId: arcId("chat", event.chatId) })
         }
