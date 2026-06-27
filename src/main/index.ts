@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url"
 import { parseEnv } from "node:util"
 import path from "node:path"
 import { runtime } from "./runtime.js"
+import { queryLoginShellPath, mergePath } from "./login-path.js"
 import { resolveArcDb, APP_NAME, resolveProfile } from "./db/paths.js"
 import { launchArcMainController } from "./services/ArcMainController.js"
 import type { RendererTransport } from "./services/ArcMainController.js"
@@ -25,6 +26,31 @@ const loadDotenv = (): void => {
 }
 
 loadDotenv()
+
+/**
+ * Repair PATH for a Finder/`open`-launched packaged build. Such a launch inherits
+ * launchd's minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), so provider CLIs
+ * (`claude`, `codex`, `cursor-agent`, `pi`) installed under `~/.local/bin`,
+ * Homebrew, or nvm aren't on PATH and every target PTY spawn fails with
+ * `posix_spawnp failed` (ENOENT). A terminal / `pnpm dev` launch already carries
+ * the user's full PATH, so this is gated on `app.isPackaged` to skip the
+ * login-shell round-trip in development. Must run before any target spawn (well
+ * before `app.whenReady`).
+ */
+function repairLoginPath(): void {
+  if (!app.isPackaged) return
+  const before = process.env["PATH"] ?? ""
+  const merged = mergePath(queryLoginShellPath(), before)
+  process.env["PATH"] = merged
+  Effect.runSync(
+    Effect.logInfo(
+      `[arc] PATH repaired for packaged launch: ${before.split(":").length} → ` +
+        `${merged.split(":").length} entries`,
+    ),
+  )
+}
+
+repairLoginPath()
 
 /**
  * Pin this run's profile before anything touches durable state. Setting Electron's
