@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Path } from "effect"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
 import { homedir } from "node:os"
 import type { DiagnosticRow, ExtractedRows } from "../db/schema.js"
 import type { IngestError } from "../errors.js"
@@ -6,7 +6,7 @@ import { classifyTool } from "../extract/tool-kind.js"
 import { SessionRowBuilder } from "../extract/session-row-builder.js"
 import { readJsonl } from "./jsonl.js"
 import type { AgentProvider } from "./provider.js"
-import { type Rec, arr, obj, parseJson, str } from "../extract/json.js"
+import { type Rec, arr, obj, str } from "../extract/json.js"
 
 // pi (@earendil-works/pi-coding-agent) writes one JSONL session file per session
 // under `~/.pi/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl`. The first line is
@@ -16,12 +16,39 @@ import { type Rec, arr, obj, parseJson, str } from "../extract/json.js"
 //   assistant → content `thinking` / `text` / `toolCall {id,name,arguments}` parts
 //   toolResult→ `{toolCallId, toolName, content[], isError}` (the call's output)
 
-/** Join the `text` parts of a content array (used for toolResult output). */
+const NeStr = Schema.NonEmptyString
+
+// An assistant message's content parts, discriminated by `type`. Decoding each
+// part into this union replaces the `switch (str(c["type"]))` plucking; an
+// unknown or malformed part decodes to None and is skipped (as the old default
+// case did). `text`/`thinking` are plain optional Strings (the old code summed
+// them with `?? ""`, so "" is meaningful), `toolCall.name` is required NonEmpty
+// (the old code pushed a call only `if (str(c["name"]))`).
+const ContentPart = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.optional(Schema.String) }),
+  Schema.Struct({ type: Schema.Literal("thinking"), thinking: Schema.optional(Schema.String) }),
+  Schema.Struct({
+    type: Schema.Literal("toolCall"),
+    name: NeStr,
+    id: Schema.optional(NeStr),
+    arguments: Schema.optional(Schema.Unknown),
+  }),
+])
+type ToolCallPart = Extract<typeof ContentPart.Type, { type: "toolCall" }>
+const decodeContentPart = Schema.decodeUnknownOption(ContentPart)
+
+const PiSessionHeader = Schema.Struct({
+  type: Schema.Literal("session"),
+  id: Schema.optional(NeStr),
+  cwd: Schema.optional(NeStr),
+})
+const decodePiSessionLine = Schema.decodeUnknownOption(Schema.fromJsonString(PiSessionHeader))
+
+/** Join the `text` parts of a content array (used for user + toolResult output). */
 const textOf = (content: unknown): string =>
   arr(content)
-    .map(obj)
-    .filter((c): c is Rec => c?.["type"] === "text")
-    .map((c) => str(c["text"]) ?? "")
+    .map((part) => decodeContentPart(part))
+    .map((p) => (Option.isSome(p) && p.value.type === "text" ? (p.value.text ?? "") : ""))
     .join("")
 
 export interface PiNormalizeOptions {
@@ -76,19 +103,19 @@ export const normalizePiRecords = (
       // own rows, appended in source order after the message.
       let text = ""
       let thinking = ""
-      const toolCalls: Array<Rec> = []
+      const toolCalls: Array<ToolCallPart> = []
       for (const part of arr(message["content"])) {
-        const c = obj(part)
-        if (!c) continue
-        switch (str(c["type"])) {
+        const p = decodeContentPart(part)
+        if (Option.isNone(p)) continue
+        switch (p.value.type) {
           case "text":
-            text += str(c["text"]) ?? ""
+            text += p.value.text ?? ""
             break
           case "thinking":
-            thinking += str(c["thinking"]) ?? ""
+            thinking += p.value.thinking ?? ""
             break
           case "toolCall":
-            if (str(c["name"])) toolCalls.push(c)
+            toolCalls.push(p.value)
             break
         }
       }
@@ -104,16 +131,15 @@ export const normalizePiRecords = (
           nativeMessageId,
         })
       }
-      for (const c of toolCalls) {
-        const name = str(c["name"])!
-        const input = obj(c["arguments"])
+      for (const tc of toolCalls) {
+        const input = obj(tc.arguments)
         const row = b.tool({
-          name,
-          kind: classifyTool("pi", name),
-          nativeToolId: str(c["id"]) ?? null,
-          inputJson: JSON.stringify(c["arguments"] ?? {}),
+          name: tc.name,
+          kind: classifyTool("pi", tc.name),
+          nativeToolId: tc.id ?? null,
+          inputJson: JSON.stringify(tc.arguments ?? {}),
         })
-        b.hint(name, input, null, row.id)
+        b.hint(tc.name, input, null, row.id)
       }
       continue
     }
@@ -173,12 +199,11 @@ export const makePiProvider: Effect.Effect<AgentProvider, never, FileSystem.File
       for (const file of files) {
         const line = yield* readFirstLine(fs, file)
         if (line.length === 0) continue
-        const parsed = parseJson(line)
-        if (!parsed || parsed["type"] !== "session") continue
-        const nativeSessionId = str(parsed["id"])
-        const cwd = str(parsed["cwd"])
-        if (!nativeSessionId || !cwd) continue
-        metas.push({ path: file, nativeSessionId, cwd })
+        const header = decodePiSessionLine(line)
+        if (Option.isNone(header)) continue
+        const { id, cwd } = header.value
+        if (!id || !cwd) continue
+        metas.push({ path: file, nativeSessionId: id, cwd })
       }
       return metas
     })
