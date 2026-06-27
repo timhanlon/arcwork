@@ -2,30 +2,26 @@ import { Clock, Context, Effect, Layer, Queue, Stream, SubscriptionRef } from "e
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import { nowIso } from "../clock.js"
 import { EventEmitter } from "node:events"
-import * as fs from "node:fs"
-import * as os from "node:os"
-import * as path from "node:path"
-import * as pty from "node-pty"
 import type { IPty } from "node-pty"
 import type { TargetSession } from "../../shared/instance.js"
-import { arcEnvTags, arcMcpBearerToken } from "../../shared/env-tags.js"
 import { installProviderHooks } from "../hooks/install.js"
-import { cursorPluginLaunchArgs, installCursorHooks, installCursorPlugin } from "../hooks/cursor-plugin.js"
-import { installPiExtension, piLaunchArgs } from "../hooks/pi-connector.js"
-import { isMcpProvider, providerMcpLaunchArgs } from "../mcp/client-config.js"
-import { ARC_HOOK_HELPER_ENV, ARC_HOOK_SOCK_ENV, arcOwnedHelperFile } from "../hooks/signals.js"
 import { HookSignalServer } from "./HookSignalServer.js"
 import { ProviderRegistry } from "./ProviderRegistry.js"
 import { WorkspaceService } from "./WorkspaceService.js"
 import { ChatService } from "./ChatService.js"
 import { ArcStore } from "../db/store.js"
 import { withSqlOperation } from "../db/sql-operation.js"
-import { resolveArcDb, resolveProfile } from "../db/paths.js"
-import type { TargetSessionRow } from "../db/schema.js"
+import { resolveArcDb } from "../db/paths.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { type ChatId, newArcId } from "../../shared/ids.js"
-import { PTY_SUBMIT_SEQUENCE, writePromptWithDelayedSubmit } from "../pty-submit.js"
-import { tracePtyChunk } from "./pty-trace.js"
+import { restorePersistedSessions } from "./target-session/boot-restore.js"
+import { buildProviderArgs, canResume, resumeArgs } from "./target-session/provider-args.js"
+import {
+  drivePtySpawn,
+  type FirstOutput,
+  type PtyExit,
+  type SpawnOptions,
+} from "./target-session/pty-readiness-driver.js"
 
 /**
  * Owns interactive PTY instances. Sessions are identified by their `target_…`
@@ -62,59 +58,6 @@ export interface LaunchRequest {
   /** Grid size measured by the renderer before launch (see rpc.ts / arc-pty-winsize). */
   readonly cols?: number
   readonly rows?: number
-}
-
-/**
- * Once the session is ready (its prompt glyph showed, or first output as a
- * fallback), how long to wait before sending Enter on a prefilled draft. The
- * composer needs a beat to render the seeded text before it'll accept submit.
- */
-const PREFILL_SUBMIT_SETTLE_MS = 400
-
-/**
- * If a provider's prompt glyph never appears (a glyph mismatch, a CLI that
- * draws its prompt differently, or no glyph configured), deliver the seeded
- * prompt anyway after this long — better a slightly-early submit than a session
- * that strands its prompt forever.
- */
-const READY_FALLBACK_MS = 10_000
-
-/** Cap on the rolling PTY tail we scan for the readiness glyph. */
-const READY_TAIL_CHARS = 4000
-
-/** True once the provider's ready glyph appears in the last few lines of output.
- * The glyph is a printable char that never occurs inside an escape sequence, so a
- * plain substring test needs no ANSI stripping; newline split scopes it to the tail. */
-const tailShowsGlyph = (tail: string, glyph: string): boolean =>
-  tail
-    .split(/\r?\n/)
-    .slice(-5)
-    .some((line) => line.includes(glyph))
-/** Everything `spawnAttached` needs beyond the session itself. An options object
- * (not a positional tail) so call sites read by name — launch and resume diverge
- * only in a few fields, and `undefined, {}, false` in argument position hid that. */
-interface SpawnOptions {
-  readonly launchCmd: string
-  readonly args: ReadonlyArray<string>
-  readonly cols: number | undefined
-  readonly rows: number | undefined
-  readonly sockPath: string
-  readonly writeAfterStart?: string
-  readonly extraEnv?: Readonly<Record<string, string>>
-  /** When the prompt was *seeded* (prefill) rather than submitted, submit it
-   * once the session is ready (its prompt glyph appears). */
-  readonly submitSeededAfterReady?: boolean
-  /** The CLI's input-prompt glyph; we hold the seeded prompt's paste/submit
-   * until it shows in recent output, so the agent's first turn has its MCP tools
-   * connected. Absent → first PTY output is the readiness signal. */
-  readonly readyGlyph?: string
-  /** How prompts reach this CLI: terminal paste+Enter, or a JSONL command line
-   * (rpc providers). Determines both the seeded-prompt and inbox wire format. */
-  readonly promptInjectionMode?: string
-  /** Pre-session gates to clear before the ready glyph can appear (cursor's
-   * workspace-trust / login screens): send each gate's key once when its match
-   * string shows in output. */
-  readonly advanceGates?: ReadonlyArray<{ readonly match: string; readonly key: string }>
 }
 
 export interface SubmitRequest {
@@ -181,55 +124,9 @@ export const TargetSessionManagerLive = Layer.effect(
     const db = yield* ArcStore
     const scope = yield* Effect.scope
 
-    // Restore persisted sessions on boot. Their PTYs died with the last process,
-    // so any previously-live state is now unconfirmed → "unknown" (an already
-    // "exited" row stays exited). The persisted row still carries cwd +
-    // nativeSessionId, which a manual relaunch (and the future auto-resume arc)
-    // can use. A load failure starts empty (logged).
-    const persisted = yield* db.loadTargetSessions.pipe(
-      Effect.tapError((e) => Effect.logWarning(`session load failed; starting empty: ${e}`)),
-      Effect.orElseSucceed(() => [] as ReadonlyArray<TargetSessionRow>),
-    )
-    const initialMap = new Map<string, TargetSession>()
-    const restoredHookTargets: Array<{ readonly cwd: string; readonly provider: string }> = []
-    for (const r of persisted) {
-      initialMap.set(r.id, {
-        _tag: "TargetSession",
-        id: r.id,
-        provider: r.provider,
-        origin: r.origin === "orchestrated" ? "orchestrated" : "manual",
-        preset: r.preset ?? undefined,
-        chatId: r.chatId,
-        cwd: r.cwd,
-        nativeSessionId: r.nativeSessionId ?? undefined,
-        nativeTranscriptPath: r.nativeTranscriptPath ?? undefined,
-        attached: false,
-        state: r.state === "exited" ? "exited" : "unknown",
-        startedAt: r.startedAt,
-      })
-      if (r.state !== "exited") {
-        restoredHookTargets.push({ cwd: r.cwd, provider: r.provider })
-      }
-    }
-
-    // A still-running CLI from a previous Arc Work process inherited the
-    // same deterministic socket path, but the server died with the old app.
-    // Re-arm sockets during startup so delayed hooks (notably Codex
-    // SessionStart, which can wait until the first submitted prompt) can still
-    // bind restored target sessions.
-    const armedRestoredHooks = new Set<string>()
-    for (const target of restoredHookTargets) {
-      const key = `${target.cwd}\u0000${target.provider}`
-      if (armedRestoredHooks.has(key)) continue
-      armedRestoredHooks.add(key)
-      yield* hookServer.ensureListening(target.cwd)
-      const result = yield* installProviderHooks(target.cwd, target.provider)
-      if (!result.installed) {
-        yield* Effect.logWarning(
-          `restored hook install failed for ${target.provider} in ${target.cwd}; hook signals unavailable: ${result.reason}`,
-        )
-      }
-    }
+    // Restore persisted sessions on boot (and re-arm their hook sockets); see
+    // target-session/boot-restore.ts for the unconfirmed-state reconciliation.
+    const initialMap = yield* restorePersistedSessions
 
     // SubscriptionRef (not Ref) so the session list is observable: `changes`
     // pushes the current value, then every update. This is the Effect-idiomatic
@@ -253,11 +150,9 @@ export const TargetSessionManagerLive = Layer.effect(
     // session exited, persist best-effort. This matches the controller's
     // EventEmitter-to-Stream seam and gives exit handling one supervised lifetime
     // and one error policy, instead of a bare `runSync`/`runFork` pair firing
-    // from outside the runtime on every child death.
-    interface PtyExit {
-      readonly sessionId: string
-      readonly exitCode: number
-    }
+    // from outside the runtime on every child death. (PtyExit/FirstOutput are
+    // typed in target-session/pty-readiness-driver.ts, which offers onto these
+    // queues from the raw node-pty callbacks.)
     const exits = yield* Queue.make<PtyExit>()
 
     // First-output observability. The splash banner is the child's very first
@@ -268,12 +163,6 @@ export const TargetSessionManagerLive = Layer.effect(
     // was. Compared against the `arc.target.launch` span (the id round-trip),
     // a first_output latency well below the launch span means the splash lost.
     // Offered from the raw `onData` callback, logged by a scoped Effect fiber.
-    interface FirstOutput {
-      readonly sessionId: string
-      readonly provider: string
-      readonly spawnedAt: number
-      readonly firstChunkBytes: number
-    }
     const firstOutputs = yield* Queue.make<FirstOutput>()
     yield* Stream.fromQueue(firstOutputs).pipe(
       Stream.runForEach((f) =>
@@ -366,21 +255,6 @@ export const TargetSessionManagerLive = Layer.effect(
           Effect.ignore,
         )
 
-    const claudeProjectSlug = (cwd: string): string => cwd.replaceAll("/", "-").replaceAll(".", "-")
-    const inferredTranscriptPath = (s: TargetSession): string | undefined => {
-      if (!s.nativeSessionId) return undefined
-      if (s.nativeTranscriptPath) return s.nativeTranscriptPath
-      if (s.provider === "claude") {
-        return path.join(os.homedir(), ".claude", "projects", claudeProjectSlug(s.cwd), `${s.nativeSessionId}.jsonl`)
-      }
-      return undefined
-    }
-    const canResume = (s: TargetSession): boolean => {
-      if (!s.nativeSessionId) return false
-      const transcriptPath = inferredTranscriptPath(s)
-      if (s.provider === "claude") return Boolean(transcriptPath && fs.existsSync(transcriptPath))
-      return true
-    }
     const asList = (m: ReadonlyMap<string, TargetSession>): ReadonlyArray<TargetSession> =>
       Array.from(m.values()).map((s) => ({
         ...s,
@@ -390,194 +264,21 @@ export const TargetSessionManagerLive = Layer.effect(
     const list = SubscriptionRef.get(store).pipe(Effect.map(asList))
     const changes = Stream.map(SubscriptionRef.changes(store), asList)
 
-    // Provider integration argv, shared by launch + resume. cursor writes its
-    // Arc-owned plugin dir and loads it via `--plugin-dir`; claude/codex declare
-    // the arc MCP server inline. Best-effort: a failed cursor plugin write logs
-    // and falls through to no extra args rather than blocking the spawn.
-    const buildProviderArgs = (
-      provider: string,
-      scope: { chatId: string; targetSessionId: string; cwd: string; model?: string },
-    ): Effect.Effect<Array<string>> =>
-      Effect.gen(function* () {
-        // Resolve the profile once here (the main process has ARC_PROFILE pinned at
-        // boot) and thread it into the MCP config so a dev-launched session targets
-        // :7794 and a stable one :7793 — its writes land in the launching app's DB.
-        const profile = resolveProfile()
-        if (provider === "cursor") {
-          // Per-session plugin dir carrying a literal bearer: Cursor won't expand
-          // ${env:…} in MCP headers, so the token is baked in by session id here.
-          const plugin = installCursorPlugin({
-            scopeId: scope.targetSessionId,
-            bearerToken: arcMcpBearerToken(scope),
-          })
-          if (!plugin.installed) {
-            yield* Effect.logWarning(`cursor plugin install failed: ${plugin.reason ?? "unknown error"}`)
-            return []
-          }
-          // Lifecycle hooks must live in the workspace's .cursor/hooks.json —
-          // cursor-agent ignores the plugin's bundled hooks (it only loads the
-          // plugin's MCP). Without this the native session never binds and the
-          // transcript never ingests.
-          const hooks = installCursorHooks(scope.cwd)
-          if (!hooks.installed) {
-            yield* Effect.logWarning(`cursor hooks install failed: ${hooks.reason ?? "unknown error"}`)
-          }
-          return [...cursorPluginLaunchArgs(plugin.dir, profile)]
-        }
-        if (provider === "pi") {
-          // pi gets the arc toolkit + hook relay from a self-registering extension
-          // (`-e`); identity/endpoint ride the env arcEnvTags already injects.
-          const ext = installPiExtension()
-          if (!ext.installed) {
-            yield* Effect.logWarning(`pi extension install failed: ${ext.reason ?? "unknown error"}`)
-            return []
-          }
-          return [...piLaunchArgs(ext.file, scope.model)]
-        }
-        return isMcpProvider(provider) ? [...providerMcpLaunchArgs(provider, profile)] : []
-      })
-
-    const resumeArgs = (provider: string, nativeSessionId: string | undefined): Array<string> | null => {
-      if (!nativeSessionId) return null
-      switch (provider) {
-        case "claude":
-          return ["--resume", nativeSessionId]
-        case "codex":
-          return ["resume", nativeSessionId]
-        case "cursor":
-          return ["--resume", nativeSessionId]
-        case "pi":
-          // pi resolves a (partial/full) session UUID within the cwd's session dir.
-          return ["--session", nativeSessionId]
-        default:
-          return null
-      }
-    }
-
+    // Spawn the child PTY and wire its terminal-protocol lifecycle. The driver is
+    // a synchronous side-effecting function over the live closure handles
+    // (ptys/promptWriters/events + the two queues); see
+    // target-session/pty-readiness-driver.ts.
     const spawnAttached = (session: TargetSession, opts: SpawnOptions) =>
       Effect.gen(function* () {
         const spawnedAt = yield* Clock.currentTimeMillis
-        yield* Effect.sync(() => {
-        const {
-          launchCmd,
-          args,
-          cols,
-          rows,
-          sockPath,
-          writeAfterStart,
-          extraEnv = {},
-          submitSeededAfterReady = false,
-          readyGlyph,
-          promptInjectionMode,
-          advanceGates = [],
-        } = opts
-        const child = pty.spawn(launchCmd, [...args], {
-          name: "xterm-color",
-          cols: cols && cols > 0 ? Math.floor(cols) : 80,
-          rows: rows && rows > 0 ? Math.floor(rows) : 24,
-          cwd: session.cwd,
-          env: {
-            ...process.env,
-            ...arcEnvTags({
-              chatId: session.chatId,
-              targetSessionId: session.id,
-              provider: session.provider,
-              dbPath: arcDb.dbPath,
-            }),
-            ...extraEnv,
-            [ARC_HOOK_SOCK_ENV]: sockPath,
-            // The Arc-owned helper to invoke (provider hooks + the git
-            // post-commit hook both read this rather than a repo-local path).
-            [ARC_HOOK_HELPER_ENV]: arcOwnedHelperFile(),
-          } as Record<string, string>,
-        })
-        // How to write a prompt to this child: a JSONL command line for rpc
-        // providers (pi stays resident and takes `{"type":"prompt",…}` lines), or
-        // terminal paste+Enter otherwise. Stored per session so the inbox/submit
-        // path reuses the exact wire format. The agent stays attached either way.
-        const writePrompt =
-          promptInjectionMode === "rpc-jsonl"
-            ? (text: string) => child.write(JSON.stringify({ type: "prompt", message: text }) + "\n")
-            : (text: string) => writePromptWithDelayedSubmit((d) => child.write(d), text)
-        promptWriters.set(session.id, writePrompt)
-
-        // Deliver the seeded prompt exactly once, when the session is ready:
-        // paste-then-submit / a JSONL command for stdin providers, a bare Enter
-        // for a prefilled draft. Gated on the ready glyph so MCP has connected by
-        // turn 1.
-        const hasSeededPrompt = Boolean(writeAfterStart) || submitSeededAfterReady
-        let delivered = false
-        const deliver = () => {
-          if (delivered) return
-          delivered = true
-          clearTimeout(readyFallback)
-          if (writeAfterStart) {
-            writePrompt(writeAfterStart)
-          } else if (submitSeededAfterReady) {
-            setTimeout(() => {
-              try {
-                child.write(PTY_SUBMIT_SEQUENCE)
-              } catch {
-                /* child gone before submit — nothing to do */
-              }
-            }, PREFILL_SUBMIT_SETTLE_MS)
-          }
-        }
-        // Fallback so a glyph mismatch or a quiet CLI never strands the prompt.
-        const readyFallback = hasSeededPrompt ? setTimeout(deliver, READY_FALLBACK_MS) : undefined
-        // An rpc provider reads stdin commands from process start and emits nothing
-        // until prompted, so there's no readiness output to wait for — deliver the
-        // seeded prompt now (the pty buffers it until pi's reader is up).
-        if (hasSeededPrompt && promptInjectionMode === "rpc-jsonl") deliver()
-
-        let firstChunkSeen = false
-        let readyTail = ""
-        const gatesLeft = [...advanceGates]
-        child.onData((data) => {
-          tracePtyChunk(session.id, data)
-          if (!firstChunkSeen) {
-            firstChunkSeen = true
-            Queue.offerUnsafe(firstOutputs, {
-              sessionId: session.id,
-              provider: session.provider,
-              spawnedAt,
-              firstChunkBytes: Buffer.byteLength(data, "utf8"),
-            })
-          }
-          events.emit("data", { sessionId: session.id, data })
-          // Clearing a gate matters even with no seeded prompt (a resumed session
-          // must still reach its ready prompt for later inbox sends), so this
-          // watch runs whenever there's a prompt to deliver OR a gate left to clear.
-          if (!delivered && (hasSeededPrompt || gatesLeft.length > 0)) {
-            readyTail = (readyTail + data).slice(-READY_TAIL_CHARS)
-            // A pre-session gate (cursor's trust / login screen) blocks the ready
-            // glyph from ever appearing — send its key once, then keep watching
-            // the (reset) tail for the next gate or the glyph.
-            const gateIdx = gatesLeft.findIndex((g) => readyTail.includes(g.match))
-            if (gateIdx !== -1) {
-              const [gate] = gatesLeft.splice(gateIdx, 1)
-              readyTail = ""
-              try {
-                child.write(gate!.key)
-              } catch {
-                /* child gone before the gate could be cleared */
-              }
-              return
-            }
-            // No glyph configured → first output is our readiness signal.
-            if (hasSeededPrompt && (!readyGlyph || tailShowsGlyph(readyTail, readyGlyph))) deliver()
-          }
-        })
-        // Hand the exit off to the scoped consumer; no Effect runs from this
-        // raw node-pty callback. `offerUnsafe` is a no-op once the queue is shut
-        // down (scope close), so a child killed during app-quit disposal simply
-        // isn't reprocessed — consistent with not persisting "exited" on a hard kill.
-        child.onExit(({ exitCode }) => {
-          clearTimeout(readyFallback)
-          Queue.offerUnsafe(exits, { sessionId: session.id, exitCode })
-        })
-        ptys.set(session.id, child)
-        })
+        yield* Effect.sync(() =>
+          drivePtySpawn(
+            { ptys, promptWriters, events, firstOutputs, exits, dbPath: arcDb.dbPath },
+            session,
+            opts,
+            spawnedAt,
+          ),
+        )
       })
 
     const launch = (req: LaunchRequest) =>
@@ -718,11 +419,9 @@ export const TargetSessionManagerLive = Layer.effect(
           }),
         )
         yield* SubscriptionRef.update(store, (m) => new Map(m).set(session.id, session))
-        yield* persistSession(session).pipe(
-          Effect.withSpan("arc.target.persist", {
-            attributes: { "arc.target_session_id": session.id },
-          }),
-        )
+        // persistSession already names its SQLite span "arc.target.persist" via
+        // withSqlOperation, so no outer withSpan is needed here.
+        yield* persistSession(session)
         yield* Effect.logInfo(
           `target launched provider=${session.provider} chat=${session.chatId} target=${session.id}`,
         )
