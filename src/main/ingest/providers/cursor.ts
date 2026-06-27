@@ -1,4 +1,4 @@
-import { Effect, FileSystem, Path } from "effect"
+import { Effect, FileSystem, Option, Path, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import { SqliteClient } from "@effect/sql-sqlite-node"
@@ -150,6 +150,33 @@ const stripUserQuery = (text: string): string => {
   return text
 }
 
+const NeStr = Schema.NonEmptyString
+
+// A Cursor blob's content parts, discriminated by `type`. Decoding each part
+// into this union replaces the per-part `obj` + `switch (part["type"])` +
+// `str(part["…"])` plucking; an unknown/malformed part decodes to None and is
+// skipped (as the old default case did). `text` is optional NonEmpty (the old
+// code pushed only `if (str(text))`); unlike codex/pi, `tool-call.toolName` is
+// optional — Cursor emits null-named calls, which the old code kept as
+// `name ?? null`.
+const CursorContentPart = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.optional(NeStr) }),
+  Schema.Struct({ type: Schema.Literal("reasoning"), text: Schema.optional(NeStr) }),
+  Schema.Struct({ type: Schema.Literal("redacted-reasoning"), text: Schema.optional(NeStr) }),
+  Schema.Struct({
+    type: Schema.Literal("tool-call"),
+    toolName: Schema.optional(NeStr),
+    toolCallId: Schema.optional(NeStr),
+    args: Schema.optional(Schema.Unknown),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("tool-result"),
+    toolCallId: Schema.optional(NeStr),
+    result: Schema.optional(Schema.Unknown),
+  }),
+])
+const decodeCursorPart = Schema.decodeUnknownOption(CursorContentPart)
+
 export interface CursorNormalizeOptions {
   readonly nativeSessionId: string
   readonly sourcePath: string
@@ -173,19 +200,24 @@ export const normalizeCursorBlobs = (
     if (content.length === 0) continue
 
     if (role === "user") {
-      const first = obj(content[0])
-      if (first?.["type"] === "text" && (str(first["text"]) ?? "").trimStart().startsWith("<user_info>")) {
+      const parts = content.map((item) => decodeCursorPart(item))
+      const first = parts[0]
+      if (
+        first !== undefined &&
+        Option.isSome(first) &&
+        first.value.type === "text" &&
+        (first.value.text ?? "").trimStart().startsWith("<user_info>")
+      ) {
         continue
       }
-      const parts: Array<string> = []
-      for (const item of content) {
-        const part = obj(item)
-        if (part?.["type"] === "text") {
-          const text = stripUserQuery(str(part["text"]) ?? "")
-          if (text) parts.push(text)
+      const texts: Array<string> = []
+      for (const p of parts) {
+        if (Option.isSome(p) && p.value.type === "text" && p.value.text) {
+          const text = stripUserQuery(p.value.text)
+          if (text) texts.push(text)
         }
       }
-      const text = parts.length > 0 ? parts.join("\n\n") : null
+      const text = texts.length > 0 ? texts.join("\n\n") : null
       b.message({ role: "user", text, nativeMessageId: nativeId })
       continue
     }
@@ -212,29 +244,24 @@ export const normalizeCursorBlobs = (
       }
 
       for (const item of content) {
-        const part = obj(item)
-        if (!part) continue
-        switch (part["type"]) {
-          case "text": {
-            const t = str(part["text"])
-            if (t) pendingText.push(t)
+        const p = decodeCursorPart(item)
+        if (Option.isNone(p)) continue
+        switch (p.value.type) {
+          case "text":
+            if (p.value.text) pendingText.push(p.value.text)
             break
-          }
           case "reasoning":
-          case "redacted-reasoning": {
-            const t = str(part["text"])
-            if (t) pendingThinking.push(t)
+          case "redacted-reasoning":
+            if (p.value.text) pendingThinking.push(p.value.text)
             break
-          }
           case "tool-call": {
             flushMessage() // emit any text/reasoning that preceded this tool
-            const name = str(part["toolName"])
-            const useId = str(part["toolCallId"])
-            const input = obj(part["args"])
+            const name = p.value.toolName
+            const input = obj(p.value.args)
             const row = b.tool({
               name: name ?? null,
               kind: classifyTool("cursor", name),
-              nativeToolId: useId ?? null,
+              nativeToolId: p.value.toolCallId ?? null,
               messageId: turnMessageId,
               inputJson: input ? JSON.stringify(input) : null,
             })
@@ -249,15 +276,14 @@ export const normalizeCursorBlobs = (
 
     if (role === "tool") {
       for (const item of content) {
-        const part = obj(item)
-        if (part?.["type"] !== "tool-result") continue
-        const useId = str(part["toolCallId"])
+        const p = decodeCursorPart(item)
+        if (Option.isNone(p) || p.value.type !== "tool-result") continue
         // Built-in Cursor tools store `result` as a string, but MCP tools store
         // the unwrapped structured return value as an object/array. The old
         // `str(result)` coercion silently dropped every object result, leaving
         // MCP calls stuck on "pending" — serialize non-strings so they resolve.
-        const result = toolResultText(part["result"])
-        if (useId && result) b.result(useId, result)
+        const result = toolResultText(p.value.result)
+        if (p.value.toolCallId && result) b.result(p.value.toolCallId, result)
       }
     }
   }
