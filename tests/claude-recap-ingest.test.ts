@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { normalizeClaudeSession, parseClaudeSessions } from "../src/main/ingest/providers/claude.js"
+import { normalizeClaudeSession } from "../src/main/ingest/providers/claude.js"
+import { parseClaudeSessions } from "../src/main/ingest/providers/claude-dag.js"
 
 type Rec = Record<string, unknown>
 
