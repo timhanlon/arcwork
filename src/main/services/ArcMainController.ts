@@ -65,26 +65,33 @@ const transcriptPathToWatch = (session: TargetSession): string | undefined =>
     ? session.nativeTranscriptPath
     : undefined
 
-/** Adapt a raw Node `EventEmitter` channel into a scoped `Stream`: the listener
- * is attached on subscribe and removed by the stream's finalizer, so consuming
- * it under `Effect.forkScoped` gives deterministic listener cleanup for free. */
-const streamFromEmitter = <A>(emitter: EventEmitter, event: string): Stream.Stream<A> =>
-  Stream.callback<A>((queue) =>
-    Effect.gen(function* () {
-      const listener = (payload: A): void => {
-        Queue.offerUnsafe(queue, payload)
-      }
-      emitter.on(event, listener)
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          emitter.off(event, listener)
-        }),
-      )
-    }),
-    // Hook signals are low-frequency; a generous buffer avoids dropping a burst
-    // (e.g. a Stop that fans out to several drafts) while the consumer catches up.
-    { bufferSize: 1024 },
+/** Adapt a Node-style subscription (register a callback, get back an unsubscribe)
+ * into a scoped `Stream`: `subscribe` is run on consume with an `emit` that
+ * offers into the stream's queue, and its returned teardown is hung on the
+ * stream's finalizer — so consuming under `Effect.forkScoped` gives deterministic
+ * cleanup for free. The default 1024 buffer suits the low-frequency, error-free
+ * Node channels here (a fallible/effectful source wants raw `Stream.callback`). */
+const streamFromSubscription = <A>(
+  subscribe: (emit: (value: A) => void) => () => void,
+  bufferSize = 1024,
+): Stream.Stream<A> =>
+  Stream.callback<A>(
+    (queue) =>
+      Effect.gen(function* () {
+        const unsubscribe = subscribe((value) => {
+          Queue.offerUnsafe(queue, value)
+        })
+        yield* Effect.addFinalizer(() => Effect.sync(unsubscribe))
+      }),
+    { bufferSize },
   )
+
+const streamFromEmitter = <A>(emitter: EventEmitter, event: string): Stream.Stream<A> =>
+  streamFromSubscription<A>((emit) => {
+    const listener = (payload: A): void => emit(payload)
+    emitter.on(event, listener)
+    return () => emitter.off(event, listener)
+  })
 
 interface TranscriptChange {
   readonly session: TargetSession
@@ -104,37 +111,24 @@ const fileStats = (path: string): { readonly size: number | null; readonly mtime
 }
 
 const watchTranscript = (session: TargetSession): Stream.Stream<TranscriptChange> =>
-  Stream.callback<TranscriptChange>((queue) =>
-    Effect.gen(function* () {
-      const transcriptPath = session.nativeTranscriptPath
-      if (!transcriptPath) return
-      // `fs.watchFile` (stat polling) follows the *path*, not the inode. That
-      // matters because `fs.watch` goes permanently silent after the first
-      // event when a provider rewrites the transcript via temp-file + rename
-      // (Codex does this) — the watched inode is replaced and no further change
-      // is reported. Polling also fires the moment the file first appears,
-      // closing the start-before-create race that previously aborted the
-      // watcher outright. Scoped to the one bound transcript, so it is far
-      // cheaper than the workspace-wide poll this watcher descends from.
-      const listener = (curr: fs.Stats, prev: fs.Stats): void => {
-        if (curr.mtimeMs === prev.mtimeMs && curr.size === prev.size) return
-        Queue.offerUnsafe(queue, {
-          session,
-          eventType: "change",
-          filename: null,
-          size: curr.size,
-          mtimeMs: curr.mtimeMs,
-        })
-      }
-      fs.watchFile(transcriptPath, { interval: TRANSCRIPT_POLL_INTERVAL_MS }, listener)
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          fs.unwatchFile(transcriptPath, listener)
-        }),
-      )
-    }),
-    { bufferSize: 1024 },
-  )
+  streamFromSubscription<TranscriptChange>((emit) => {
+    const transcriptPath = session.nativeTranscriptPath
+    if (!transcriptPath) return () => {}
+    // `fs.watchFile` (stat polling) follows the *path*, not the inode. That
+    // matters because `fs.watch` goes permanently silent after the first
+    // event when a provider rewrites the transcript via temp-file + rename
+    // (Codex does this) — the watched inode is replaced and no further change
+    // is reported. Polling also fires the moment the file first appears,
+    // closing the start-before-create race that previously aborted the
+    // watcher outright. Scoped to the one bound transcript, so it is far
+    // cheaper than the workspace-wide poll this watcher descends from.
+    const listener = (curr: fs.Stats, prev: fs.Stats): void => {
+      if (curr.mtimeMs === prev.mtimeMs && curr.size === prev.size) return
+      emit({ session, eventType: "change", filename: null, size: curr.size, mtimeMs: curr.mtimeMs })
+    }
+    fs.watchFile(transcriptPath, { interval: TRANSCRIPT_POLL_INTERVAL_MS }, listener)
+    return () => fs.unwatchFile(transcriptPath, listener)
+  })
 
 /**
  * The single scoped owner of the main process's long-lived orchestration.
