@@ -1,10 +1,9 @@
-import { Effect, FileSystem, Option, Path, Schema } from "effect"
+import { type Effect, type FileSystem, Option, type Path, Schema } from "effect"
 import { homedir } from "node:os"
 import type { DiagnosticRow, ExtractedRows } from "../db/schema.js"
-import type { IngestError } from "../errors.js"
 import { classifyTool } from "../extract/tool-kind.js"
 import { SessionRowBuilder } from "../extract/session-row-builder.js"
-import { readJsonl } from "./jsonl.js"
+import { makeJsonlSessionProvider } from "./jsonl-provider.js"
 import type { AgentProvider } from "./provider.js"
 import { type Rec, obj, parseJson, str } from "../extract/json.js"
 
@@ -198,86 +197,15 @@ export const normalizeCodexRecords = (
 // Provider (IO): discover rollout files, match by session_meta.cwd, extract.
 // ---------------------------------------------------------------------------
 
-/** Read just the first line of a file (Codex session_meta) without loading the whole file. */
-const readFirstLine = (fs: FileSystem.FileSystem, path: string): Effect.Effect<string, IngestError> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const file = yield* fs.open(path)
-      const buffer = new Uint8Array(64 * 1024)
-      const bytes = yield* file.read(buffer)
-      const text = new TextDecoder().decode(buffer.subarray(0, Number(bytes)))
-      const newline = text.indexOf("\n")
-      return newline >= 0 ? text.slice(0, newline) : text
-    }),
-  ).pipe(Effect.orElseSucceed(() => ""))
-
-interface CodexFileMeta {
-  readonly path: string
-  readonly nativeSessionId: string
-  readonly cwd: string
-  readonly createdAt?: string
-}
-
 export const makeCodexProvider: Effect.Effect<AgentProvider, never, FileSystem.FileSystem | Path.Path> =
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const root = path.join(homedir(), ".codex", "sessions")
-
-    /** All rollout files with their session_meta, anywhere under the date tree. */
-    const scan = Effect.gen(function* () {
-      if (!(yield* fs.exists(root).pipe(Effect.orElseSucceed(() => false)))) {
-        return [] as ReadonlyArray<CodexFileMeta>
-      }
-      const entries = yield* fs
-        .readDirectory(root, { recursive: true })
-        .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>))
-      const files = entries.filter((name) => name.endsWith(".jsonl")).map((name) => path.join(root, name))
-
-      const metas: Array<CodexFileMeta> = []
-      for (const file of files) {
-        const line = yield* readFirstLine(fs, file)
-        if (line.length === 0) continue
-        const header = decodeSessionMetaLine(line)
-        if (Option.isNone(header)) continue
-        const { id, cwd, timestamp } = header.value.payload
-        if (!id || !cwd) continue
-        metas.push({
-          path: file,
-          nativeSessionId: id,
-          cwd,
-          ...(timestamp ? { createdAt: timestamp } : {}),
-        })
-      }
-      return metas
-    })
-
-    // Scan session_meta headers once, then read+normalize each matching file.
-    // Each file is one session, so this is already O(transcript) — no re-parse.
-    const collect = (workspace: string) =>
-      Effect.gen(function* () {
-        const real = yield* fs.realPath(workspace).pipe(Effect.orElseSucceed(() => workspace))
-        const metas = yield* scan
-        const matched = metas.filter((m) => m.cwd === real || m.cwd === workspace)
-        const out: Array<ExtractedRows> = []
-        for (const m of matched) {
-          const result = yield* readJsonl(fs, "codex", m.path)
-          out.push(
-            normalizeCodexRecords(result.records, {
-              nativeSessionId: m.nativeSessionId,
-              sourcePath: m.path,
-              workspaceRoot: real,
-              diagnostics: result.parseErrors.map((e) => ({
-                severity: "warning",
-                code: "corrupt_jsonl_line",
-                message: `line ${e.line}: ${e.message}`,
-                sourcePath: m.path,
-              })),
-            }),
-          )
-        }
-        return out
-      })
-
-    return { id: "codex", collect } satisfies AgentProvider
+  makeJsonlSessionProvider({
+    id: "codex",
+    root: (path) => path.join(homedir(), ".codex", "sessions"),
+    readMeta: (line) => {
+      const header = decodeSessionMetaLine(line)
+      if (Option.isNone(header)) return undefined
+      const { id, cwd } = header.value.payload
+      return id && cwd ? { nativeSessionId: id, cwd } : undefined
+    },
+    normalize: normalizeCodexRecords,
   })

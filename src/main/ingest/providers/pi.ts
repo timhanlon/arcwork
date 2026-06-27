@@ -1,10 +1,9 @@
-import { Effect, FileSystem, Option, Path, Schema } from "effect"
+import { type Effect, type FileSystem, Option, type Path, Schema } from "effect"
 import { homedir } from "node:os"
 import type { DiagnosticRow, ExtractedRows } from "../db/schema.js"
-import type { IngestError } from "../errors.js"
 import { classifyTool } from "../extract/tool-kind.js"
 import { SessionRowBuilder } from "../extract/session-row-builder.js"
-import { readJsonl } from "./jsonl.js"
+import { makeJsonlSessionProvider } from "./jsonl-provider.js"
 import type { AgentProvider } from "./provider.js"
 import { type Rec, arr, obj, str } from "../extract/json.js"
 
@@ -162,77 +161,15 @@ export const normalizePiRecords = (
 // ---------------------------------------------------------------------------
 // Provider (IO): scan session headers, match by the `session` entry's cwd.
 // ---------------------------------------------------------------------------
-const readFirstLine = (fs: FileSystem.FileSystem, path: string): Effect.Effect<string, IngestError> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const file = yield* fs.open(path)
-      const buffer = new Uint8Array(64 * 1024)
-      const bytes = yield* file.read(buffer)
-      const text = new TextDecoder().decode(buffer.subarray(0, Number(bytes)))
-      const newline = text.indexOf("\n")
-      return newline >= 0 ? text.slice(0, newline) : text
-    }),
-  ).pipe(Effect.orElseSucceed(() => ""))
-
-interface PiFileMeta {
-  readonly path: string
-  readonly nativeSessionId: string
-  readonly cwd: string
-}
-
 export const makePiProvider: Effect.Effect<AgentProvider, never, FileSystem.FileSystem | Path.Path> =
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const path = yield* Path.Path
-    const root = path.join(homedir(), ".pi", "agent", "sessions")
-
-    const scan = Effect.gen(function* () {
-      if (!(yield* fs.exists(root).pipe(Effect.orElseSucceed(() => false)))) {
-        return [] as ReadonlyArray<PiFileMeta>
-      }
-      const entries = yield* fs
-        .readDirectory(root, { recursive: true })
-        .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>))
-      const files = entries.filter((name) => name.endsWith(".jsonl")).map((name) => path.join(root, name))
-
-      const metas: Array<PiFileMeta> = []
-      for (const file of files) {
-        const line = yield* readFirstLine(fs, file)
-        if (line.length === 0) continue
-        const header = decodePiSessionLine(line)
-        if (Option.isNone(header)) continue
-        const { id, cwd } = header.value
-        if (!id || !cwd) continue
-        metas.push({ path: file, nativeSessionId: id, cwd })
-      }
-      return metas
-    })
-
-    // Each file is one session, so this is already O(transcript) — no re-parse.
-    const collect = (workspace: string) =>
-      Effect.gen(function* () {
-        const real = yield* fs.realPath(workspace).pipe(Effect.orElseSucceed(() => workspace))
-        const metas = yield* scan
-        const matched = metas.filter((m) => m.cwd === real || m.cwd === workspace)
-        const out: Array<ExtractedRows> = []
-        for (const m of matched) {
-          const result = yield* readJsonl(fs, "pi", m.path)
-          out.push(
-            normalizePiRecords(result.records, {
-              nativeSessionId: m.nativeSessionId,
-              sourcePath: m.path,
-              workspaceRoot: real,
-              diagnostics: result.parseErrors.map((e) => ({
-                severity: "warning",
-                code: "corrupt_jsonl_line",
-                message: `line ${e.line}: ${e.message}`,
-                sourcePath: m.path,
-              })),
-            }),
-          )
-        }
-        return out
-      })
-
-    return { id: "pi", collect } satisfies AgentProvider
+  makeJsonlSessionProvider({
+    id: "pi",
+    root: (path) => path.join(homedir(), ".pi", "agent", "sessions"),
+    readMeta: (line) => {
+      const header = decodePiSessionLine(line)
+      if (Option.isNone(header)) return undefined
+      const { id, cwd } = header.value
+      return id && cwd ? { nativeSessionId: id, cwd } : undefined
+    },
+    normalize: normalizePiRecords,
   })

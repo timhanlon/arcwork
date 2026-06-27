@@ -69,3 +69,20 @@ export const readJsonl = (
 
     return { records, parseErrors }
   })
+
+/**
+ * Read just the first line of a file without loading the whole thing — used to
+ * sniff a JSONL session header (Codex `session_meta`, pi `session`). Any read
+ * failure collapses to `""`, which callers treat as "no header, skip".
+ */
+export const readFirstLine = (fs: FileSystem.FileSystem, path: string): Effect.Effect<string> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const file = yield* fs.open(path)
+      const buffer = new Uint8Array(64 * 1024)
+      const bytes = yield* file.read(buffer)
+      const text = new TextDecoder().decode(buffer.subarray(0, Number(bytes)))
+      const newline = text.indexOf("\n")
+      return newline >= 0 ? text.slice(0, newline) : text
+    }),
+  ).pipe(Effect.orElseSucceed(() => ""))
