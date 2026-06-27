@@ -1,7 +1,6 @@
 import { type JSX, useEffect, useMemo, useRef, useState } from "react"
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import { Exit } from "effect"
-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels"
 import { rpc } from "./rpc-client.js"
 import { subscribeWhenReady } from "./bridge.js"
@@ -13,6 +12,7 @@ import {
   providersAtom,
   resumeTargetAtom,
   sessionsAtom,
+  successList,
   workspacesAtom,
 } from "./atoms.js"
 import type { ChatId, PaneId, TargetId, WorkspaceId } from "../../shared/ids.js"
@@ -63,28 +63,13 @@ import { useSessionActivityProjection } from "./sidebar/useSessionActivityProjec
 const isDev = window.arc?.profile === "dev"
 
 export function App(): JSX.Element {
-  const workspacesResult = useAtomValue(workspacesAtom)
-  const workspaces = useMemo(
-    () => (AsyncResult.isSuccess(workspacesResult) ? workspacesResult.value : []),
-    [workspacesResult],
-  )
+  const workspaces = successList(useAtomValue(workspacesAtom))
   const [searchOpen, setSearchOpen] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
 
-  const providersResult = useAtomValue(providersAtom)
-  const providers = AsyncResult.isSuccess(providersResult) ? providersResult.value : []
-
-  const sessionsResult = useAtomValue(sessionsAtom)
-  const sessions = useMemo(
-    () => (AsyncResult.isSuccess(sessionsResult) ? sessionsResult.value : []),
-    [sessionsResult],
-  )
-
-  const chatsResult = useAtomValue(chatsAtom)
-  const chats = useMemo(
-    () => (AsyncResult.isSuccess(chatsResult) ? chatsResult.value : []),
-    [chatsResult],
-  )
+  const providers = successList(useAtomValue(providersAtom))
+  const sessions = successList(useAtomValue(sessionsAtom))
+  const chats = successList(useAtomValue(chatsAtom))
 
   // Imperative RPC commands as mutation atoms (see atoms.ts). `promiseExit` for
   // the ones whose result drives a follow-up (the new chat / bound session);

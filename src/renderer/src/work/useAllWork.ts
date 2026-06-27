@@ -3,7 +3,7 @@ import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import * as Atom from "effect/unstable/reactivity/Atom"
 import type { Work } from "../../../shared/work.js"
 import type { ChatId } from "../../../shared/ids.js"
-import { allWorkAtom } from "../atoms.js"
+import { allWorkAtom, successList } from "../atoms.js"
 
 /**
  * Every unit of work in the selected chat's workspace, across all statuses —
@@ -28,7 +28,7 @@ export function useAllWork(chatId: ChatId | undefined): {
   const result = useAtomValue(atom)
   const reload = useAtomRefresh(atom)
   return {
-    work: AsyncResult.isSuccess(result) ? result.value : [],
+    work: successList(result),
     loading: !AsyncResult.isSuccess(result),
     reload,
   }

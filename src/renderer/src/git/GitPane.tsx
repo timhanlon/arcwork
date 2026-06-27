@@ -8,7 +8,7 @@ import type { GitChangeStatus, GitCommit, GitFileChange } from "../../../shared/
 import type { Workspace } from "../../../shared/workspace.js"
 import { DISCLOSURE, Row, ROW_GRID } from "../ui/Row.js"
 import { DisclosureSection } from "../ui/DisclosureSection.js"
-import { gitFileDiffAtomFor } from "../atoms.js"
+import { gitFileDiffAtomFor, successOr } from "../atoms.js"
 import { RepoContextBar } from "./RepoContextBar.js"
 import { useWorkspaceGit } from "./useWorkspaceGit.js"
 
@@ -180,7 +180,7 @@ function GitSection({
 function InlineDiff({ workspace, path }: { readonly workspace: Workspace; readonly path: string }): JSX.Element {
   const result = useAtomValue(gitFileDiffAtomFor(workspace.id, path))
   const error = Option.match(AsyncResult.error(result), { onNone: () => undefined, onSome: (e) => e.message })
-  const diff = AsyncResult.isSuccess(result) ? result.value.diff : undefined
+  const diff = successOr(result, undefined)?.diff
 
   return (
     <div className="border-b border-border bg-elev/40 px-2 py-2">

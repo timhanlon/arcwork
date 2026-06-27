@@ -1,12 +1,11 @@
 import { useMemo } from "react"
 import { useAtomValue } from "@effect/atom-react"
-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import type { Chat } from "../../../shared/chat.js"
 import type { TargetId } from "../../../shared/ids.js"
 import type { TargetSession } from "../../../shared/instance.js"
 import type { LiveTargetActivity } from "../../../shared/live-target-state.js"
 import type { Workspace } from "../../../shared/workspace.js"
-import { liveTargetStatesAtom, pendingRequestsAtom } from "../atoms.js"
+import { liveTargetStatesAtom, pendingRequestsAtom, successList } from "../atoms.js"
 import { REQUEST_SLOTS } from "../shell/keybindings.js"
 import { orderedPendingSessionIds, type LiveStateById } from "./grouping.js"
 
@@ -26,21 +25,13 @@ export function useSessionActivityProjection({
   readonly chats: ReadonlyArray<Chat>
   readonly sessions: ReadonlyArray<TargetSession>
 }): SessionActivityProjection {
-  const pendingRequestsResult = useAtomValue(pendingRequestsAtom)
-  const pendingRequests = useMemo(
-    () => (AsyncResult.isSuccess(pendingRequestsResult) ? pendingRequestsResult.value : []),
-    [pendingRequestsResult],
-  )
+  const pendingRequests = successList(useAtomValue(pendingRequestsAtom))
   const pendingSessionIds = useMemo(
     () => new Set(pendingRequests.map((request) => request.targetSessionId)),
     [pendingRequests],
   )
 
-  const liveTargetStatesResult = useAtomValue(liveTargetStatesAtom)
-  const liveTargetStates = useMemo(
-    () => (AsyncResult.isSuccess(liveTargetStatesResult) ? liveTargetStatesResult.value : []),
-    [liveTargetStatesResult],
-  )
+  const liveTargetStates = successList(useAtomValue(liveTargetStatesAtom))
   const liveStateById = useMemo(
     () => new Map<string, LiveTargetActivity>(liveTargetStates.map((s) => [s.targetSessionId, s.activity])),
     [liveTargetStates],

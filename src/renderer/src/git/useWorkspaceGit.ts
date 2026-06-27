@@ -3,7 +3,7 @@ import { Option } from "effect"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import type { GitCommit, GitStatus, WorkspaceGitContext } from "../../../shared/git.js"
 import type { WorkspaceId } from "../../../shared/ids.js"
-import { gitCommitsAtom, gitContextAtom, gitStatusAtom } from "../atoms.js"
+import { gitCommitsAtom, gitContextAtom, gitStatusAtom, successList, successOr } from "../atoms.js"
 
 const errorMessage = <E extends { readonly message: string }>(
   result: AsyncResult.AsyncResult<unknown, E>,
@@ -33,9 +33,9 @@ export function useWorkspaceGit(workspaceId: WorkspaceId): WorkspaceGit {
   const contextResult = useAtomValue(gitContextAtom(workspaceId))
   const commitsResult = useAtomValue(gitCommitsAtom(workspaceId))
   return {
-    status: AsyncResult.isSuccess(statusResult) ? statusResult.value : undefined,
-    context: AsyncResult.isSuccess(contextResult) ? contextResult.value : undefined,
-    commits: AsyncResult.isSuccess(commitsResult) ? commitsResult.value : [],
+    status: successOr(statusResult, undefined),
+    context: successOr(contextResult, undefined),
+    commits: successList(commitsResult),
     loading: !AsyncResult.isSuccess(statusResult),
     commitsLoading: !AsyncResult.isSuccess(commitsResult),
     error: errorMessage(statusResult) ?? errorMessage(commitsResult),

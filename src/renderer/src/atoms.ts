@@ -330,3 +330,31 @@ export const workCommentsAtom = Atom.family((key: string) => {
 
 export const workCommentsAtomFor = (id: string, allRevisions: boolean) =>
   workCommentsAtom(workCommentsKey(id, allRevisions))
+
+/**
+ * Read an `AsyncResult`'s success value, else a fallback. Folds the
+ * `AsyncResult.isSuccess(r) ? r.value : fallback` triad — and the `useMemo` that
+ * usually stabilises it — into one call. The success branch returns the atom's
+ * own value reference, so the result is as identity-stable as the atom itself,
+ * which is what the per-site `useMemo` was buying.
+ *
+ * Intentionally the bare success-tag check, not `AsyncResult.getOrElse`: a
+ * failure that retains a previous success still yields the fallback, matching the
+ * call sites that fold a hard error back to empty rather than show stale data.
+ */
+export const successOr = <A, E, F>(result: AsyncResult.AsyncResult<A, E>, fallback: F): A | F =>
+  AsyncResult.isSuccess(result) ? result.value : fallback
+
+const EMPTY_LIST: ReadonlyArray<never> = []
+
+/** {@link successOr} for the common empty-list read, sharing one stable `[]`. */
+export const successList = <A, E>(
+  result: AsyncResult.AsyncResult<ReadonlyArray<A>, E>,
+): ReadonlyArray<A> => (AsyncResult.isSuccess(result) ? result.value : EMPTY_LIST)
+
+/**
+ * The atom a chat-scoped list family falls back to when no chat is selected: a
+ * stable, already-resolved empty list. Shared by the per-list chat hooks so each
+ * doesn't mint its own empty atom.
+ */
+export const emptyListAtom = Atom.make(AsyncResult.success<ReadonlyArray<never>>([]))

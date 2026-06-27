@@ -13,10 +13,9 @@ import { Collapsible } from "@base-ui/react/collapsible"
 import { Button } from "@base-ui/react/button"
 import { Exit } from "effect"
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import type { Chat } from "../../../shared/chat.js"
 import type { TargetSession } from "../../../shared/instance.js"
-import { chatsAtom, createChatAtom, sessionsAtom, stopTargetAtom, workspacesAtom } from "../atoms.js"
+import { chatsAtom, createChatAtom, sessionsAtom, stopTargetAtom, successList, workspacesAtom } from "../atoms.js"
 import { rpc } from "../rpc-client.js"
 import { useShellActions } from "../shell/ShellActionsContext.js"
 import { useShellState } from "../shell/ShellStateContext.js"
@@ -383,21 +382,9 @@ export function ArcSidebarTree(): JSX.Element {
   // the shell-state context, and every pick dispatches through the shell actions —
   // so App renders <ArcSidebarTree/> with no props and a story renders it under a
   // seeded registry + shell.
-  const workspacesResult = useAtomValue(workspacesAtom)
-  const workspaces = useMemo(
-    () => (AsyncResult.isSuccess(workspacesResult) ? workspacesResult.value : []),
-    [workspacesResult],
-  )
-  const chatsResult = useAtomValue(chatsAtom)
-  const chats = useMemo(
-    () => (AsyncResult.isSuccess(chatsResult) ? chatsResult.value : []),
-    [chatsResult],
-  )
-  const sessionsResult = useAtomValue(sessionsAtom)
-  const sessions = useMemo(
-    () => (AsyncResult.isSuccess(sessionsResult) ? sessionsResult.value : []),
-    [sessionsResult],
-  )
+  const workspaces = successList(useAtomValue(workspacesAtom))
+  const chats = successList(useAtomValue(chatsAtom))
+  const sessions = successList(useAtomValue(sessionsAtom))
 
   const shellActions = useShellActions()
   const shellState = useShellState()

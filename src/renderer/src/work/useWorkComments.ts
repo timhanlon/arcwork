@@ -4,7 +4,7 @@ import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import * as Atom from "effect/unstable/reactivity/Atom"
 import type { WorkCommentListing } from "../../../shared/work.js"
 import { arcId, type WorkId } from "../../../shared/ids.js"
-import { workCommentsAtomFor } from "../atoms.js"
+import { successOr, workCommentsAtomFor } from "../atoms.js"
 
 /** The empty listing shown before the first fetch resolves (or for no selection).
  * `currentNodeId` is an empty sentinel — no comments reference it. */
@@ -45,7 +45,7 @@ export function useWorkComments(workId: WorkId | undefined): {
   )
 
   return {
-    listing: AsyncResult.isSuccess(result) ? result.value : EMPTY,
+    listing: successOr(result, EMPTY),
     loading: !AsyncResult.isSuccess(result),
     allRevisions,
     setAllRevisions,
