@@ -86,6 +86,32 @@ const toolResultText = (content: unknown): string => {
   return parts.join("\n")
 }
 
+const NeStr = Schema.NonEmptyString
+
+// A message's top-level content parts, discriminated by `type` (distinct from the
+// tool_result *inner* blocks above). Decoding each part replaces the per-part
+// `obj` + `switch (part["type"])` + `str(part["…"])` plucking; an unknown or
+// malformed part decodes to None and is skipped, as the old default case did.
+// `text`/`thinking` are optional NonEmpty (pushed only `if (str(...))`); `tool_use`
+// keeps `name` optional (the old code kept a null-named call as `name ?? null`).
+const ContentPart = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.optional(NeStr) }),
+  Schema.Struct({ type: Schema.Literal("thinking"), thinking: Schema.optional(NeStr) }),
+  Schema.Struct({
+    type: Schema.Literal("tool_use"),
+    name: Schema.optional(NeStr),
+    id: Schema.optional(NeStr),
+    input: Schema.optional(Schema.Unknown),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("tool_result"),
+    tool_use_id: Schema.optional(NeStr),
+    is_error: Schema.optional(Schema.Boolean),
+    content: Schema.optional(Schema.Unknown),
+  }),
+])
+const decodeContentPart = Schema.decodeUnknownOption(ContentPart)
+
 export interface NormalizeOptions {
   readonly workspaceRoot: string
   readonly sourcePath: string
@@ -121,8 +147,9 @@ export const normalizeClaudeSession = (
 
     if (type === "user") {
       const content = message?.["content"]
-      const contentArray = arr(content)
-      const isToolResult = obj(contentArray[0])?.["type"] === "tool_result"
+      const parts = arr(content).map((item) => decodeContentPart(item))
+      const first = parts[0]
+      const isToolResult = first !== undefined && Option.isSome(first) && first.value.type === "tool_result"
 
       if (isToolResult) {
         // AskUserQuestion's chosen-answer map lives in the structured
@@ -131,13 +158,12 @@ export const normalizeClaudeSession = (
         // artifact projection can lift the selected option onto its question
         // (the live hook path gets the same data from `tool_response`).
         const sidecar = obj(record["toolUseResult"])
-        for (const item of contentArray!) {
-          const part = obj(item)
-          if (part?.["type"] !== "tool_result") continue
-          const useId = str(part["tool_use_id"])
+        for (const p of parts) {
+          if (Option.isNone(p) || p.value.type !== "tool_result") continue
+          const useId = p.value.tool_use_id
           if (!useId) continue
-          const isError = part["is_error"] === true
-          const text = toolResultText(part["content"])
+          const isError = p.value.is_error === true
+          const text = toolResultText(p.value.content)
           const call = b.result(useId, isError ? `[error] ${text}` : text)
           if (!call) continue
           // Scoped to the question tool: every other tool also carries a
@@ -150,16 +176,12 @@ export const normalizeClaudeSession = (
 
       // A new user prompt.
       let text = str(content)
-      if (text === undefined && contentArray) {
-        const parts: Array<string> = []
-        for (const item of contentArray) {
-          const part = obj(item)
-          if (part?.["type"] === "text") {
-            const t = str(part["text"])
-            if (t) parts.push(t)
-          }
+      if (text === undefined) {
+        const texts: Array<string> = []
+        for (const p of parts) {
+          if (Option.isSome(p) && p.value.type === "text" && p.value.text) texts.push(p.value.text)
         }
-        text = parts.length > 0 ? parts.join("\n\n") : undefined
+        text = texts.length > 0 ? texts.join("\n\n") : undefined
       }
 
       // Programmatic prompts — a ScheduleWakeup/`/loop` self-pace re-submission or
@@ -211,28 +233,23 @@ export const normalizeClaudeSession = (
       }
 
       for (const item of contentArray) {
-        const part = obj(item)
-        if (!part) continue
-        switch (part["type"]) {
-          case "text": {
-            const t = str(part["text"])
-            if (t) pendingText.push(t)
+        const p = decodeContentPart(item)
+        if (Option.isNone(p)) continue
+        switch (p.value.type) {
+          case "text":
+            if (p.value.text) pendingText.push(p.value.text)
             break
-          }
-          case "thinking": {
-            const t = str(part["thinking"])
-            if (t) pendingThinking.push(t)
+          case "thinking":
+            if (p.value.thinking) pendingThinking.push(p.value.thinking)
             break
-          }
           case "tool_use": {
             flushMessage() // emit any text/thinking that preceded this tool
-            const name = str(part["name"])
-            const useId = str(part["id"])
-            const input = obj(part["input"])
+            const name = p.value.name
+            const input = obj(p.value.input)
             const row = b.tool({
               name: name ?? null,
               kind: classifyTool("claude", name),
-              nativeToolId: useId ?? null,
+              nativeToolId: p.value.id ?? null,
               messageId: turnMessageId,
               inputJson: input ? JSON.stringify(input) : null,
             })
