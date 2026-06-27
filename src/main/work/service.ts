@@ -30,7 +30,7 @@ import {
   type WorkNodeRow,
   type WorkProjectionRow,
 } from "./schema.js"
-import { WorkStore, type WorkCreateSpec, type WorkRevisionSpec } from "./store.js"
+import { WorkStore, parseLabels, type WorkCreateSpec, type WorkRevisionSpec } from "./store.js"
 
 /**
  * The product verbs over the work graph — the door every transport (CLI, RPC,
@@ -494,170 +494,125 @@ export const WorkServiceLive = Layer.effect(
         return yield* Effect.forEach(rows, toWork)
       })
 
+    // The four workflow-edge verbs (status / priority / citation / delegation)
+    // all run one ritual: scope provenance, load the ref (fail if unknown), an
+    // idempotency guard, then append a single workflow/live edge, reload, publish,
+    // hydrate. Only the edge's {type,toKind,toId,family,source,note} and the guard
+    // differ — those are the parameters; everything else lives here. (The create
+    // path writes many edges at once via its own edge() factory, so it stays put.)
+    const recordWorkflowEdge = (
+      refId: WorkId,
+      provenance: WorkProvenance,
+      spec: {
+        readonly type: string
+        readonly toKind: string
+        readonly toId: string
+        readonly family: string
+        readonly source: string
+        readonly note?: string | null
+      },
+      // Returns true when the edge would be a no-op (status unchanged, citation
+      // already present, …); the current row is then returned untouched.
+      isNoop: (current: WorkProjectionRow) => Effect.Effect<boolean, SqlError>,
+    ) =>
+      Effect.gen(function* () {
+        const prov = yield* scopedProvenance(provenance)
+        const current = yield* store.loadWork(refId)
+        if (!current) return yield* Effect.fail(arcRequestError(`unknown work: ${refId}`))
+        if (yield* isNoop(current)) return yield* toWork(current)
+
+        const now = yield* nowIso
+        const edge: WorkEdgeRow = {
+          id: newArcId("work_edge"),
+          type: spec.type,
+          fromKind: "ref",
+          fromId: refId,
+          toKind: spec.toKind,
+          toId: spec.toId,
+          family: spec.family,
+          source: spec.source,
+          confidence: "high",
+          note: spec.note ?? null,
+          actor: prov.actor ?? null,
+          sessionId: prov.sessionId ?? null,
+          workspaceId: prov.workspaceId ?? null,
+          observedSource: prov.source,
+          createdAt: now,
+          schemaVersion: WORK_SCHEMA_VERSION,
+        }
+        yield* store.recordEdge(refId, edge, now)
+        const row = yield* store.loadWork(refId)
+        if (!row) return yield* Effect.die(new Error(`work ${refId} vanished after ${spec.type}`))
+        yield* publishChange(refId, prov.chatId)
+        return yield* toWork(row)
+      })
+
+    // Status/priority are workflow facts, not content: a `status_set`/`priority_set`
+    // event on the ref — no new content node, no ref move. The agent asserted them,
+    // so `user_confirmed`; `observedSource` is the door it came through (cli/rpc).
     const updateStatus = Effect.fn("WorkService.updateStatus")(
       (refId: WorkId, status: WorkStatus, provenance: WorkProvenance) =>
-        Effect.gen(function* () {
-          provenance = yield* scopedProvenance(provenance)
-          const current = yield* store.loadWork(refId)
-          if (!current) return yield* Effect.fail(arcRequestError(`unknown work: ${refId}`))
-          // No-op: a status that didn't change records nothing.
-          if (current.status === status) return yield* toWork(current)
-
-          const now = yield* nowIso
-          // Status is a workflow fact, not content: append a `status_set` event
-          // on the ref. No new content node, no ref move — the prose is unchanged.
-          // The agent explicitly asserted it, so `user_confirmed`; `observedSource`
-          // is the door it came through (cli/rpc).
-          const statusEdge: WorkEdgeRow = {
-            id: newArcId("work_edge"),
-            type: "status_set",
-            fromKind: "ref",
-            fromId: refId,
-            toKind: "external",
-            toId: status,
-            family: "workflow",
-            source: "user_confirmed",
-            confidence: "high",
-            note: null,
-            actor: provenance.actor ?? null,
-            sessionId: provenance.sessionId ?? null,
-            workspaceId: provenance.workspaceId ?? null,
-            observedSource: provenance.source,
-            createdAt: now,
-            schemaVersion: WORK_SCHEMA_VERSION,
-          }
-          yield* store.recordEdge(refId, statusEdge, now)
-          const row = yield* store.loadWork(refId)
-          if (!row) return yield* Effect.die(new Error(`work ${refId} vanished after status change`))
-          yield* publishChange(refId, provenance.chatId)
-          return yield* toWork(row)
-        }),
+        recordWorkflowEdge(
+          refId,
+          provenance,
+          { type: "status_set", toKind: "external", toId: status, family: "workflow", source: "user_confirmed" },
+          (current) => Effect.succeed(current.status === status),
+        ),
     )
 
     const updatePriority = Effect.fn("WorkService.updatePriority")(
       (refId: WorkId, priority: WorkPriority, provenance: WorkProvenance) =>
-        Effect.gen(function* () {
-          provenance = yield* scopedProvenance(provenance)
-          const current = yield* store.loadWork(refId)
-          if (!current) return yield* Effect.fail(arcRequestError(`unknown work: ${refId}`))
-          // No-op: re-asserting the same priority records nothing.
-          if (current.priority === priority) return yield* toWork(current)
-
-          const now = yield* nowIso
-          // Priority is a workflow fact, not content: append a `priority_set` event
-          // on the ref — no new content node, no ref move. Same shape as status.
-          const priorityEdge: WorkEdgeRow = {
-            id: newArcId("work_edge"),
-            type: "priority_set",
-            fromKind: "ref",
-            fromId: refId,
-            toKind: "external",
-            toId: priority,
-            family: "workflow",
-            source: "user_confirmed",
-            confidence: "high",
-            note: null,
-            actor: provenance.actor ?? null,
-            sessionId: provenance.sessionId ?? null,
-            workspaceId: provenance.workspaceId ?? null,
-            observedSource: provenance.source,
-            createdAt: now,
-            schemaVersion: WORK_SCHEMA_VERSION,
-          }
-          yield* store.recordEdge(refId, priorityEdge, now)
-          const row = yield* store.loadWork(refId)
-          if (!row) return yield* Effect.die(new Error(`work ${refId} vanished after priority change`))
-          yield* publishChange(refId, provenance.chatId)
-          return yield* toWork(row)
-        }),
+        recordWorkflowEdge(
+          refId,
+          provenance,
+          { type: "priority_set", toKind: "external", toId: priority, family: "workflow", source: "user_confirmed" },
+          (current) => Effect.succeed(current.priority === priority),
+        ),
     )
 
     const addCitation = Effect.fn("WorkService.addCitation")(
-      (refId: WorkId, citation: Citation, provenance: WorkProvenance, note?: string) =>
-        Effect.gen(function* () {
-          provenance = yield* scopedProvenance(provenance)
-          const current = yield* store.loadWork(refId)
-          if (!current) return yield* Effect.fail(arcRequestError(`unknown work: ${refId}`))
-
-          // A `work` citation is a real ref edge (raw ref id, traversable);
-          // everything else is an external `kind:target` locator — same split as
-          // create's citation handling.
-          const toWorkRef = citation.kind === "work"
-          const toId = toWorkRef ? citation.target : encodeCitationTarget(citation)
-
-          // Idempotent: an identical (work, kind, target) citation is a no-op.
-          const existing = yield* store.loadEdges(refId, "references")
-          if (existing.some((e) => e.toId === toId)) return yield* toWork(current)
-
-          const now = yield* nowIso
-          const edge: WorkEdgeRow = {
-            id: newArcId("work_edge"),
+      (refId: WorkId, citation: Citation, provenance: WorkProvenance, note?: string) => {
+        // A `work` citation is a real ref edge (raw ref id, traversable); everything
+        // else is an external `kind:target` locator — same split as create's.
+        const toWorkRef = citation.kind === "work"
+        const toId = toWorkRef ? citation.target : encodeCitationTarget(citation)
+        return recordWorkflowEdge(
+          refId,
+          provenance,
+          {
             type: "references",
-            fromKind: "ref",
-            fromId: refId,
             toKind: toWorkRef ? "ref" : "external",
             toId,
             family: "live",
             source: "observed",
-            confidence: "high",
             note: note ?? citation.note ?? null,
-            actor: provenance.actor ?? null,
-            sessionId: provenance.sessionId ?? null,
-            workspaceId: provenance.workspaceId ?? null,
-            observedSource: provenance.source,
-            createdAt: now,
-            schemaVersion: WORK_SCHEMA_VERSION,
-          }
-          yield* store.recordEdge(refId, edge, now)
-          const row = yield* store.loadWork(refId)
-          if (!row) return yield* Effect.die(new Error(`work ${refId} vanished after addCitation`))
-          yield* publishChange(refId, provenance.chatId)
-          return yield* toWork(row)
-        }),
+          },
+          // Idempotent: an identical (work, kind, target) citation is a no-op.
+          () => Effect.map(store.loadEdges(refId, "references"), (es) => es.some((e) => e.toId === toId)),
+        )
+      },
     )
 
     const linkTargetSession = Effect.fn("WorkService.linkTargetSession")(
       (refId: WorkId, targetSessionId: TargetId, provenance: WorkProvenance, note?: string) =>
-        Effect.gen(function* () {
-          provenance = yield* scopedProvenance(provenance)
-          const current = yield* store.loadWork(refId)
-          if (!current) return yield* Effect.fail(arcRequestError(`unknown work: ${refId}`))
-
-          // Idempotent: an identical (work, session) delegation is a no-op.
-          const existing = yield* store.loadEdges(refId, "delegated_to")
-          if (existing.some((e) => e.toId === targetSessionId)) return yield* toWork(current)
-
-          const now = yield* nowIso
+        recordWorkflowEdge(
+          refId,
+          provenance,
           // `delegated_to` is a *live* edge to an external endpoint — the target
-          // session id — exactly like `created_in_session` (sessions live in
-          // ArcStore, outside the work node/ref space), but workflow-meaningful:
-          // it's the durable answer to "what work is on this implementer?".
-          const edge: WorkEdgeRow = {
-            id: newArcId("work_edge"),
+          // session id (sessions live in ArcStore, outside the node/ref space) —
+          // but workflow-meaningful: the durable answer to "what work is on this
+          // implementer?".
+          {
             type: "delegated_to",
-            fromKind: "ref",
-            fromId: refId,
             toKind: "external",
             toId: targetSessionId,
             family: "live",
             source: "user_confirmed",
-            confidence: "high",
             note: note ?? null,
-            actor: provenance.actor ?? null,
-            sessionId: provenance.sessionId ?? null,
-            workspaceId: provenance.workspaceId ?? null,
-            observedSource: provenance.source,
-            createdAt: now,
-            schemaVersion: WORK_SCHEMA_VERSION,
-          }
-          yield* store.recordEdge(refId, edge, now)
-          const row = yield* store.loadWork(refId)
-          if (!row) {
-            return yield* Effect.die(new Error(`work ${refId} vanished after session link`))
-          }
-          yield* publishChange(refId, provenance.chatId)
-          return yield* toWork(row)
-        }),
+          },
+          // Idempotent: an identical (work, session) delegation is a no-op.
+          () => Effect.map(store.loadEdges(refId, "delegated_to"), (es) => es.some((e) => e.toId === targetSessionId)),
+        ),
     )
 
     const revise = Effect.fn("WorkService.revise")(
@@ -862,11 +817,3 @@ export const WorkServiceLive = Layer.effect(
   }),
 )
 
-const parseLabels = (json: string): ReadonlyArray<string> => {
-  try {
-    const value = JSON.parse(json)
-    return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []
-  } catch {
-    return []
-  }
-}

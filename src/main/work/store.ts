@@ -32,6 +32,18 @@ import { latestStatus } from "./work-sql.js"
  * `work.revise`) will move `graph_ref`'s pointer via a CAS-shaped update.
  */
 
+/** Decode a projection row's `labelsJson` to a string array, best-effort: a
+ * corrupt blob or non-array yields `[]`, and any non-string element is dropped.
+ * Shared by the store's own filters and `WorkService`'s projections. */
+export const parseLabels = (labelsJson: string): ReadonlyArray<string> => {
+  try {
+    const parsed = JSON.parse(labelsJson)
+    return Array.isArray(parsed) ? parsed.filter((label): label is string => typeof label === "string") : []
+  } catch {
+    return []
+  }
+}
+
 /** A work projection joined to its current `delegated_to` edge — the reverse
  * "what work is on this implementer?" link, hydrated for the monitoring read
  * model. */
@@ -342,17 +354,6 @@ export const WorkStoreLive = Layer.effect(
           LIMIT 1`
         return rows[0] ?? null
       })
-
-    const parseLabels = (labelsJson: string): ReadonlyArray<string> => {
-      try {
-        const parsed = JSON.parse(labelsJson)
-        return Array.isArray(parsed)
-          ? parsed.filter((label): label is string => typeof label === "string")
-          : []
-      } catch {
-        return []
-      }
-    }
 
     // Content filters read the base columns (title/body/labels), so they live in
     // the inner SELECT; the status filter reads the *derived* status alias, so it
