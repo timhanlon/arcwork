@@ -49,101 +49,79 @@ const rpcEffect = <A, E, R>(tag: string, effect: Effect.Effect<A, E, R>): Effect
   )
 
 /**
+ * Handler combinator: resolve a service, run a method against it (and the
+ * request), and wrap the result in the {@link rpcEffect} seam. Captures the
+ * `flatMap(Service, …)` resolve that nearly every handler repeats, so each entry
+ * reads as `Tag: svc("Tag", Service, (s, req) => s.method(req))`. The `run`
+ * callback returns any effect, so map/as post-processing (toWire, {removed:true})
+ * stays inline. The object key still names the rpc — the contract drives the
+ * types, so a mis-shaped handler is still a compile error.
+ */
+const svc =
+  <S, SR, Req, A, E, R>(
+    tag: string,
+    service: Effect.Effect<S, never, SR>,
+    run: (s: S, req: Req) => Effect.Effect<A, E, R>,
+  ) =>
+  (req: Req): Effect.Effect<A, RpcError, SR | R> =>
+    rpcEffect(tag, Effect.flatMap(service, (s) => run(s, req)))
+
+/**
  * The handler table — one entry per rpc, each a decode -> run `Service` -> encode
  * shell over the same domain services the rest of the app uses. The `ArcRpcs`
  * contract drives the types: a missing or mis-shaped handler is a compile error.
  */
 export const ArcRpcHandlersLive = ArcRpcs.toLayer(
   Effect.succeed({
-    ListWorkspaces: () => rpcEffect("ListWorkspaces", Effect.flatMap(WorkspaceService, (_) => _.list)),
-    OpenWorkspace: () =>
-      rpcEffect(
-        "OpenWorkspace",
-        Effect.gen(function* () {
-          return { workspace: yield* (yield* WorkspaceService).open }
+    ListWorkspaces: svc("ListWorkspaces", WorkspaceService, (_) => _.list),
+    OpenWorkspace: svc("OpenWorkspace", WorkspaceService, (_) =>
+      Effect.map(_.open, (workspace) => ({ workspace })),
+    ),
+    ListProviders: svc("ListProviders", ProviderRegistry, (_) => _.list),
+    ListWorkspaceFiles: svc("ListWorkspaceFiles", WorkspaceFilesService, (_, req) => _.list(req.workspaceId)),
+    GetWorkspaceGitStatus: svc("GetWorkspaceGitStatus", GitService, (_, req) => _.status(req.workspaceId)),
+    GetWorkspaceGitFileDiff: svc("GetWorkspaceGitFileDiff", GitService, (_, req) =>
+      _.diff(req.workspaceId, req.path),
+    ),
+    GetWorkspaceGitCommits: svc("GetWorkspaceGitCommits", GitService, (_, req) =>
+      _.commits(req.workspaceId, req.limit),
+    ),
+    GetWorkspaceGitContext: svc("GetWorkspaceGitContext", GitService, (_, req) => _.gitContext(req.workspaceId)),
+    SyncWorkspacePullRequests: svc("SyncWorkspacePullRequests", GitService, (_, req) =>
+      Effect.map(_.syncPullRequests(req.workspaceId), (rows) => rows.map(toWirePullRequest)),
+    ),
+    CreateWorktree: svc("CreateWorktree", GitService, (_, req) =>
+      Effect.map(
+        _.createWorktree(req.workspaceId, {
+          branch: req.branch,
+          baseRef: req.baseRef,
+          createBranch: req.createBranch,
+          carryChanges: req.carryChanges,
         }),
+        toWireWorktree,
       ),
-    ListProviders: () => rpcEffect("ListProviders", Effect.flatMap(ProviderRegistry, (_) => _.list)),
-    ListWorkspaceFiles: (req) =>
-      rpcEffect(
-        "ListWorkspaceFiles",
-        Effect.flatMap(WorkspaceFilesService, (_) => _.list(req.workspaceId)),
+    ),
+    OpenWorktree: svc("OpenWorktree", GitService, (_, req) => _.openWorktree(req.worktreePath)),
+    RemoveWorktree: svc("RemoveWorktree", GitService, (_, req) =>
+      Effect.as(_.removeWorktree(req.workspaceId, req.worktreePath, { force: req.force }), { removed: true }),
+    ),
+    PruneWorktrees: svc("PruneWorktrees", GitService, (_, req) =>
+      Effect.map(_.pruneWorktrees(req.workspaceId), (removed) => ({ removed })),
+    ),
+    CreatePullRequest: svc("CreatePullRequest", GitService, (_, req) =>
+      Effect.map(
+        _.createPullRequest(req.workspaceId, {
+          title: req.title,
+          body: req.body,
+          base: req.base,
+          draft: req.draft,
+        }),
+        (pr) => (pr ? toWirePullRequest(pr) : null),
       ),
-    GetWorkspaceGitStatus: (req) =>
-      rpcEffect("GetWorkspaceGitStatus", Effect.flatMap(GitService, (_) => _.status(req.workspaceId))),
-    GetWorkspaceGitFileDiff: (req) =>
-      rpcEffect(
-        "GetWorkspaceGitFileDiff",
-        Effect.flatMap(GitService, (_) => _.diff(req.workspaceId, req.path)),
-      ),
-    GetWorkspaceGitCommits: (req) =>
-      rpcEffect(
-        "GetWorkspaceGitCommits",
-        Effect.flatMap(GitService, (_) => _.commits(req.workspaceId, req.limit)),
-      ),
-    GetWorkspaceGitContext: (req) =>
-      rpcEffect("GetWorkspaceGitContext", Effect.flatMap(GitService, (_) => _.gitContext(req.workspaceId))),
-    SyncWorkspacePullRequests: (req) =>
-      rpcEffect(
-        "SyncWorkspacePullRequests",
-        Effect.map(
-          Effect.flatMap(GitService, (_) => _.syncPullRequests(req.workspaceId)),
-          (rows) => rows.map(toWirePullRequest),
-        ),
-      ),
-    CreateWorktree: (req) =>
-      rpcEffect(
-        "CreateWorktree",
-        Effect.map(
-          Effect.flatMap(GitService, (_) =>
-            _.createWorktree(req.workspaceId, {
-              branch: req.branch,
-              baseRef: req.baseRef,
-              createBranch: req.createBranch,
-              carryChanges: req.carryChanges,
-            }),
-          ),
-          toWireWorktree,
-        ),
-      ),
-    OpenWorktree: (req) =>
-      rpcEffect("OpenWorktree", Effect.flatMap(GitService, (_) => _.openWorktree(req.worktreePath))),
-    RemoveWorktree: (req) =>
-      rpcEffect(
-        "RemoveWorktree",
-        Effect.as(
-          Effect.flatMap(GitService, (_) =>
-            _.removeWorktree(req.workspaceId, req.worktreePath, { force: req.force }),
-          ),
-          { removed: true },
-        ),
-      ),
-    PruneWorktrees: (req) =>
-      rpcEffect(
-        "PruneWorktrees",
-        Effect.map(
-          Effect.flatMap(GitService, (_) => _.pruneWorktrees(req.workspaceId)),
-          (removed) => ({ removed }),
-        ),
-      ),
-    CreatePullRequest: (req) =>
-      rpcEffect(
-        "CreatePullRequest",
-        Effect.map(
-          Effect.flatMap(GitService, (_) =>
-            _.createPullRequest(req.workspaceId, {
-              title: req.title,
-              body: req.body,
-              base: req.base,
-              draft: req.draft,
-            }),
-          ),
-          (pr) => (pr ? toWirePullRequest(pr) : null),
-        ),
-      ),
-    ListPresets: () => rpcEffect("ListPresets", Effect.flatMap(PresetRegistry, (_) => _.list)),
-    ListInstances: () => rpcEffect("ListInstances", Effect.flatMap(TargetSessionManager, (_) => _.list)),
-    ListSessions: () => rpcEffect("ListSessions", Effect.flatMap(TargetSessionManager, (_) => _.list)),
+    ),
+    ListPresets: svc("ListPresets", PresetRegistry, (_) => _.list),
+    ListInstances: svc("ListInstances", TargetSessionManager, (_) => _.list),
+    ListSessions: svc("ListSessions", TargetSessionManager, (_) => _.list),
     // Streaming handlers: return each service's reactive `changes` stream
     // directly. The streams replay (or derive) their current value on subscribe,
     // so a fresh client gets the snapshot then live updates — no separate boot
@@ -163,89 +141,44 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     WatchChatActivityChanges: () => Stream.unwrap(Effect.map(ActivityEventService, (_) => _.changes)),
     WatchWorkChanges: () => Stream.unwrap(Effect.map(WorkService, (_) => _.changes)),
     WatchGitChanges: () => Stream.unwrap(Effect.map(GitService, (_) => _.changes)),
-    ListChats: () => rpcEffect("ListChats", Effect.flatMap(ChatService, (_) => _.list)),
-    TestLocalModel: () => rpcEffect("TestLocalModel", Effect.flatMap(LocalModelService, (_) => _.status)),
-    ListPendingRequests: () =>
-      rpcEffect("ListPendingRequests", Effect.flatMap(ChatMessageService, (_) => _.listPending)),
-    ListLiveTargetStates: () =>
-      rpcEffect("ListLiveTargetStates", Effect.flatMap(LiveTargetStateService, (_) => _.list)),
-    SearchArc: (req) =>
-      rpcEffect("SearchArc", Effect.flatMap(ReadService, (_) => _.search(req.params))),
-    GetArc: (req) =>
-      rpcEffect("GetArc", Effect.flatMap(ReadService, (_) => _.get(req.params))),
-    CreateChat: (req) =>
-      rpcEffect("CreateChat", Effect.flatMap(ChatService, (_) => _.create(req.workspaceId, req.title))),
-    UpdateChatTitle: (req) =>
-      rpcEffect(
-        "UpdateChatTitle",
-        Effect.flatMap(ChatService, (_) => _.updateTitle(req.chatId, req.title)),
-      ),
-    ListChatActivity: (req) =>
-      rpcEffect(
-        "ListChatActivity",
-        Effect.flatMap(ActivityEventService, (_) => _.listForChat(req.chatId)),
-      ),
-    ListChatMessages: (req) =>
-      rpcEffect(
-        "ListChatMessages",
-        Effect.flatMap(ChatMessageService, (_) => _.listForChat(req.chatId)),
-      ),
-    ReprojectChatMessages: (req) =>
-      rpcEffect(
-        "ReprojectChatMessages",
-        Effect.flatMap(ChatMessageService, (_) => _.reprojectChat(req.chatId)),
-      ),
-    ReingestWorkspaceArtifacts: (req) =>
-      rpcEffect(
-        "ReingestWorkspaceArtifacts",
-        Effect.flatMap(ArtifactIngestService, (_) => _.ingestWorkspace(req.workspace, req.provider)),
-      ),
-    ReingestAndReprojectChatMessages: (req) =>
-      rpcEffect(
-        "ReingestAndReprojectChatMessages",
-        Effect.flatMap(ArtifactIngestService, (_) =>
-          _.reingestAndReprojectChat(req.chatId, req.provider)
-        ),
-      ),
-    LaunchTarget: (req) =>
-      rpcEffect("LaunchTarget", Effect.flatMap(TargetSessionManager, (_) => _.launch(req))),
-    ResumeTarget: (req) =>
-      rpcEffect("ResumeTarget", Effect.flatMap(TargetSessionManager, (_) => _.resume(req))),
-    StopTarget: (req) =>
-      rpcEffect("StopTarget", Effect.flatMap(TargetSessionManager, (_) => _.stop(req))),
-    SubmitPrompt: (req) =>
-      rpcEffect("SubmitPrompt", Effect.flatMap(TargetSessionManager, (_) => _.submit(req))),
-    SendChatPrompt: (req) =>
-      rpcEffect("SendChatPrompt", Effect.flatMap(ChatMessageService, (_) => _.sendPrompt(req))),
-    ListWork: () => rpcEffect("ListWork", Effect.flatMap(WorkService, (_) => _.listOpen)),
-    ListAllWork: () => rpcEffect("ListAllWork", Effect.flatMap(WorkService, (_) => _.listAll)),
-    ListWorkForChat: (req) =>
-      rpcEffect("ListWorkForChat", Effect.flatMap(WorkService, (_) => _.listForChat(req.chatId))),
-    ListWorkComments: (req) =>
-      rpcEffect(
-        "ListWorkComments",
-        Effect.flatMap(WorkService, (_) => _.listComments(req.id, { allRevisions: req.allRevisions })),
-      ),
-    CreateWork: (req) =>
-      rpcEffect(
-        "CreateWork",
-        Effect.flatMap(WorkService, (_) => _.create(req.input, { source: "rpc", chatId: req.chatId })),
-      ),
-    UpdateWorkStatus: (req) =>
-      rpcEffect(
-        "UpdateWorkStatus",
-        Effect.flatMap(WorkService, (_) => _.updateStatus(req.id, req.status, { source: "rpc" })),
-      ),
-    UpdateWorkPriority: (req) =>
-      rpcEffect(
-        "UpdateWorkPriority",
-        Effect.flatMap(WorkService, (_) => _.updatePriority(req.id, req.priority, { source: "rpc" })),
-      ),
-    ReviseWork: (req) =>
-      rpcEffect(
-        "ReviseWork",
-        Effect.flatMap(WorkService, (_) => _.revise(req.id, req.edits, { source: "rpc" })),
-      ),
+    ListChats: svc("ListChats", ChatService, (_) => _.list),
+    TestLocalModel: svc("TestLocalModel", LocalModelService, (_) => _.status),
+    ListPendingRequests: svc("ListPendingRequests", ChatMessageService, (_) => _.listPending),
+    ListLiveTargetStates: svc("ListLiveTargetStates", LiveTargetStateService, (_) => _.list),
+    SearchArc: svc("SearchArc", ReadService, (_, req) => _.search(req.params)),
+    GetArc: svc("GetArc", ReadService, (_, req) => _.get(req.params)),
+    CreateChat: svc("CreateChat", ChatService, (_, req) => _.create(req.workspaceId, req.title)),
+    UpdateChatTitle: svc("UpdateChatTitle", ChatService, (_, req) => _.updateTitle(req.chatId, req.title)),
+    ListChatActivity: svc("ListChatActivity", ActivityEventService, (_, req) => _.listForChat(req.chatId)),
+    ListChatMessages: svc("ListChatMessages", ChatMessageService, (_, req) => _.listForChat(req.chatId)),
+    ReprojectChatMessages: svc("ReprojectChatMessages", ChatMessageService, (_, req) => _.reprojectChat(req.chatId)),
+    ReingestWorkspaceArtifacts: svc("ReingestWorkspaceArtifacts", ArtifactIngestService, (_, req) =>
+      _.ingestWorkspace(req.workspace, req.provider),
+    ),
+    ReingestAndReprojectChatMessages: svc("ReingestAndReprojectChatMessages", ArtifactIngestService, (_, req) =>
+      _.reingestAndReprojectChat(req.chatId, req.provider),
+    ),
+    LaunchTarget: svc("LaunchTarget", TargetSessionManager, (_, req) => _.launch(req)),
+    ResumeTarget: svc("ResumeTarget", TargetSessionManager, (_, req) => _.resume(req)),
+    StopTarget: svc("StopTarget", TargetSessionManager, (_, req) => _.stop(req)),
+    SubmitPrompt: svc("SubmitPrompt", TargetSessionManager, (_, req) => _.submit(req)),
+    SendChatPrompt: svc("SendChatPrompt", ChatMessageService, (_, req) => _.sendPrompt(req)),
+    ListWork: svc("ListWork", WorkService, (_) => _.listOpen),
+    ListAllWork: svc("ListAllWork", WorkService, (_) => _.listAll),
+    ListWorkForChat: svc("ListWorkForChat", WorkService, (_, req) => _.listForChat(req.chatId)),
+    ListWorkComments: svc("ListWorkComments", WorkService, (_, req) =>
+      _.listComments(req.id, { allRevisions: req.allRevisions }),
+    ),
+    CreateWork: svc("CreateWork", WorkService, (_, req) =>
+      _.create(req.input, { source: "rpc", chatId: req.chatId }),
+    ),
+    UpdateWorkStatus: svc("UpdateWorkStatus", WorkService, (_, req) =>
+      _.updateStatus(req.id, req.status, { source: "rpc" }),
+    ),
+    UpdateWorkPriority: svc("UpdateWorkPriority", WorkService, (_, req) =>
+      _.updatePriority(req.id, req.priority, { source: "rpc" }),
+    ),
+    ReviseWork: svc("ReviseWork", WorkService, (_, req) => _.revise(req.id, req.edits, { source: "rpc" })),
   }),
 )
 
