@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import { WorkService } from "../work/service.js"
@@ -78,12 +78,11 @@ const encodeCursor = (offset: number): string =>
 
 const decodeCursor = (cursor: string | undefined): number => {
   if (!cursor) return 0
-  try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64").toString("utf8")) as { o?: unknown }
-    return typeof parsed.o === "number" && parsed.o >= 0 ? Math.floor(parsed.o) : 0
-  } catch {
-    return 0
-  }
+  const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ o: Schema.optional(Schema.Number) })))(
+    Buffer.from(cursor, "base64").toString("utf8"),
+  )
+  if (Option.isNone(parsed)) return 0
+  return parsed.value.o !== undefined && parsed.value.o >= 0 ? Math.floor(parsed.value.o) : 0
 }
 
 type SearchDocumentRow = {
@@ -110,12 +109,8 @@ const ftsQuery = (terms: ReadonlyArray<string>): string => terms.map(ftsPhrase).
 
 const hasEveryLabel = (labelsJson: string, expected: ReadonlyArray<string>): boolean => {
   if (expected.length === 0) return true
-  try {
-    const labels = JSON.parse(labelsJson)
-    return Array.isArray(labels) && expected.every((label) => labels.includes(label))
-  } catch {
-    return false
-  }
+  const labels = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(Schema.String)))(labelsJson)
+  return Option.isSome(labels) && expected.every((label) => labels.value.includes(label))
 }
 
 /** A work ref is a full `work_…` TypeID — validated through the {@link WorkId}
