@@ -12,7 +12,17 @@ import { ToolCall } from "./tool-calls/ToolCall.js"
 // min-w-0: this row is a grid item in the transcript's `ol.grid`; without it the
 // item's automatic minimum is its content's min-content width, so a wide code
 // block props the whole row (and transcript) open instead of scrolling inside.
-const ITEM = "min-w-0"
+//
+// content-visibility:auto skips layout/paint for off-screen rows. A long
+// transcript (hundreds of rows, each a Streamdown/Shiki render) is one giant
+// layout tree; the composer's per-keystroke textarea autosize reads
+// `scrollHeight`, which forces a *full-document* synchronous reflow whose cost
+// scales with that tree — so typing stalls for 100s of ms once a thread grows.
+// Containing each row collapses the off-screen layout work, so the reflow only
+// touches what's visible. `contain-intrinsic-size: auto 120px` lets a skipped
+// row reserve a plausible height (the browser remembers each row's real size
+// once measured, falling back to 120px) so the scrollbar stays stable.
+const ITEM = "min-w-0 [content-visibility:auto] [contain-intrinsic-size:auto_120px]"
 
 // Chrome earns its place only where it carries meaning. The bulk of the
 // transcript — assistant/subagent/tool/request prose — sits flat on the pane
