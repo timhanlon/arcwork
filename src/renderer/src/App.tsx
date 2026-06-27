@@ -3,7 +3,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import { Exit } from "effect"
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels"
 import { rpc } from "./rpc-client.js"
-import { subscribeWhenReady } from "./bridge.js"
+import { isDevProfile, subscribeWhenReady } from "./bridge.js"
 import {
   chatsAtom,
   createChatAtom,
@@ -56,13 +56,13 @@ import { useSessionActivityProjection } from "./sidebar/useSessionActivityProjec
  * output.
  */
 
-// `pnpm dev` vs the built/preview app. macOS shows the unpackaged binary as
-// "Electron" regardless, so we surface the profile in-app: a nav-bar badge and
-// the document title (which also wins the window title over `index.html`'s
-// static `<title>Arc Work</title>`).
-const isDev = window.arc?.profile === "dev"
-
 export function App(): JSX.Element {
+  // `pnpm dev` vs the built/preview app. macOS shows the unpackaged binary as
+  // "Electron" regardless, so we surface the profile in-app: a nav-bar badge and
+  // the document title (which also wins the window title over `index.html`'s
+  // static `<title>Arc Work</title>`). Read in-component (post-mount) so the
+  // bridge has attached — see isDevProfile.
+  const isDev = isDevProfile()
   const workspaces = successList(useAtomValue(workspacesAtom))
   const [searchOpen, setSearchOpen] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
@@ -98,7 +98,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     document.title = isDev ? "Arc Work (dev)" : "Arc Work"
-  }, [])
+  }, [isDev])
 
   useEffect(
     // The preload bridge attaches a beat after the renderer mounts (and re-runs

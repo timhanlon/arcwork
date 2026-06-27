@@ -14,6 +14,13 @@ type ViteImportMeta = ImportMeta & { readonly env?: { readonly DEV?: boolean } }
 /** Build-time dev flag from Vite — independent of `window.arc`, so it works even when the bridge is the thing that's missing. */
 export const DEV = ((import.meta as ViteImportMeta).env?.DEV ?? false) === true
 
+/** Runtime *profile* flag — the launched profile (dev vs stable), read off the
+ * bridge rather than the build env. Distinct from {@link DEV}: a packaged build
+ * can still run the dev profile. Lazy (not a module const) so it reads `profile`
+ * after the bridge has attached, not at module-eval time when `window.arc` may
+ * still be undefined. */
+export const isDevProfile = (): boolean => window.arc?.profile === "dev"
+
 /** A dev-only, `[scope]`-prefixed console logger (Default level, so it shows without enabling Verbose). */
 export const devLog =
   (scope: string) =>

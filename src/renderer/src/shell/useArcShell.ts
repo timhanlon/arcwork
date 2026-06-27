@@ -14,9 +14,7 @@ import {
   type ShellTreeSelection,
 } from "./arcShellMachine.js"
 import { loadPersistedSelection, savePersistedSelection } from "./shellPersistence.js"
-type ViteImportMeta = ImportMeta & { readonly env?: { readonly DEV?: boolean } }
-
-const isDevelopment = ((import.meta as ViteImportMeta).env?.DEV ?? false) === true
+import { DEV } from "../bridge.js"
 
 export interface ArcShellActions {
   readonly selectChat: (workspaceId: WorkspaceId, chatId: ChatId) => void
@@ -89,7 +87,7 @@ export function useArcShell({
 
   useEffect(() => {
     return () => {
-      if (isDevelopment) return
+      if (DEV) return
       actor.stop()
     }
   }, [actor])
