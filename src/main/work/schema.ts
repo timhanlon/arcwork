@@ -163,7 +163,7 @@ export interface WorkRefUpdateRow {
  * at a status literal (`to_kind='external'`, `to_id='done'`); the latest wins. */
 export interface WorkEdgeRow {
   readonly id: WorkEdgeId
-  readonly type: string // created_in_session | references | supersedes | status_set | ...
+  readonly type: string // created_in_session | references | status_set | priority_set | ...
   readonly fromKind: string // node | ref | external
   readonly fromId: string // polymorphic: a node/ref id or an external locator, per fromKind
   readonly toKind: string // node | ref | external

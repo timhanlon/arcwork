@@ -408,27 +408,21 @@ describe("work create + projection (in-memory graph store)", () => {
     expect(result.events).toHaveLength(0)
   })
 
-  it("records a supersedes live edge and excludes done work from the queue", async () => {
+  it("excludes done work from the open queue", async () => {
     const result = await run(
       Effect.gen(function* () {
         const work = yield* WorkService
-        const store = yield* WorkStore
-        const replacement = yield* work.create(
-          { title: "new approach", body: "x", supersedes: ["work_old"] },
-          cliProvenance,
-        )
+        const open = yield* work.create({ title: "still going", body: "x" }, cliProvenance)
         const done = yield* work.create(
           { title: "shipped thing", body: "x", status: "done" },
           cliProvenance,
         )
-        const supersedes = yield* store.loadEdges(replacement.id, "supersedes")
-        const open = yield* work.listOpen
-        return { supersedes: supersedes[0], done, openIds: open.map((w) => w.id) }
+        const openIds = (yield* work.listOpen).map((w) => w.id)
+        return { open, done, openIds }
       }),
     )
 
-    expect(result.supersedes?.toId).toBe("work_old")
-    expect(result.supersedes?.source).toBe("user_confirmed")
+    expect(result.openIds).toContain(result.open.id)
     expect(result.openIds).not.toContain(result.done.id)
   })
 

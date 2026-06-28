@@ -166,8 +166,7 @@ export type WorkSummary = typeof WorkSummary.Type
 
 /**
  * The smallest authored shape. arc fills in identity, revision, provenance, and
- * edges. `supersedes` lists work ref ids this work replaces (becomes
- * `supersedes` live edges; v0 does not auto-retire the target's ref).
+ * edges.
  */
 export const WorkCreateInput = Schema.Struct({
   title: Schema.String,
@@ -177,7 +176,6 @@ export const WorkCreateInput = Schema.Struct({
   // Optional at create — omitted leaves the work unranked (no priority_set edge).
   priority: Schema.optional(WorkPriority),
   citations: Schema.optional(Schema.Array(Citation)),
-  supersedes: Schema.optional(Schema.Array(Schema.String)),
 })
 export type WorkCreateInput = typeof WorkCreateInput.Type
 

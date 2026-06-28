@@ -345,9 +345,9 @@ export const WorkServiceLive = Layer.effect(
             )
           }
           // Live: explicit citations → references edges. A citation of other
-          // work is a real ref edge — raw ref id, traversable like supersedes —
-          // so a graph query on the cited work finds it. file/commit/pr/url/
-          // session have no ref, so they are external `kind:target` locators.
+          // work is a real ref edge — raw ref id, traversable — so a graph query
+          // on the cited work finds it. file/commit/pr/url/session have no ref,
+          // so they are external `kind:target` locators.
           for (const c of input.citations ?? []) {
             const toWorkRef = c.kind === "work"
             edges.push(
@@ -360,10 +360,6 @@ export const WorkServiceLive = Layer.effect(
                 c.note ?? null,
               ),
             )
-          }
-          // Live: supersession the agent asserted (does not auto-retire the target in v0).
-          for (const target of input.supersedes ?? []) {
-            edges.push(edge("supersedes", "ref", target, "live", "user_confirmed"))
           }
           // Workflow: priority is an edge even at create (no node column — unlike
           // status's authored fallback), so an unset priority writes nothing.

@@ -151,7 +151,7 @@ export class WorkStore extends Context.Service<
       }>,
       SqlError
     >
-    /** Outgoing edges of a given type from a ref (e.g. supersedes/created_in_session). */
+    /** Outgoing edges of a given type from a ref (e.g. references/created_in_session). */
     readonly loadEdges: (
       fromId: string,
       type: string,

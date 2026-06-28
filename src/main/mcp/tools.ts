@@ -1,4 +1,4 @@
-import { Schema, Struct } from "effect"
+import { Schema } from "effect"
 import * as Tool from "effect/unstable/ai/Tool"
 import * as Toolkit from "effect/unstable/ai/Toolkit"
 import {
@@ -70,10 +70,9 @@ const GetTool = Tool.make("arc.get", {
 const WorkCreateTool = Tool.make("arc.work.create", {
   description:
     "Create a durable unit of work (proposal/plan/todo/bug/decision — all one primitive). Returns the created work with its id. Arc derives workspace scope and the calling session's observed harness/model from the stamped MCP session/chat; `sessionId`/`chatId` params are fallback provenance only.",
-  // WorkCreateInput, minus `supersedes` (no create-time supersession at this
-  // door) and with `body` relaxed to optional (the handler defaults it to "");
-  // plus the MCP-transport provenance fallbacks.
-  parameters: WorkCreateInput.mapFields(Struct.omit(["supersedes"])).pipe(
+  // WorkCreateInput with `body` relaxed to optional (the handler defaults it to
+  // "") plus the MCP-transport provenance fallbacks.
+  parameters: WorkCreateInput.pipe(
     Schema.fieldsAssign({
       body: Schema.optional(Schema.String),
       sessionId: Schema.optional(Schema.String),
