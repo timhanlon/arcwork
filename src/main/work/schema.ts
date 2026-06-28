@@ -105,7 +105,8 @@ const backfillWorkWorkspaceFromChat = Effect.gen(function* () {
 /** One frozen revision of a unit of work. Addressed by stable id + content hash. */
 export interface WorkNodeRow {
   readonly id: WorkRevId
-  readonly kind: string // 'work'
+  // The generic graph substrate is kind-agnostic, but only work nodes exist today.
+  readonly kind: "work"
   readonly contentHash: string
   readonly title: string
   readonly body: string
@@ -120,7 +121,8 @@ export interface WorkNodeRow {
   readonly chatId: ChatId | null
   readonly workspaceId: WorkspaceId | null
   readonly deviceId: string | null
-  readonly observedSource: string // 'cli' | 'rpc' | ...
+  // The door this came through (cli/rpc/mcp/…); open, mirrors WorkProvenance.source.
+  readonly observedSource: string
   // Observed execution runtime (harness/model) of the authoring session, as a
   // JSON-encoded `WorkExecution`; null when unknown. Nested rather than flat
   // columns so the runtime story can grow without per-detail schema churn.
@@ -132,7 +134,8 @@ export interface WorkNodeRow {
 /** The durable identity of a unit of work; points at its current revision. */
 export interface WorkRefRow {
   readonly id: WorkId
-  readonly kind: string // 'work'
+  // Kind-agnostic substrate, but only work refs exist today (see WorkNodeRow.kind).
+  readonly kind: "work"
   readonly currentNodeId: WorkRevId | null
   readonly displayName: string | null
   readonly location: string | null
@@ -212,7 +215,7 @@ export interface WorkEdgeRow {
 export interface WorkCommentRow {
   readonly id: CommentId
   readonly workRefId: WorkId
-  readonly subjectKind: string // node | ref
+  readonly subjectKind: "node" | "ref"
   readonly subjectId: string // a graph_node id (node) or graph_ref id (ref), per subjectKind
   readonly body: string
   readonly actor: string | null
