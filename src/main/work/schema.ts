@@ -158,19 +158,45 @@ export interface WorkRefUpdateRow {
   readonly schemaVersion: number
 }
 
+/** Which side of the graph an edge endpoint lives on. */
+export type EdgeEndpointKind = "node" | "ref" | "external"
+/** Whether an edge records observed provenance, a live relationship, or a
+ * workflow event. */
+export type EdgeFamily = "provenance" | "live" | "workflow"
+/** How an edge came to be asserted. */
+export type EdgeSource = "observed" | "inferred" | "user_confirmed" | "legacy"
+export type EdgeConfidence = "high" | "medium" | "low"
+
+/**
+ * The edge types the current code writes. The `graph_edge.type` column is an
+ * open vocabulary, and reads surface pre-launch legacy types
+ * (`depends_on`/`implements`/`resolved_by`/`duplicates`/`blocks`) that no code
+ * produces anymore — so {@link WorkEdgeRow.type} keeps an open string tail while
+ * still autocompleting the live set.
+ */
+export type WorkEdgeType =
+  | "created_in_session"
+  | "references"
+  | "status_set"
+  | "priority_set"
+  | "delegated_to"
+  | "revises"
+
 /** A typed relationship between nodes/refs/externals, carrying source+confidence.
  * Also models append-only workflow *events* — a `status_set` edge points the ref
  * at a status literal (`to_kind='external'`, `to_id='done'`); the latest wins. */
 export interface WorkEdgeRow {
   readonly id: WorkEdgeId
-  readonly type: string // created_in_session | references | status_set | priority_set | ...
-  readonly fromKind: string // node | ref | external
+  // `& {}` keeps the live-set autocomplete while the column stays open to
+  // legacy/forward types (see WorkEdgeType).
+  readonly type: WorkEdgeType | (string & {})
+  readonly fromKind: EdgeEndpointKind
   readonly fromId: string // polymorphic: a node/ref id or an external locator, per fromKind
-  readonly toKind: string // node | ref | external
+  readonly toKind: EdgeEndpointKind
   readonly toId: string // polymorphic: a node/ref id or an external locator, per toKind
-  readonly family: string // provenance | live | workflow
-  readonly source: string // observed | inferred | user_confirmed | legacy
-  readonly confidence: string // high | medium | low
+  readonly family: EdgeFamily
+  readonly source: EdgeSource
+  readonly confidence: EdgeConfidence
   readonly note: string | null
   readonly actor: string | null
   readonly sessionId: string | null

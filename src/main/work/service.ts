@@ -25,6 +25,9 @@ import { arcRequestError, type ArcRequestError } from "../errors.js"
 import { ArcStore } from "../db/store.js"
 import {
   WORK_SCHEMA_VERSION,
+  type EdgeEndpointKind,
+  type EdgeFamily,
+  type EdgeSource,
   type WorkCommentRow,
   type WorkEdgeRow,
   type WorkNodeRow,
@@ -313,10 +316,10 @@ export const WorkServiceLive = Layer.effect(
 
           const edge = (
             type: string,
-            toKind: string,
+            toKind: EdgeEndpointKind,
             toId: string,
-            family: "provenance" | "live" | "workflow",
-            edgeSource: WorkEdgeRow["source"],
+            family: EdgeFamily,
+            edgeSource: EdgeSource,
             note: string | null = null,
           ): WorkEdgeRow => ({
             id: newArcId("work_edge"),
@@ -501,10 +504,10 @@ export const WorkServiceLive = Layer.effect(
       provenance: WorkProvenance,
       spec: {
         readonly type: string
-        readonly toKind: string
+        readonly toKind: EdgeEndpointKind
         readonly toId: string
-        readonly family: string
-        readonly source: string
+        readonly family: EdgeFamily
+        readonly source: EdgeSource
         readonly note?: string | null
       },
       // Returns true when the edge would be a no-op (status unchanged, citation
