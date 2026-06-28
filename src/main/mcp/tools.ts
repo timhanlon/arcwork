@@ -1,7 +1,15 @@
-import { Schema } from "effect"
+import { Schema, Struct } from "effect"
 import * as Tool from "effect/unstable/ai/Tool"
 import * as Toolkit from "effect/unstable/ai/Toolkit"
-import { Citation, Work, WorkComment, WorkPriority, WorkStatus } from "../../shared/work.js"
+import {
+  Work,
+  WorkComment,
+  WorkCommentInput,
+  WorkCreateInput,
+  WorkPriority,
+  WorkReviseInput,
+  WorkStatus,
+} from "../../shared/work.js"
 import { TargetSession } from "../../shared/instance.js"
 import { ArcGetParams, ArcGetResult, ArcSearchParams, ArcSearchResult } from "../../shared/read.js"
 import { ChatId, TargetId, WorkId, WorkspaceId } from "../../shared/ids.js"
@@ -62,16 +70,16 @@ const GetTool = Tool.make("arc.get", {
 const WorkCreateTool = Tool.make("arc.work.create", {
   description:
     "Create a durable unit of work (proposal/plan/todo/bug/decision — all one primitive). Returns the created work with its id. Arc derives workspace scope and the calling session's observed harness/model from the stamped MCP session/chat; `sessionId`/`chatId` params are fallback provenance only.",
-  parameters: Schema.Struct({
-    title: Schema.String,
-    body: Schema.optional(Schema.String),
-    labels: Schema.optional(Schema.Array(Schema.String)),
-    status: Schema.optional(WorkStatus),
-    priority: Schema.optional(WorkPriority),
-    citations: Schema.optional(Schema.Array(Citation)),
-    sessionId: Schema.optional(Schema.String),
-    chatId: Schema.optional(ChatId),
-  }),
+  // WorkCreateInput, minus `supersedes` (no create-time supersession at this
+  // door) and with `body` relaxed to optional (the handler defaults it to "");
+  // plus the MCP-transport provenance fallbacks.
+  parameters: WorkCreateInput.mapFields(Struct.omit(["supersedes"])).pipe(
+    Schema.fieldsAssign({
+      body: Schema.optional(Schema.String),
+      sessionId: Schema.optional(Schema.String),
+      chatId: Schema.optional(ChatId),
+    }),
+  ),
   success: Work,
 })
 
@@ -80,21 +88,19 @@ const WorkUpdateTool = Tool.make("arc.work.update", {
     "Mutate an existing unit of work — the one write door for edits, status, priority, and comments. Supply at least one operation; bundle several in a single call and they apply in a deterministic order (content revision → status → priority → comment). `set.title`/`set.body`/`set.labels` revise authored content (a present field replaces, `labels` as a whole set; mints a new revision). `set.status` moves the work between any status, including the terminal `done`/`superseded` — status is an append-only edge, so this records a transition rather than overwriting. `set.priority` ranks the work (p0 highest). `addComment` attaches a comment (`ref: true` anchors it to the work as a whole rather than the current revision). Returns the work in its final state, plus the created comment when `addComment` was supplied. Arc derives workspace scope and the calling session's observed harness/model from the stamped MCP session/chat; `sessionId`/`chatId` params are fallback provenance only.",
   parameters: Schema.Struct({
     workRefId: WorkId,
+    // Compose from the canonical authored shapes so a field added to revise /
+    // comment surfaces on this door automatically: `set` extends WorkReviseInput
+    // (title/body/labels) with the two workflow facts the update verb also
+    // applies; `addComment` is WorkCommentInput verbatim.
     set: Schema.optional(
-      Schema.Struct({
-        title: Schema.optional(Schema.String),
-        body: Schema.optional(Schema.String),
-        labels: Schema.optional(Schema.Array(Schema.String)),
-        status: Schema.optional(WorkStatus),
-        priority: Schema.optional(WorkPriority),
-      }),
+      WorkReviseInput.pipe(
+        Schema.fieldsAssign({
+          status: Schema.optional(WorkStatus),
+          priority: Schema.optional(WorkPriority),
+        }),
+      ),
     ),
-    addComment: Schema.optional(
-      Schema.Struct({
-        body: Schema.String,
-        ref: Schema.optional(Schema.Boolean),
-      }),
-    ),
+    addComment: Schema.optional(WorkCommentInput),
     sessionId: Schema.optional(Schema.String),
     chatId: Schema.optional(ChatId),
   }),
