@@ -266,8 +266,8 @@ export const WorkServiceLive = Layer.effect(
           title: row.title,
           body: row.body,
           labels,
-          status: row.status as WorkStatus,
-          priority: (row.priority ?? null) as WorkPriority | null,
+          status: row.status,
+          priority: row.priority,
           createdAt: row.createdAt,
           updatedAt: row.updatedAt,
           provenance: {
@@ -437,8 +437,8 @@ export const WorkServiceLive = Layer.effect(
       id: row.id,
       title: row.title,
       labels: parseLabels(row.labelsJson),
-      status: row.status as WorkStatus,
-      priority: (row.priority ?? null) as WorkPriority | null,
+      status: row.status,
+      priority: row.priority,
       updatedAt: row.updatedAt,
     })
 

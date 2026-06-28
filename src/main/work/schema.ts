@@ -15,6 +15,7 @@
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
 import type { ChatId, CommentId, WorkEdgeId, WorkId, WorkRevId, WorkspaceId } from "../../shared/ids.js"
+import type { WorkPriority, WorkStatus } from "../../shared/work.js"
 import { sqlMigration, type Migrations } from "../db/migrator.js"
 import {
   commentSearchBackfill,
@@ -115,7 +116,7 @@ export interface WorkNodeRow {
   // read from here on a flip — it is the latest `status_set` edge on the ref;
   // this is only the fallback when no status event exists. Status changes never
   // rewrite this node (content and workflow facts are kept apart).
-  readonly status: string
+  readonly status: WorkStatus
   readonly actor: string | null
   readonly sessionId: string | null
   readonly chatId: ChatId | null
@@ -238,9 +239,9 @@ export interface WorkProjectionRow {
   readonly title: string
   readonly body: string
   readonly labelsJson: string
-  readonly status: string
+  readonly status: WorkStatus
   // Derived latest `priority_set`; null when unset (no node fallback, unlike status).
-  readonly priority: string | null
+  readonly priority: WorkPriority | null
   readonly createdAt: string
   readonly updatedAt: string
   readonly actor: string | null
