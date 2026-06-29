@@ -7,6 +7,7 @@ import { toPrState } from "../../shared/git.js"
 import { ArcStore } from "../db/store.js"
 import type { PullRequestRow, RepositoryRow, WorkspaceRow } from "../db/schema.js"
 import { newArcId } from "../../shared/ids.js"
+import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { nowIso } from "../clock.js"
 
 /** Project header label: `owner/repo` when GitHub identity is known, else the
@@ -37,6 +38,9 @@ export class WorkspaceService extends Context.Service<
   WorkspaceService,
   {
     readonly list: Effect.Effect<ReadonlyArray<Workspace>>
+    /** A single workspace by id, or {@link ArcRequestError} if unknown — the
+     * lookup-or-fail every consumer needs, instead of `list` + a hand-rolled find. */
+    readonly get: (id: string) => Effect.Effect<Workspace, ArcRequestError>
     readonly changes: Stream.Stream<ReadonlyArray<Workspace>>
     readonly open: Effect.Effect<Workspace | undefined, SqlError>
     /** Register (or refresh) a workspace at an explicit directory — the no-dialog
@@ -138,6 +142,11 @@ export const WorkspaceServiceLive = Layer.effect(
     )
 
     const list = SubscriptionRef.get(store)
+    const get = (id: string): Effect.Effect<Workspace, ArcRequestError> =>
+      Effect.flatMap(list, (all) => {
+        const ws = all.find((w) => w.id === id)
+        return ws ? Effect.succeed(ws) : Effect.fail(arcRequestError(`Unknown workspace: ${id}`))
+      })
     const changes = SubscriptionRef.changes(store)
 
     const open = Effect.gen(function* () {
@@ -153,6 +162,6 @@ export const WorkspaceServiceLive = Layer.effect(
       return yield* upsertByPath(result.filePaths[0]!)
     }).pipe(Effect.withSpan("arc.workspace.open_dialog"))
 
-    return { list, changes, open, openAt: upsertByPath, refresh }
+    return { list, get, changes, open, openAt: upsertByPath, refresh }
   }),
 )

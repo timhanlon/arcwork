@@ -76,6 +76,7 @@ const run = async <A, E>(
     WorkspaceService,
     WorkspaceService.of({
       list: Effect.succeed([workspace]),
+      get: () => Effect.succeed(workspace),
       changes: Stream.empty,
       open: Effect.succeed(undefined),
       openAt: () => Effect.succeed(workspace),

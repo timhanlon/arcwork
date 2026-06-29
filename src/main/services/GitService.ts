@@ -310,8 +310,7 @@ export const GitServiceLive = Layer.effect(
       workspaceId: WorkspaceId,
     ): Effect.Effect<RepositoryRow | null, ArcRequestError> =>
       Effect.gen(function* () {
-        const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
-        if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
+        const workspace = yield* workspaces.get(workspaceId)
         const cwd = workspace.path
 
         const inside = yield* Effect.promise(() => runGit(cwd, ["rev-parse", "--is-inside-work-tree"]))
@@ -532,8 +531,7 @@ export const GitServiceLive = Layer.effect(
 
     const status = (workspaceId: WorkspaceId): Effect.Effect<GitStatus, ArcRequestError> =>
       Effect.gen(function* () {
-          const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
-          if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
+          const workspace = yield* workspaces.get(workspaceId)
 
           const isRepoResult = yield* Effect.promise(() =>
             runGit(workspace.path, ["rev-parse", "--is-inside-work-tree"]),
@@ -590,8 +588,7 @@ export const GitServiceLive = Layer.effect(
       limit = 50,
     ): Effect.Effect<ReadonlyArray<GitCommit>, ArcRequestError> =>
       Effect.gen(function* () {
-        const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
-        if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
+        const workspace = yield* workspaces.get(workspaceId)
 
         // Scope the log to this branch's own commits — everything reachable from
         // HEAD but not from the repo's default branch (`base..HEAD`). On the default
@@ -762,8 +759,7 @@ export const GitServiceLive = Layer.effect(
         if (!repo.githubOwner || !repo.githubRepo) {
           return yield* Effect.fail(arcRequestError("No GitHub remote for this repository"))
         }
-        const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
-        if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
+        const workspace = yield* workspaces.get(workspaceId)
         const branch = (
           yield* Effect.promise(() => runGit(workspace.path, ["rev-parse", "--abbrev-ref", "HEAD"]))
         ).stdout.trim()
@@ -815,8 +811,7 @@ export const GitServiceLive = Layer.effect(
       notifyPrePush,
       diff: (workspaceId, filePath) =>
         Effect.gen(function* () {
-          const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
-          if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
+          const workspace = yield* workspaces.get(workspaceId)
           const gitStatus = yield* status(workspaceId)
           const change = gitStatus.changes.find((candidate) => candidate.path === filePath)
           if (!change) return { path: filePath, diff: "" }

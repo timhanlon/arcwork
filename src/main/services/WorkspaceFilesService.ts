@@ -4,7 +4,7 @@ import type { Dirent } from "node:fs"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import type { WorkspaceFiles } from "../../shared/rpc.js"
-import { type ArcRequestError, arcRequestError } from "../errors.js"
+import type { ArcRequestError } from "../errors.js"
 import { WorkspaceService } from "./WorkspaceService.js"
 
 /**
@@ -99,11 +99,7 @@ export const WorkspaceFilesServiceLive = Layer.effect(
         Effect.gen(function* () {
           // Resolve the root from arc's own list — never trust a path off the
           // wire. The stored path is already absolute/resolved (WorkspaceService).
-          const known = yield* workspaces.list
-          const workspace = known.find((w) => w.id === workspaceId)
-          if (!workspace) {
-            return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
-          }
+          const workspace = yield* workspaces.get(workspaceId)
           const root = workspace.path
           // `Effect.promise` (E = never): the async closure handles its own failures
           // — git first, then an fs walk, then an empty list — so the picker simply
