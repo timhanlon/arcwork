@@ -90,6 +90,11 @@ export class GitService extends Context.Service<
      * DEBOUNCED PR sync (per workspace, latest push wins) rather than syncing
      * now. Best-effort. */
     readonly notifyPrePush: (cwd: string) => Effect.Effect<void>
+    /** A `post-commit` hook fired at this cwd: HEAD moved, so the branch's commit
+     * list (and its ahead/behind-derived context) is stale. Notify every
+     * workspace under that worktree root to re-pull. No re-detection — a commit
+     * doesn't remap the branch→repo binding. Best-effort. */
+    readonly notifyCommit: (cwd: string) => Effect.Effect<void>
     /** Create an arc-managed worktree for `branch` under the workspace's repo.
      * The tree lands in `~/.arcwork/<profile>/worktrees/<repo>/<branch>` (arc
      * owns it). `createBranch` makes a new branch off `baseRef` (default branch
@@ -651,6 +656,15 @@ export const GitServiceLive = Layer.effect(
         )
       }).pipe(Effect.withSpan("arc.git.notify_checkout", { attributes: { "arc.cwd": cwd } }))
 
+    // A commit moved HEAD: the commit list and ahead/behind context are stale,
+    // but the branch→repo binding is unchanged, so just publish a `repo` change
+    // for every workspace under the worktree — no re-detection like checkout.
+    const notifyCommit = (cwd: string): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const targets = workspacesUnderCwd(yield* workspaces.list, cwd)
+        yield* Effect.forEach(targets, (w) => publishChange(w.id), { discard: true })
+      }).pipe(Effect.withSpan("arc.git.notify_commit", { attributes: { "arc.cwd": cwd } }))
+
     // Per-workspace pending PR sync. A push fires `pre-push` before the network
     // round-trip, so GitHub is stale now; we wait, then sync. A second push for
     // the same workspace interrupts the prior pending sync (debounce, latest
@@ -808,6 +822,7 @@ export const GitServiceLive = Layer.effect(
       changes,
       notifyCheckout,
       notifyPrePush,
+      notifyCommit,
       diff: (workspaceId, filePath) =>
         Effect.gen(function* () {
           const workspace = yield* workspaces.get(workspaceId)

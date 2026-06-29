@@ -463,7 +463,13 @@ export const launchArcMainController = (
     // the hook ran in; commit citation carries its sha in the hook input.
     const gitHookEffect = (signal: HookSignal): Effect.Effect<void> | null => {
       if (signal.provider !== "git") return null
-      if (isCommitSignal(signal)) return stampCommitCitation(signal)
+      // A commit moves HEAD: refresh the git read model (so the pane's commit
+      // list updates) *and* stamp the work citation. The citation is keyed by the
+      // hook's chat/sha, the refresh by the worktree cwd — independent, both run.
+      if (isCommitSignal(signal)) {
+        const refresh = signal.cwd ? git.notifyCommit(signal.cwd) : Effect.void
+        return refresh.pipe(Effect.andThen(stampCommitCitation(signal)))
+      }
       if (!signal.cwd) return null
       switch (signal.declaredEvent) {
         case "post-checkout":
