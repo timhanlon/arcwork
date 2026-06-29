@@ -365,6 +365,7 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
                         key={message.id}
                         message={message}
                         target={targetLabelFor(message.targetSessionId)}
+                        injectedFromLabel={targetLabelFor(message.injectedFrom)}
                         onFocusSession={onFocusSession}
                       />
                     ))}

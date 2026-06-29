@@ -158,6 +158,8 @@ export const makeChatMessageStore = (sql: SqlClient): ChatMessageStore => {
       status: row.status,
       model: row.model,
       requestJson: row.requestJson,
+      injectedFromTargetSessionId: row.injectedFromTargetSessionId,
+      injectedTargetMessageId: row.injectedTargetMessageId,
       occurredAt: row.occurredAt,
       source: row.source,
       dedupKey,
@@ -372,12 +374,18 @@ export const makeChatMessageStore = (sql: SqlClient): ChatMessageStore => {
       // resolution can't be reopened and a supersede can be revived; other
       // rows keep the caller's status.
       const status = requestRowStatus(requestJson) ?? row.status
+      // Injected-message attribution is written here too, not just on insert: a
+      // reprojection strips the marker from `body`, so the attribution must land
+      // on the same pass or the row would render as a plain user turn. COALESCE
+      // keeps an existing non-null value (the fields never change once set).
       if (mode === "replace_keep_time") {
         yield* sql`UPDATE chat_messages SET
           body = ${body},
           status = ${status},
           model = COALESCE(${row.model}, model),
           request_json = ${requestJson},
+          injected_from_target_session_id = COALESCE(${row.injectedFromTargetSessionId}, injected_from_target_session_id),
+          injected_target_message_id = COALESCE(${row.injectedTargetMessageId}, injected_target_message_id),
           chunk_index = COALESCE(${row.chunkIndex}, chunk_index),
           message_id = COALESCE(${row.messageId}, message_id)
           WHERE dedup_key = ${row.dedupKey}`
@@ -387,6 +395,8 @@ export const makeChatMessageStore = (sql: SqlClient): ChatMessageStore => {
           status = ${status},
           model = COALESCE(${row.model}, model),
           request_json = ${requestJson},
+          injected_from_target_session_id = COALESCE(${row.injectedFromTargetSessionId}, injected_from_target_session_id),
+          injected_target_message_id = COALESCE(${row.injectedTargetMessageId}, injected_target_message_id),
           occurred_at = ${row.occurredAt},
           chunk_index = COALESCE(${row.chunkIndex}, chunk_index),
           message_id = COALESCE(${row.messageId}, message_id)

@@ -213,6 +213,44 @@ export const MultiTargetExchange = () => (
   </List>
 )
 
+/** A turn injected via `arc.agent.send` — really from another agent (a spawned
+ * child reporting back), pasted as a user turn but attributed to its real sender
+ * ("📨 codex → claude") instead of the misleading "user to claude". */
+export const InjectedFromAgent = () => (
+  <List>
+    <Message
+      target="claude"
+      injectedFromLabel="codex · 9f2a"
+      message={msg({
+        role: "user",
+        injectedFrom: arcId("target", "target_child"),
+        body: "Done: created TESTER.md in the repo root with contents \"HELLO\". Work marked done.",
+      })}
+    />
+  </List>
+)
+
+/** The injected turn beside an ordinary user turn, so the "📨 sender →" attribution
+ * reads as distinct from your own "user to …" input directly above it. */
+export const InjectedBesideUser = () => (
+  <List>
+    <Message
+      target="claude"
+      message={msg({ id: "u", role: "user", body: "spawn a codex worker to create the test file" })}
+    />
+    <Message
+      target="claude"
+      injectedFromLabel="codex · 9f2a"
+      message={msg({
+        id: "i",
+        role: "user",
+        injectedFrom: arcId("target", "target_child"),
+        body: "Created the file and ran the suite — all green. Anything else?",
+      })}
+    />
+  </List>
+)
+
 /** A meta prompt between a real user turn and the assistant reply, so the muted
  * card can be compared against the accented user card directly above it. */
 export const MetaInContext = () => (

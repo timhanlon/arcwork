@@ -38,6 +38,8 @@ const hookUserRow = (
   status: "final",
   model: null,
   requestJson: null,
+  injectedFromTargetSessionId: null,
+  injectedTargetMessageId: null,
   occurredAt: NOW,
   source: "hook:claude",
   dedupKey,

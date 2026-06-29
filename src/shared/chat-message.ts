@@ -43,6 +43,11 @@ export const ChatMessage = Schema.Struct({
   /** structured payload for `request`/`tool` rows, discriminated on `kind`;
    * absent for other roles */
   payload: Schema.optional(ChatMessagePayload),
+  /** when this turn was an agent message injected via `arc.agent.send` (delivered
+   * as a user turn but really from another agent), the real sender's target
+   * session; absent for an ordinary human user turn. The renderer attributes the
+   * row to this sender instead of drawing it as the user. */
+  injectedFrom: Schema.optional(TargetId),
   occurredAt: Schema.String,
   source: Schema.String,
 })

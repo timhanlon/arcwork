@@ -34,6 +34,9 @@ const SessionsStub = Layer.succeed(TargetSessionManager, {
       submits.push(req)
       return { accepted: submitAccepted }
     }),
+  // flushTo resolves the sender label off the session list for the marker; no
+  // sessions registered in the stub, so it falls back to the free-text sender.
+  list: Effect.sync(() => []),
 } as never)
 
 const LiveStub = Layer.succeed(LiveTargetStateService, {
@@ -155,5 +158,44 @@ describe("TargetInboxService delivery", () => {
   it("an unattributed lone message is pasted verbatim (reads as a plain user turn)", async () => {
     await runtime.runPromise(Effect.flatMap(TargetInboxService, (inbox) => inbox.enqueue(TARGET, "just this")))
     expect(submits[0]!.text).toBe("just this")
+  })
+
+  it("delivers one sender-group per turn as the contiguous prefix, preserving FIFO", async () => {
+    const childA = arcId("target", "target_childa")
+    const childB = arcId("target", "target_childb")
+    // Queue A1, B1, A2 mid-turn from two distinct senders.
+    activity = "generating"
+    await runtime.runPromise(
+      Effect.flatMap(TargetInboxService, (inbox) =>
+        inbox
+          .enqueue(TARGET, "A1", undefined, childA)
+          .pipe(
+            Effect.andThen(inbox.enqueue(TARGET, "B1", undefined, childB)),
+            Effect.andThen(inbox.enqueue(TARGET, "A2", undefined, childA)),
+          ),
+      ),
+    )
+    expect(submits).toEqual([])
+
+    // First idle flush delivers only the head sender's contiguous prefix — A1 —
+    // NOT A2 (which sits behind B1). The buggy all-same-sender filter would have
+    // pasted A1+A2 together and jumped B1's place in the queue.
+    activity = "idle"
+    await runtime.runPromise(Effect.flatMap(TargetInboxService, (inbox) => inbox.flushTo(TARGET)))
+    expect(submits).toHaveLength(1)
+    expect(submits[0]!.text).toContain("A1")
+    expect(submits[0]!.text).not.toContain("A2")
+    expect(submits[0]!.text).not.toContain("B1")
+    expect(await runtime.runPromise(pendingCount)).toBe(2)
+
+    // Next flush delivers B1 before A2 — FIFO across senders holds.
+    await runtime.runPromise(Effect.flatMap(TargetInboxService, (inbox) => inbox.flushTo(TARGET)))
+    expect(submits).toHaveLength(2)
+    expect(submits[1]!.text).toContain("B1")
+    expect(submits[1]!.text).not.toContain("A2")
+
+    await runtime.runPromise(Effect.flatMap(TargetInboxService, (inbox) => inbox.flushTo(TARGET)))
+    expect(submits[2]!.text).toContain("A2")
+    expect(await runtime.runPromise(pendingCount)).toBe(0)
   })
 })

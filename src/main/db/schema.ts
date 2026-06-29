@@ -148,6 +148,11 @@ export interface TargetMessageRow {
   readonly targetSessionId: TargetId
   readonly body: string
   readonly sender: string | null
+  /** the authoritative sender — the calling agent's target session, stamped from
+   * MCP provenance (not the model's free-text `sender`); null for a system/user
+   * nudge with no originating target. The marker delivered into the receiving
+   * PTY carries this so projection can attribute the turn. */
+  readonly senderTargetSessionId: TargetId | null
   readonly createdAt: string
   readonly deliveredAt: string | null
 }
@@ -211,6 +216,14 @@ export interface ChatMessageRow {
   readonly model: string | null
   /** serialized structured payload for request/tool rows; null otherwise */
   readonly requestJson: string | null
+  /** when this row is an injected agent message (delivered via `arc.agent.send`
+   * and pasted as a user turn), the real sender's target session; null for an
+   * ordinary human user turn. Set once at projection from the delivered marker. */
+  readonly injectedFromTargetSessionId: TargetId | null
+  /** the `target_messages` row this turn was delivered from — a breadcrumb back
+   * to the authoritative inbox record (the head inbox row id for a batched
+   * multi-message delivery); null only for non-injected rows. */
+  readonly injectedTargetMessageId: string | null
   readonly occurredAt: string
   readonly source: string
   readonly dedupKey: string
@@ -891,5 +904,16 @@ export const arcMigrations: Migrations = {
       delivered_at TEXT
     )`,
     `CREATE INDEX IF NOT EXISTS target_messages_pending ON target_messages(target_session_id, delivered_at, created_at, id)`,
+  ),
+  // Attribution for an injected agent message (arc.agent.send): the delivery is a
+  // PTY paste that lands as a `role: user` turn, so without this it renders as the
+  // human user. `target_messages.sender_target_session_id` is the authoritative
+  // sender (the calling agent, from MCP provenance); the projection stamps the
+  // resulting chat row with `injected_from_target_session_id` (+ a breadcrumb to
+  // the inbox row) so the renderer attributes the turn to that agent.
+  "0012_injected_message_attribution": sqlMigration(
+    `ALTER TABLE target_messages ADD COLUMN sender_target_session_id TEXT`,
+    `ALTER TABLE chat_messages ADD COLUMN injected_from_target_session_id TEXT`,
+    `ALTER TABLE chat_messages ADD COLUMN injected_target_message_id TEXT`,
   ),
 }

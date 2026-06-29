@@ -53,6 +53,7 @@ export const rowToChatMessage = (row: ChatMessageRow, provider?: Provider): Chat
   status: row.status,
   model: row.model ?? undefined,
   payload: parsePayload(row.requestJson),
+  ...(row.injectedFromTargetSessionId ? { injectedFrom: row.injectedFromTargetSessionId } : {}),
   occurredAt: row.occurredAt,
   source: row.source,
 })

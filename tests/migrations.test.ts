@@ -59,6 +59,7 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
           rawHookSignals: yield* tableExists("raw_hook_signals"),
           ledgerExists: yield* tableExists("arc_migrations"),
           chatMessageCols: yield* columnNames("chat_messages"),
+          targetMessageCols: yield* columnNames("target_messages"),
         }
       }),
     )
@@ -73,6 +74,10 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
     // The columns once bolted on by an ad-hoc ALTER are part of the baseline.
     expect(result.chatMessageCols).toContain("request_json")
     expect(result.chatMessageCols).toContain("model")
+    // 0012: injected-agent-message attribution, added by ALTER over the baseline.
+    expect(result.chatMessageCols).toContain("injected_from_target_session_id")
+    expect(result.chatMessageCols).toContain("injected_target_message_id")
+    expect(result.targetMessageCols).toContain("sender_target_session_id")
   })
 
   it("work migrations create the graph + comment tables and record each in the ledger", async () => {

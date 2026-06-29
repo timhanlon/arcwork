@@ -239,6 +239,12 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
 
       "arc.agent.send": (params) =>
         Effect.gen(function* () {
+          // The caller's own MCP identity is the authoritative sender — the
+          // calling agent's target session. We stamp this (never the model's
+          // free-text `from`, which it fills with the wrong handle) so the
+          // delivered turn can be attributed to that agent instead of rendering
+          // as the human user. Absent for a bearer-less/unstamped caller.
+          const { sessionId: senderTargetSessionId } = yield* readMcpProvenanceHeaders()
           // Fail loud on an undeliverable target rather than silently queuing into
           // the void — the caller should know the agent isn't there to receive it.
           const sessionList = yield* sessions.list
@@ -257,7 +263,7 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
               arcRequestError(`target session is not deliverable (no live session or resume path): ${params.targetSessionId}`),
             )
           }
-          yield* inbox.enqueue(params.targetSessionId, params.body, params.from)
+          yield* inbox.enqueue(params.targetSessionId, params.body, params.from, senderTargetSessionId)
           return { queued: true, targetSessionId: params.targetSessionId }
         }).pipe(Effect.orDie),
     }

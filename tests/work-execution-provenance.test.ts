@@ -45,6 +45,8 @@ const message = (over: Partial<ChatMessageRow> & Pick<ChatMessageRow, "id" | "oc
   status: "final",
   model: null,
   requestJson: null,
+  injectedFromTargetSessionId: null,
+  injectedTargetMessageId: null,
   source: "hook",
   dedupKey: over.id,
   ...over,

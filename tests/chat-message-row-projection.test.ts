@@ -22,6 +22,8 @@ const row = (over: Partial<ChatMessageRow>): ChatMessageRow => ({
   status: "final",
   model: null,
   requestJson: null,
+  injectedFromTargetSessionId: null,
+  injectedTargetMessageId: null,
   occurredAt: "2026-06-11T00:00:00.000Z",
   source: "artifact:claude",
   dedupKey: "target_01:assistant:message_01",

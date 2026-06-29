@@ -136,14 +136,20 @@ function MessageBody({
 export const Message = memo(function Message({
   message,
   target,
+  injectedFromLabel,
   onFocusSession,
 }: {
   readonly message: ChatMessage
   /** resolved target label (provider, disambiguated by session) for attribution */
   readonly target?: string
+  /** resolved label of the agent that injected this turn via `arc.agent.send`,
+   * when `message.injectedFrom` is set — attributes the turn to that sender
+   * instead of the human user */
+  readonly injectedFromLabel?: string
   /** focus the live target session waiting on a pending question */
   readonly onFocusSession?: (sessionId: TargetId) => void
 }): JSX.Element {
+  const injected = message.injectedFrom !== undefined
   const cls = [ITEM, ROLE_CARD[message.role], message.status === "streaming" ? "opacity-[0.92]" : ""]
     .filter(Boolean)
     .join(" ")
@@ -156,18 +162,37 @@ export const Message = memo(function Message({
         {/* "assistant" is the default voice and "tool" is named by the tool card
             below it — both add nothing the rest of the row doesn't already say,
             so drop the role word. Other roles keep their label. */}
-        {message.role !== "assistant" && message.role !== "tool" && (
-          <span className="text-fg-dim">{message.role}</span>
+        {/* An injected turn (arc.agent.send) is really from another agent, not
+            the human user: attribute it to that sender → the addressed target,
+            rather than the misleading "user to …". */}
+        {injected ? (
+          <>
+            <span className="text-accent normal-case tracking-normal">
+              📨 {injectedFromLabel ?? "agent"}
+            </span>
+            {target && (
+              <>
+                <span className="text-fg-faint">→</span>
+                <span className="text-fg-dim">{target}</span>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            {message.role !== "assistant" && message.role !== "tool" && (
+              <span className="text-fg-dim">{message.role}</span>
+            )}
+            {target &&
+              (message.role === "user" ? (
+                <>
+                  <span className="text-fg-faint">to</span>
+                  <span className="text-fg-dim">{target}</span>
+                </>
+              ) : (
+                <span className="text-fg-dim">{target}</span>
+              ))}
+          </>
         )}
-        {target &&
-          (message.role === "user" ? (
-            <>
-              <span className="text-fg-faint">to</span>
-              <span className="text-fg-dim">{target}</span>
-            </>
-          ) : (
-            <span className="text-fg-dim">{target}</span>
-          ))}
         {message.role !== "user" && message.model && (
           <span className="text-fg-dim normal-case tracking-normal">{message.model}</span>
         )}

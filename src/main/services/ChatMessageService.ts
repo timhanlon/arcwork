@@ -207,6 +207,10 @@ export const ChatMessageServiceLive = Layer.effect(
             status: draft.status,
             model: draft.model ?? null,
             requestJson: draft.request ? JSON.stringify(draft.request) : null,
+            // Hook drafts are request/subagent/assistant rows; user turns (the
+            // only injected-message carrier) are transcript-owned, so never here.
+            injectedFromTargetSessionId: null,
+            injectedTargetMessageId: null,
             occurredAt: signal.observedAt,
             source: `hook:${signal.provider}`,
             dedupKey: draft.dedupKey,
@@ -267,11 +271,14 @@ export const ChatMessageServiceLive = Layer.effect(
       Effect.gen(function* () {
         let changed = 0
         const projected = yield* db.loadChatMessagesForChat(target.chatId)
+        const delivered = yield* db.listDeliveredInjectedMessages(target.id)
+        const injectedDeliveries = new Map(delivered.map((d) => [d.id, d.senderTargetSessionId] as const))
         const ctx: ArtifactProjectionContext = {
           rows,
           target,
           projected,
           projectionTime: yield* nowIso,
+          injectedDeliveries,
           reconcileComposerUser,
           relabelHookUserAsMeta,
         }
@@ -286,6 +293,8 @@ export const ChatMessageServiceLive = Layer.effect(
               dedupKey: spec.dedupKey,
               requestJson: spec.requestJson ?? null,
               model: spec.model ?? null,
+              injectedFromTargetSessionId: spec.injectedFromTargetSessionId ?? null,
+              injectedTargetMessageId: spec.injectedTargetMessageId ?? null,
             })
             if (spec.reconcile) {
               const claimed = yield* spec.reconcile(row)
@@ -412,6 +421,10 @@ export const ChatMessageServiceLive = Layer.effect(
           status: "final",
           model: null,
           requestJson: null,
+          // The user typed this in the composer — a genuine human turn, not an
+          // agent-injected message.
+          injectedFromTargetSessionId: null,
+          injectedTargetMessageId: null,
           occurredAt,
           source: "composer",
           dedupKey: composerOptimisticUserKey(req.targetSessionId, messageId),

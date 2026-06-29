@@ -67,6 +67,12 @@ export class ArcStore extends Context.Service<
       ids: ReadonlyArray<string>,
       deliveredAt: string,
     ) => Effect.Effect<void, SqlError>
+    /** Delivered, agent-attributed inbox rows for a target — the authority that
+     * lets projection verify an injected marker (id → real sender) rather than
+     * trusting the marker text. Only rows with a stamped sender + delivery. */
+    readonly listDeliveredInjectedMessages: (
+      targetSessionId: string,
+    ) => Effect.Effect<ReadonlyArray<{ readonly id: string; readonly senderTargetSessionId: TargetId }>, SqlError>
     readonly insertActivityEvent: (row: ActivityEventRow) => Effect.Effect<boolean, SqlError>
     readonly loadActivityEvents: (
       targetSessionId: string,
@@ -310,6 +316,7 @@ export const ArcStoreLive = Layer.effect(
         targetSessionId: row.targetSessionId,
         body: row.body,
         sender: row.sender,
+        senderTargetSessionId: row.senderTargetSessionId,
         createdAt: row.createdAt,
         deliveredAt: row.deliveredAt,
       })}`.pipe(Effect.asVoid)
@@ -317,6 +324,7 @@ export const ArcStoreLive = Layer.effect(
     const listPendingTargetMessages = (targetSessionId: string) =>
       sql<TargetMessageRow>`
         SELECT id, target_session_id AS targetSessionId, body, sender,
+               sender_target_session_id AS senderTargetSessionId,
                created_at AS createdAt, delivered_at AS deliveredAt
         FROM target_messages
         WHERE target_session_id = ${targetSessionId} AND delivered_at IS NULL
@@ -328,6 +336,14 @@ export const ArcStoreLive = Layer.effect(
         : sql`UPDATE target_messages SET delivered_at = ${deliveredAt} WHERE id IN ${sql.in(ids)}`.pipe(
             Effect.asVoid,
           )
+
+    const listDeliveredInjectedMessages = (targetSessionId: string) =>
+      sql<{ id: string; senderTargetSessionId: TargetId }>`
+        SELECT id, sender_target_session_id AS senderTargetSessionId
+        FROM target_messages
+        WHERE target_session_id = ${targetSessionId}
+          AND delivered_at IS NOT NULL
+          AND sender_target_session_id IS NOT NULL`
 
     const insertActivityEvent = (row: ActivityEventRow) =>
       Effect.gen(function* () {
@@ -481,6 +497,7 @@ export const ArcStoreLive = Layer.effect(
       enqueueTargetMessage,
       listPendingTargetMessages,
       markTargetMessagesDelivered,
+      listDeliveredInjectedMessages,
       insertActivityEvent,
       loadActivityEvents,
       loadActivityEventsForChat,

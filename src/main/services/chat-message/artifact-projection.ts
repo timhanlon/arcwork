@@ -15,6 +15,7 @@ import type { ToolCall as ToolCallData } from "../../../shared/tool-call.js"
 import { decodeQuestionTool } from "../../../shared/question-tools.js"
 import { type ChatId, newArcId, type TargetId } from "../../../shared/ids.js"
 import { str } from "../../hooks/hook-input.js"
+import { parseInjectedMarker } from "../../../shared/injected-message.js"
 import {
   assistantDedupKey,
   metaDedupKey,
@@ -175,6 +176,8 @@ export const artifactRow = (
     readonly dedupKey: string
     readonly requestJson?: string | null
     readonly model?: string | null
+    readonly injectedFromTargetSessionId?: TargetId | null
+    readonly injectedTargetMessageId?: string | null
   },
 ): ChatMessageRow => ({
   id: newArcId("message"),
@@ -188,6 +191,8 @@ export const artifactRow = (
   status: fields.status,
   model: fields.model ?? null,
   requestJson: fields.requestJson ?? null,
+  injectedFromTargetSessionId: fields.injectedFromTargetSessionId ?? null,
+  injectedTargetMessageId: fields.injectedTargetMessageId ?? null,
   occurredAt: fields.occurredAt,
   source: `artifact:${provider}`,
   dedupKey: fields.dedupKey,
@@ -253,6 +258,11 @@ export type ArtifactRowSpec = {
   readonly label: string
   readonly requestJson?: string | null
   readonly model?: string | null
+  /** set when this user turn was an agent message injected via `arc.agent.send`
+   * (its transcript text carried the attribution marker); attributes the row to
+   * the real sender instead of the human user. */
+  readonly injectedFromTargetSessionId?: TargetId | null
+  readonly injectedTargetMessageId?: string | null
   readonly reconcile?: (row: ChatMessageRow) => Effect.Effect<boolean, never>
 }
 
@@ -263,6 +273,11 @@ export type ArtifactProjectionContext = {
   // Wall-clock captured once per projection pass. Used only when the transcript
   // has no stable session clock.
   readonly projectionTime: string
+  // Delivered agent-attributed inbox rows for this target, keyed by inbox row id
+  // → real sender. The authority for verifying an injected marker: userKind only
+  // re-attributes a marker whose id resolves here to the same sender, so a typed
+  // look-alike marker can't spoof attribution.
+  readonly injectedDeliveries: ReadonlyMap<string, TargetId>
   // Reconcile a composer optimistic-echo row onto the transcript user row, in
   // place. The service supplies it only when the optimistic echo is enabled;
   // absent → userKind falls through to a fresh insert. Pre-wrapped to never fail.
@@ -401,18 +416,36 @@ const recapKind: ArtifactProjectionKind = (ctx) =>
 // duplicate; otherwise the bubble lands fresh via the upsert.
 const userKind: ArtifactProjectionKind = (ctx) =>
   messageRowSpecs(ctx, "user", (message, occurredAt) => {
-    const body = str(message.text)
-    if (!body) return null
+    const text = str(message.text)
+    if (!text) return null
+    // A turn injected via arc.agent.send was pasted as a user turn, so its
+    // transcript text leads with the attribution marker. Strip it for the stored
+    // body and tag the row with the real sender, so it renders as that agent
+    // rather than the human user. An ordinary prompt has no marker → unchanged.
+    // The inbox row is the authority: only re-attribute when the marker's id
+    // resolves to a delivered row from the same sender. A typed/look-alike marker
+    // (no matching delivery) is left verbatim as an ordinary user turn.
+    const marker = parseInjectedMarker(text)
+    const injected =
+      marker?.targetMessageId && ctx.injectedDeliveries.get(marker.targetMessageId) === marker.senderTargetSessionId
+        ? marker
+        : null
     const userId = message.nativeMessageId ?? message.id
     const reconcileComposerUser = ctx.reconcileComposerUser
     return {
       role: "user",
       messageId: userId,
-      body,
+      body: injected ? injected.body : text,
       status: "final",
       occurredAt,
       dedupKey: userDedupKey(ctx.target.id, userId),
-      label: "artifact user",
+      label: injected ? "artifact injected user" : "artifact user",
+      ...(injected
+        ? {
+            injectedFromTargetSessionId: injected.senderTargetSessionId,
+            injectedTargetMessageId: injected.targetMessageId,
+          }
+        : {}),
       reconcile: reconcileComposerUser ? (row) => reconcileComposerUser(row) : undefined,
     }
   })

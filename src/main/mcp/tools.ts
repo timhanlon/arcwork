@@ -139,7 +139,7 @@ const AgentSendResult = Schema.Struct({
 
 const AgentSendTool = Tool.make("arc.agent.send", {
   description:
-    "Send a message INTO a running orchestrated target session (a follow-up, a correction, a peer message). The message is queued on that target's inbox and delivered as its next turn when it is idle — pasted into its live session — or held until its current turn ends. Use this to talk to an agent you spawned with arc.agent.spawn; `targetSessionId` is the id that spawn returned. `from` optionally labels the sender.",
+    "Send a message INTO a running orchestrated target session (a follow-up, a correction, a peer message). The message is queued on that target's inbox and delivered as its next turn when it is idle — pasted into its live session — or held until its current turn ends. Use this to talk to an agent you spawned with arc.agent.spawn, or to report back to the orchestrator that spawned you; `targetSessionId` is the recipient (the id spawn returned, or your orchestrator's id). Arc stamps the real sender from your session identity and attributes the delivered turn to you automatically — `from` is only an optional display label, not the identity.",
   parameters: Schema.Struct({
     targetSessionId: TargetId,
     body: Schema.String,

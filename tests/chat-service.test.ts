@@ -150,6 +150,8 @@ describe("assistant turn repair (Stop)", () => {
     status: "streaming",
     model: "claude",
     requestJson: null,
+    injectedFromTargetSessionId: null,
+    injectedTargetMessageId: null,
     occurredAt: "2026-06-08T00:00:01.000Z",
     source: "hook",
     dedupKey,
@@ -182,6 +184,8 @@ describe("assistant turn repair (Stop)", () => {
             status: "final",
             model: "claude",
             requestJson: null,
+            injectedFromTargetSessionId: null,
+            injectedTargetMessageId: null,
             occurredAt: "2026-06-08T00:00:02.000Z",
             source: "hook",
             dedupKey: "target_1:sha-divergent:assistant-final",
@@ -221,6 +225,8 @@ describe("assistant turn repair (Stop)", () => {
             status: "final",
             model: "claude",
             requestJson: null,
+            injectedFromTargetSessionId: null,
+            injectedTargetMessageId: null,
             occurredAt: "2026-06-08T00:00:01.000Z",
             source: "hook",
             dedupKey: "target_1:sha-divergent:assistant-final",
@@ -275,6 +281,8 @@ describe("assistant turn repair (Stop)", () => {
             status: "final",
             model: "claude",
             requestJson: null,
+            injectedFromTargetSessionId: null,
+            injectedTargetMessageId: null,
             occurredAt: "2026-06-08T00:00:00.500Z",
             source: "hook",
             dedupKey: "target_1:turn-0:assistant-final",
@@ -334,6 +342,8 @@ describe("composer reconciliation", () => {
     status: "final",
     model: null,
     requestJson: null,
+    injectedFromTargetSessionId: null,
+    injectedTargetMessageId: null,
     occurredAt: NOW,
     source: "composer",
     dedupKey: "target_1:composer-user:message_1",
@@ -353,6 +363,41 @@ describe("composer reconciliation", () => {
     )
 
     expect(messages).toHaveLength(0)
+  })
+
+  it("writes injected attribution on a reprojection update, not only on insert", async () => {
+    // A first projection inserts the user row before attribution is known; a later
+    // re-ingest strips the marker from the body AND carries the attribution. The
+    // update path must persist it, or the row keeps rendering as a plain user turn.
+    const sender = arcId("target", "target_child")
+    const result = await run(
+      Effect.gen(function* () {
+        const db = yield* ArcStore
+        yield* seed
+        const key = "target_1:turn_1:user"
+        yield* db.upsertChatMessage(
+          userRow({ id: arcId("message", "u1"), source: "artifact:claude", dedupKey: key }),
+          "insert",
+        )
+        yield* db.upsertChatMessage(
+          userRow({
+            id: arcId("message", "u1"),
+            source: "artifact:claude",
+            dedupKey: key,
+            body: "the report body",
+            injectedFromTargetSessionId: sender,
+            injectedTargetMessageId: "inbox_x",
+          }),
+          "replace_keep_time",
+        )
+        return yield* db.loadChatMessagesForChat("chat_1")
+      }),
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0]!.body).toBe("the report body")
+    expect(result[0]!.injectedFromTargetSessionId).toBe(sender)
+    expect(result[0]!.injectedTargetMessageId).toBe("inbox_x")
   })
 
   it("converges an optimistic composer row into the hook row when bodies match", async () => {

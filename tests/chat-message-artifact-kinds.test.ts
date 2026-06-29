@@ -7,6 +7,7 @@ import {
 } from "../src/main/services/chat-message/artifact-projection.js"
 import type { ExtractedRows, MessageRow, ToolCallRow } from "../src/main/ingest/db/schema.js"
 import { arcId } from "../src/shared/ids.js"
+import { withInjectedMarker } from "../src/shared/injected-message.js"
 
 const TARGET = { id: arcId("target", "target_1"), chatId: arcId("chat", "chat_1") }
 
@@ -66,6 +67,7 @@ const context = (rows: ExtractedRows, over: Partial<ArtifactProjectionContext> =
   target: TARGET,
   projected: [],
   projectionTime: "2026-06-11T12:00:00.000Z",
+  injectedDeliveries: new Map(),
   relabelHookUserAsMeta: () => Effect.succeed(false),
   ...over,
 })
@@ -178,5 +180,42 @@ describe("artifact projection kinds", () => {
     const rows = extracted({ messages: [message({ id: "m", role: "meta", text: "/loop", nativeMessageId: "mid" })] })
     const meta = allSpecs(context(rows)).find((s) => s.role === "meta")
     expect(meta?.reconcile).toBeDefined()
+  })
+
+  describe("injected-message attribution", () => {
+    const SENDER = arcId("target", "target_aaaaaaaaaaaaaaaaaaaaaaaaaa")
+    const INBOX = "inbox_aaaaaaaaaaaaaaaaaaaaaaaaaa"
+    const injectedRows = extracted({
+      messages: [
+        message({
+          id: "u",
+          role: "user",
+          nativeMessageId: "uid",
+          text: withInjectedMarker(SENDER, "codex", "the report body", INBOX),
+        }),
+      ],
+    })
+
+    it("attributes the turn and strips the marker when the inbox row is delivered", () => {
+      const ctx = context(injectedRows, { injectedDeliveries: new Map([[INBOX, SENDER]]) })
+      const user = allSpecs(ctx).find((s) => s.role === "user")
+      expect(user?.body).toBe("the report body")
+      expect(user?.injectedFromTargetSessionId).toBe(SENDER)
+      expect(user?.injectedTargetMessageId).toBe(INBOX)
+    })
+
+    it("does NOT attribute a look-alike marker with no matching delivery (anti-spoof)", () => {
+      const user = allSpecs(context(injectedRows)).find((s) => s.role === "user")
+      // verbatim body, no attribution — a typed marker can't impersonate an agent
+      expect(user?.body).toContain("[arc:from=")
+      expect(user?.injectedFromTargetSessionId).toBeUndefined()
+    })
+
+    it("does NOT attribute when the delivered row's sender disagrees with the marker", () => {
+      const other = arcId("target", "target_bbbbbbbbbbbbbbbbbbbbbbbbbb")
+      const ctx = context(injectedRows, { injectedDeliveries: new Map([[INBOX, other]]) })
+      const user = allSpecs(ctx).find((s) => s.role === "user")
+      expect(user?.injectedFromTargetSessionId).toBeUndefined()
+    })
   })
 })

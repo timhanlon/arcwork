@@ -48,6 +48,8 @@ const msg = (over: Partial<ChatMessageRow> & { id: MessageId; dedupKey: string }
   status: "pending",
   model: null,
   requestJson: null,
+  injectedFromTargetSessionId: null,
+  injectedTargetMessageId: null,
   occurredAt: NOW,
   source: "test",
   ...over,
