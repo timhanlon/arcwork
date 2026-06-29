@@ -189,13 +189,7 @@ const encodeExecution = (execution: WorkExecution | undefined): string | null =>
 
 const decodeExecution = (json: string | null): WorkExecution | undefined => {
   if (!json) return undefined
-  let value: unknown
-  try {
-    value = JSON.parse(json)
-  } catch {
-    return undefined
-  }
-  const decoded = Schema.decodeUnknownOption(WorkExecution)(value)
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(WorkExecution))(json)
   return Option.isSome(decoded) && (decoded.value.harness || decoded.value.model) ? decoded.value : undefined
 }
 

@@ -12,20 +12,9 @@ import type { ChatMessage } from "../../../shared/chat-message.js"
 import type { PendingRequest } from "../../../shared/chat-request.js"
 import { ALL_PROVIDERS, type Provider } from "../../../shared/provider.js"
 
-const decodePayload = Schema.decodeUnknownOption(ChatMessagePayload)
-
 /** Tolerant: a malformed/legacy `request_json` degrades to no structured payload. */
-export const parsePayload = (json: string | null): ChatMessage["payload"] => {
-  if (!json) return undefined
-  let value: unknown
-  try {
-    value = JSON.parse(json)
-  } catch {
-    return undefined
-  }
-  const decoded = decodePayload(value)
-  return Option.isSome(decoded) ? decoded.value : undefined
-}
+export const parsePayload = (json: string | null): ChatMessage["payload"] =>
+  json ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(ChatMessagePayload))(json)) : undefined
 
 /**
  * Classify a pending request row for the sidebar flag. Permission is no longer a
