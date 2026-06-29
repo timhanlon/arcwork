@@ -48,6 +48,10 @@ const PrimedWork = Schema.Struct({
 const PrimeResult = Schema.Struct({
   chat: Schema.optional(Schema.Struct({ id: ChatId, title: Schema.String })),
   target: Schema.optional(Schema.Struct({ id: TargetId, provider: Schema.String, cwd: Schema.String })),
+  /** the orchestrator that spawned this session, when it was spawned by one —
+   * the target id to report back to via `arc.agent.send`. Absent for a manual /
+   * top-level session. */
+  spawnedBy: Schema.optional(TargetId),
   assignedWork: Schema.Array(PrimedWork),
 })
 
@@ -124,7 +128,7 @@ const AgentSpawnTool = Tool.make("arc.agent.spawn", {
 
 const PrimeTool = Tool.make("arc.prime", {
   description:
-    "Return startup context for the current Arc-launched target session: the chat it belongs to, target session metadata, and work currently delegated to that target. This is read-only and derives target/chat from MCP transport provenance; `sessionId`/`chatId` are fallback params for clients without stamped headers.",
+    "Return startup context for the current Arc-launched target session: the chat it belongs to, target session metadata, the orchestrator that spawned this session (`spawnedBy`, when it was spawned by one — the target id to report back to via arc.agent.send), and work currently delegated to that target. This is read-only and derives target/chat from MCP transport provenance; `sessionId`/`chatId` are fallback params for clients without stamped headers.",
   parameters: Schema.Struct({
     sessionId: Schema.optional(Schema.String),
     chatId: Schema.optional(ChatId),

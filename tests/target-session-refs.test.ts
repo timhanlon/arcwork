@@ -95,4 +95,40 @@ describe("target session reads resolve through the comm + diff endpoints", () =>
     expect(session.channelId).not.toBeNull() // comm endpoint still resolves
     expect(session.provider).toBe("codex")
   })
+
+  it("persists spawnedBy and keeps it immutable across a later re-upsert", async () => {
+    const result = await run(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient
+        const db = yield* ArcStore
+        yield* sql.unsafe(`INSERT INTO workspaces (id, path, name, created_at, last_opened_at)
+          VALUES ('ws1', '/repo/main', 'main', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+        yield* sql.unsafe(`INSERT INTO chats (id, workspace_id, title, created_at)
+          VALUES ('chatX', 'ws1', 'x', '2026-01-01T00:00:00Z')`)
+
+        const base = {
+          id: arcId("target", "tsChild"),
+          chatId: arcId("chat", "chatX"),
+          provider: "claude",
+          preset: null,
+          cwd: "/repo/main",
+          nativeSessionId: null,
+          nativeTranscriptPath: null,
+          state: "running",
+          startedAt: "2026-01-02T00:00:00Z",
+        }
+        // Orchestrated launch records the spawning parent.
+        yield* db.upsertTargetSession({ ...base, spawnedBy: arcId("target", "tsParent") })
+        const afterCreate = (yield* db.loadTargetSessions).find((s) => s.id === "tsChild")!
+        // A later state-change persist that doesn't carry spawnedBy must not erase it.
+        yield* db.upsertTargetSession({ ...base, state: "exited" })
+        const afterUpdate = (yield* db.loadTargetSessions).find((s) => s.id === "tsChild")!
+        return { afterCreate, afterUpdate }
+      }),
+    )
+
+    expect(result.afterCreate.spawnedBy).toBe("tsParent")
+    expect(result.afterUpdate.spawnedBy).toBe("tsParent") // immutable on conflict
+    expect(result.afterUpdate.state).toBe("exited") // other fields still update
+  })
 })

@@ -196,6 +196,9 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
             cols: params.cols,
             rows: params.rows,
             origin: "orchestrated",
+            // Persist the parent→child link (the spawning caller's target id) so it
+            // survives a restart / re-prime — arc.prime re-surfaces it to the child.
+            spawnedBy: parentTargetId,
             reuseExisting: false,
           })
           let assignedWork: Work | undefined
@@ -227,6 +230,10 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
           return {
             chat: chat ? { id: chat.id, title: chat.title } : undefined,
             target: target ? { id: target.id, provider: target.provider, cwd: target.cwd } : undefined,
+            // The orchestrator that spawned this session, so a re-priming child
+            // re-learns who to report to via arc.agent.send. Absent for a manual
+            // / top-level session.
+            spawnedBy: target?.spawnedBy,
             assignedWork: assignedWork.map((w) => ({
               id: w.id,
               title: w.title,

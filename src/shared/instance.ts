@@ -39,6 +39,10 @@ export const TargetSession = Schema.Struct({
   id: TargetId,
   provider: Schema.String,
   origin: Schema.optional(TargetOrigin),
+  /** the orchestrator that spawned this session (the `arc.agent.spawn` caller),
+   * for an orchestrated launch — the durable back-channel link a child reads to
+   * message its parent. Absent for manual/top-level sessions. */
+  spawnedBy: Schema.optional(TargetId),
   preset: Schema.optional(Schema.String),
   chatId: ChatId, // the chat this session belongs to
   cwd: Schema.String, // worktree root — the instance binding

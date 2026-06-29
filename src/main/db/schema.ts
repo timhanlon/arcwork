@@ -187,6 +187,11 @@ export interface TargetSessionRow {
   readonly chatId: ChatId
   readonly provider: string
   readonly origin?: string
+  /** the orchestrator that spawned this session (`arc.agent.spawn` caller's
+   * target id), for an orchestrated launch; null for a manual/top-level session.
+   * Set once at creation — the durable back-channel link a re-priming child reads
+   * to message its parent. */
+  readonly spawnedBy?: string | null
   readonly preset: string | null
   readonly cwd: string
   /** comm endpoint: the `channels` row this worker talks through */
@@ -915,5 +920,11 @@ export const arcMigrations: Migrations = {
     `ALTER TABLE target_messages ADD COLUMN sender_target_session_id TEXT`,
     `ALTER TABLE chat_messages ADD COLUMN injected_from_target_session_id TEXT`,
     `ALTER TABLE chat_messages ADD COLUMN injected_target_message_id TEXT`,
+  ),
+  // The orchestrator that spawned an orchestrated session, persisted so the
+  // parent→child link survives a restart / re-prime (arc.prime re-surfaces it).
+  // Null for manual/top-level sessions. Set once at launch; never rewritten.
+  "0013_target_sessions_spawned_by": sqlMigration(
+    `ALTER TABLE target_sessions ADD COLUMN spawned_by TEXT`,
   ),
 }

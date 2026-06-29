@@ -60,6 +60,7 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
           ledgerExists: yield* tableExists("arc_migrations"),
           chatMessageCols: yield* columnNames("chat_messages"),
           targetMessageCols: yield* columnNames("target_messages"),
+          targetSessionCols: yield* columnNames("target_sessions"),
         }
       }),
     )
@@ -78,6 +79,8 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
     expect(result.chatMessageCols).toContain("injected_from_target_session_id")
     expect(result.chatMessageCols).toContain("injected_target_message_id")
     expect(result.targetMessageCols).toContain("sender_target_session_id")
+    // 0013: orchestrator back-channel link.
+    expect(result.targetSessionCols).toContain("spawned_by")
   })
 
   it("work migrations create the graph + comment tables and record each in the ledger", async () => {

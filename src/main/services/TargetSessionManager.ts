@@ -13,7 +13,7 @@ import { ArcStore } from "../db/store.js"
 import { withSqlOperation } from "../db/sql-operation.js"
 import { resolveArcDb } from "../db/paths.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
-import { type ChatId, newArcId } from "../../shared/ids.js"
+import { arcIdOrNull, type ChatId, newArcId } from "../../shared/ids.js"
 import { restorePersistedSessions } from "./target-session/boot-restore.js"
 import { buildProviderArgs, canResume, resumeArgs } from "./target-session/provider-args.js"
 import {
@@ -39,6 +39,9 @@ export interface LaunchRequest {
   readonly provider: string
   readonly chatId: ChatId
   readonly origin?: "manual" | "orchestrated"
+  /** the orchestrator spawning this session (its target id), for an orchestrated
+   * launch — persisted as the durable parent→child back-channel link. */
+  readonly spawnedBy?: string
   readonly reuseExisting?: boolean
   /** Diff endpoint to run in; defaults to the chat's own workspace. Letting it
    * differ is what makes the comm/diff cross-product expressible — a worker can
@@ -239,6 +242,7 @@ export const TargetSessionManagerLive = Layer.effect(
           chatId: s.chatId,
           provider: s.provider,
           origin: s.origin ?? "manual",
+          spawnedBy: s.spawnedBy ?? null,
           preset: s.preset ?? null,
           cwd: s.cwd,
           nativeSessionId: s.nativeSessionId ?? null,
@@ -383,6 +387,7 @@ export const TargetSessionManagerLive = Layer.effect(
           id,
           provider: req.provider,
           origin,
+          spawnedBy: arcIdOrNull("target", req.spawnedBy) ?? undefined,
           preset: req.preset,
           chatId: req.chatId,
           cwd,

@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import { arcIdOrNull } from "../../../shared/ids.js"
 import type { TargetSession } from "../../../shared/instance.js"
 import type { TargetSessionRow } from "../../db/schema.js"
 import { installProviderHooks } from "../../hooks/install.js"
@@ -39,6 +40,7 @@ export const restorePersistedSessions: Effect.Effect<
       id: r.id,
       provider: r.provider,
       origin: r.origin === "orchestrated" ? "orchestrated" : "manual",
+      spawnedBy: arcIdOrNull("target", r.spawnedBy) ?? undefined,
       preset: r.preset ?? undefined,
       chatId: r.chatId,
       cwd: r.cwd,
