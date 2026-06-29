@@ -1,3 +1,4 @@
+import { Schema } from "effect"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import type { GitChangeStatus, GitFileChange } from "../../../shared/git.js"
@@ -26,29 +27,36 @@ export interface LineStat {
   readonly isBinary: boolean
 }
 
-/** The `gh pr list --json` fields we request, shaped loosely — gh emits
- * uppercase enums and may omit/blank some fields, normalized in {@link mapGhPullRequest}. */
-export interface GhPullRequest {
-  readonly number: number
-  readonly id?: string | null
-  readonly title?: string | null
-  readonly body?: string | null
-  readonly state?: string | null
-  readonly isDraft?: boolean | null
-  readonly author?: { readonly login?: string | null } | null
-  readonly headRefName?: string | null
-  readonly headRefOid?: string | null
-  readonly headRepositoryOwner?: { readonly login?: string | null } | null
-  readonly headRepository?: { readonly name?: string | null } | null
-  readonly baseRefName?: string | null
-  readonly reviewDecision?: string | null
-  readonly mergeable?: string | null
-  readonly mergeStateStatus?: string | null
-  readonly url?: string | null
-  readonly statusCheckRollup?: ReadonlyArray<Record<string, unknown>> | null
-  readonly createdAt?: string | null
-  readonly updatedAt?: string | null
-}
+const nullableString = Schema.optional(Schema.NullOr(Schema.String))
+const loginStruct = Schema.optional(Schema.NullOr(Schema.Struct({ login: nullableString })))
+
+/** The `gh pr list --json` fields we request, shaped loosely — gh emits uppercase
+ * enums and may omit/blank some fields, normalized in {@link mapGhPullRequest}.
+ * Decoded (not cast) from the gh subprocess output, so a malformed payload fails
+ * cleanly instead of flowing in as a lie: every field is optional/nullable so any
+ * real payload passes, and excess gh fields are ignored by the struct. */
+export const GhPullRequest = Schema.Struct({
+  number: Schema.Number,
+  id: nullableString,
+  title: nullableString,
+  body: nullableString,
+  state: nullableString,
+  isDraft: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  author: loginStruct,
+  headRefName: nullableString,
+  headRefOid: nullableString,
+  headRepositoryOwner: loginStruct,
+  headRepository: Schema.optional(Schema.NullOr(Schema.Struct({ name: nullableString }))),
+  baseRefName: nullableString,
+  reviewDecision: nullableString,
+  mergeable: nullableString,
+  mergeStateStatus: nullableString,
+  url: nullableString,
+  statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(Schema.Record(Schema.String, Schema.Unknown)))),
+  createdAt: nullableString,
+  updatedAt: nullableString,
+})
+export type GhPullRequest = typeof GhPullRequest.Type
 
 export const GH_PR_FIELDS = [
   "number",

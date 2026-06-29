@@ -1,4 +1,4 @@
-import { Cause, Context, Duration, Effect, Fiber, Layer, PubSub, Queue, type Scope, Stream } from "effect"
+import { Cause, Context, Duration, Effect, Fiber, Layer, PubSub, Queue, Schema, type Scope, Stream } from "effect"
 import { watch as watchFs, type FSWatcher } from "node:fs"
 import * as path from "node:path"
 import type {
@@ -29,7 +29,7 @@ import {
   bool,
   defaultBranchRemote,
   GH_PR_FIELDS,
-  type GhPullRequest,
+  GhPullRequest,
   githubIdentity,
   parseRemotes,
   parseRemotesJson,
@@ -444,10 +444,9 @@ export const GitServiceLive = Layer.effect(
           return []
         }
 
-        const parsed = yield* Effect.try({
-          try: () => JSON.parse(result.stdout) as ReadonlyArray<GhPullRequest>,
-          catch: (e) => arcRequestError(`PR sync parse failed for ${slug}: ${e}`),
-        })
+        const parsed = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(GhPullRequest)))(
+          result.stdout,
+        ).pipe(Effect.mapError((e) => arcRequestError(`PR sync parse failed for ${slug}: ${e}`)))
 
         const now = yield* nowIso
         const rows: Array<PullRequestRow> = []
