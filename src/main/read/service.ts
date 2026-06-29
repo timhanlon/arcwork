@@ -186,40 +186,38 @@ export const ReadServiceLive = Layer.effect(
       readonly includeClosedWorkByDefault: boolean
       readonly workspaceId: string
     }) => {
-      const where: Array<string> = []
-      const values: Array<string> = []
       if (args.kinds.length === 0) return Effect.succeed([] as ReadonlyArray<SearchDocumentRow>)
-      where.push(`d.kind IN (${args.kinds.map(() => "?").join(", ")})`)
-      values.push(...args.kinds)
-      // Scope to the whole project, not the one workspace: a repository's main
-      // checkout and its worktrees are distinct workspaces but share their work
-      // and chats, so anchor by repository when the workspace has one. A plain
-      // (non-git) folder has no repository and stays scoped to just itself.
-      where.push(`d.workspace_id IN (
-        SELECT w.id FROM workspaces w
-        WHERE w.id = ?
-           OR (w.repository_id IS NOT NULL
-               AND w.repository_id = (SELECT repository_id FROM workspaces WHERE id = ?))
-      )`)
-      values.push(args.workspaceId, args.workspaceId)
+      const hasTerms = args.terms.length > 0
 
-      if (args.terms.length > 0) {
-        where.push("search_document_fts MATCH ?")
-        values.push(ftsQuery(args.terms))
-      }
+      const conds = [
+        sql`d.kind IN ${sql.in(args.kinds)}`,
+        // Scope to the whole project, not the one workspace: a repository's main
+        // checkout and its worktrees are distinct workspaces but share their work
+        // and chats, so anchor by repository when the workspace has one. A plain
+        // (non-git) folder has no repository and stays scoped to just itself.
+        sql`d.workspace_id IN (
+          SELECT w.id FROM workspaces w
+          WHERE w.id = ${args.workspaceId}
+             OR (w.repository_id IS NOT NULL
+                 AND w.repository_id = (SELECT repository_id FROM workspaces WHERE id = ${args.workspaceId}))
+        )`,
+      ]
+      if (hasTerms) conds.push(sql`search_document_fts MATCH ${ftsQuery(args.terms)}`)
       if (args.filters.chatId && !args.filters.workspaceId) {
-        where.push("(d.kind = 'work' OR d.ref = ?)")
-        values.push(args.filters.chatId)
+        conds.push(sql`(d.kind = 'work' OR d.ref = ${args.filters.chatId})`)
       }
       if (args.filters.status && args.filters.status.length > 0) {
-        where.push("(d.kind != 'work' OR d.status IN (" + args.filters.status.map(() => "?").join(", ") + "))")
-        values.push(...args.filters.status)
+        conds.push(sql`(d.kind != 'work' OR d.status IN ${sql.in(args.filters.status)})`)
       } else if (!args.includeClosedWorkByDefault) {
-        where.push("(d.kind != 'work' OR d.status IN ('open', 'active', 'blocked'))")
+        conds.push(sql`(d.kind != 'work' OR d.status IN ('open', 'active', 'blocked'))`)
       }
 
-      const rankExpr = args.terms.length > 0 ? "bm25(search_document_fts)" : "NULL"
-      const query = `
+      const ftsJoin = hasTerms
+        ? sql`JOIN search_document_fts ON search_document_fts.rowid = d.rowid`
+        : sql``
+      const rankExpr = hasTerms ? sql`bm25(search_document_fts)` : sql`NULL`
+
+      return sql<SearchDocumentRow>`
         SELECT
           d.ref AS "ref",
           d.kind AS "kind",
@@ -234,10 +232,9 @@ export const ReadServiceLive = Layer.effect(
           d.updated_at AS "updatedAt",
           ${rankExpr} AS "rank"
         FROM search_document d
-        ${args.terms.length > 0 ? "JOIN search_document_fts ON search_document_fts.rowid = d.rowid" : ""}
-        WHERE ${where.join(" AND ")}
+        ${ftsJoin}
+        WHERE ${sql.and(conds)}
       `
-      return sql.unsafe<SearchDocumentRow>(query, values)
     }
 
     const searchMessageRefs = (chatId: string, terms: ReadonlyArray<string>) =>
