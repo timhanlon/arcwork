@@ -165,7 +165,7 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
 
       "arc.agent.spawn": (params) =>
         Effect.gen(function* () {
-          const { chatId: headerChatId } = yield* readMcpProvenanceHeaders()
+          const { chatId: headerChatId, sessionId: parentTargetId } = yield* readMcpProvenanceHeaders()
           const headerChat = headerChatId ? arcId("chat", headerChatId) : undefined
           // Don't let a caller launch the session under one chat while the
           // work-link provenance is recorded under another: the session uses this
@@ -184,7 +184,7 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
           // launch prompt (priming), then minted into the spawned session below.
           const work0 = params.workRefId ? yield* work.get(params.workRefId) : null
           const prompt = work0
-            ? buildOrchestrationPrompt(params.provider, work0, params.instructions)
+            ? buildOrchestrationPrompt(params.provider, work0, params.instructions, parentTargetId)
             : params.instructions
           const session = yield* sessions.launch({
             provider: params.provider,
