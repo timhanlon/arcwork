@@ -1,3 +1,4 @@
+import { Result } from "effect"
 import { describe, expect, it } from "vitest"
 import { hookSignalToActivityDrafts } from "../src/main/hooks/agent-event.js"
 import { hookSignalToChatMessageDrafts } from "../src/main/hooks/chat-message.js"
@@ -9,11 +10,8 @@ import { toSignal } from "../src/main/hooks/signals.js"
 
 const wire = (body: Record<string, unknown>): string => JSON.stringify(body)
 
-const parseSignal = (body: Record<string, unknown>) => {
-  const result = toSignal(wire(body))
-  if (!result.ok) throw new Error(result.reason)
-  return result.signal
-}
+const parseSignal = (body: Record<string, unknown>) =>
+  Result.getOrThrow(toSignal(wire(body)))
 
 const withTarget = (body: Record<string, unknown>) =>
   parseSignal({

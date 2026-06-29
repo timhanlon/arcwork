@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events"
-import { Effect, Layer, ManagedRuntime, Stream } from "effect"
+import { Effect, Layer, ManagedRuntime, Result, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
@@ -78,11 +78,8 @@ const seed = Effect.gen(function* () {
   })
 })
 
-const parseSignal = (body: Record<string, unknown>): HookSignal => {
-  const result = toSignal(JSON.stringify(body))
-  if (!result.ok) throw new Error(result.reason)
-  return result.signal
-}
+const parseSignal = (body: Record<string, unknown>): HookSignal =>
+  Result.getOrThrow(toSignal(JSON.stringify(body)))
 
 // A Claude PermissionRequest for a non-question tool sets the live flag (it
 // persists no chat row — mapClaude returns [] — so the flag is its only effect).

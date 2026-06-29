@@ -1,3 +1,4 @@
+import { Result } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   chatIdFromSignal,
@@ -14,17 +15,16 @@ const CHAT = "chat_1"
 const TARGET = "target_1"
 const NOW = "2026-06-11T00:00:00.000Z"
 
-const signal = (body: Record<string, unknown>): HookSignal => {
-  const result = toSignal(JSON.stringify({
-    arc: { chatId: CHAT, targetSessionId: TARGET, targetProvider: body["declaredProvider"], hookSockPresent: true },
-    arcTargetSessionId: TARGET,
-    arcChatSessionId: CHAT,
-    observedAt: NOW,
-    ...body,
-  }))
-  if (!result.ok) throw new Error(result.reason)
-  return result.signal
-}
+const signal = (body: Record<string, unknown>): HookSignal =>
+  Result.getOrThrow(
+    toSignal(JSON.stringify({
+      arc: { chatId: CHAT, targetSessionId: TARGET, targetProvider: body["declaredProvider"], hookSockPresent: true },
+      arcTargetSessionId: TARGET,
+      arcChatSessionId: CHAT,
+      observedAt: NOW,
+      ...body,
+    })),
+  )
 
 const claude = (event: string, hookInput: Record<string, unknown>, sha = event): HookSignal =>
   signal({ declaredProvider: "claude", declaredEvent: event, hookInputSha256: sha, hookInput })

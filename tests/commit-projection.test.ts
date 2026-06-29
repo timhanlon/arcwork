@@ -1,3 +1,4 @@
+import { Result } from "effect"
 import { describe, expect, it } from "vitest"
 import { toSignal } from "../src/main/hooks/signals.js"
 import {
@@ -46,11 +47,8 @@ const commitWire = (over: { hookInput?: Record<string, unknown> } & Record<strin
   })
 }
 
-const signalFrom = (over: { hookInput?: Record<string, unknown> } & Record<string, unknown> = {}) => {
-  const parsed = toSignal(commitWire(over))
-  if (!parsed.ok) throw new Error(`bad fixture: ${parsed.reason}`)
-  return parsed.signal
-}
+const signalFrom = (over: { hookInput?: Record<string, unknown> } & Record<string, unknown> = {}) =>
+  Result.getOrThrow(toSignal(commitWire(over)))
 
 const workRow = (over: Partial<Work> & Pick<Work, "id" | "status" | "updatedAt">): Work => ({
   _tag: "Work",
@@ -85,7 +83,7 @@ describe("commit signal → fact", () => {
         arc: { chatId: "chat_1", targetSessionId: "target_1", targetProvider: "claude" },
       }),
     )
-    expect(claude.ok && isCommitSignal(claude.signal)).toBe(false)
+    expect(Result.isSuccess(claude) && isCommitSignal(claude.success)).toBe(false)
   })
 
   it("extracts the structured commit fact", () => {

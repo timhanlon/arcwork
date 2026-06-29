@@ -1,3 +1,4 @@
+import { Result } from "effect"
 import { describe, expect, it } from "vitest"
 import { hookSignalToChatMessageDrafts } from "../src/main/hooks/chat-message.js"
 import { composerOptimisticUserKey } from "../src/main/chat-message-keys.js"
@@ -5,11 +6,8 @@ import { toSignal } from "../src/main/hooks/signals.js"
 
 const wire = (body: Record<string, unknown>): string => JSON.stringify(body)
 
-const parseSignal = (body: Record<string, unknown>) => {
-  const result = toSignal(wire(body))
-  if (!result.ok) throw new Error(result.reason)
-  return result.signal
-}
+const parseSignal = (body: Record<string, unknown>) =>
+  Result.getOrThrow(toSignal(wire(body)))
 
 describe("composer prompt keys", () => {
   it("uses distinct optimistic keys per composer message", () => {

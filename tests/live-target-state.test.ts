@@ -1,3 +1,4 @@
+import { Result } from "effect"
 import { describe, expect, it } from "vitest"
 import type { TargetSession } from "../src/shared/instance.js"
 import { deriveActivity } from "../src/main/services/LiveTargetStateService.js"
@@ -18,13 +19,12 @@ const session = (over: Partial<TargetSession>): TargetSession => ({
   ...over,
 })
 
-const signal = (declaredEvent: string): HookSignal => {
-  const result = toSignal(
-    JSON.stringify({ declaredProvider: "claude", declaredEvent, observedAt: "2026-06-12T00:00:00.000Z" }),
+const signal = (declaredEvent: string): HookSignal =>
+  Result.getOrThrow(
+    toSignal(
+      JSON.stringify({ declaredProvider: "claude", declaredEvent, observedAt: "2026-06-12T00:00:00.000Z" }),
+    ),
   )
-  if (!result.ok) throw new Error(result.reason)
-  return result.signal
-}
 
 describe("deriveActivity", () => {
   const noTurns = new Set<string>()

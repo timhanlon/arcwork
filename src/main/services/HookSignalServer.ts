@@ -1,4 +1,4 @@
-import { Context, Effect, FiberSet, Layer } from "effect"
+import { Context, Effect, FiberSet, Layer, Result } from "effect"
 import { EventEmitter } from "node:events"
 import * as fs from "node:fs"
 import * as net from "node:net"
@@ -91,13 +91,13 @@ export const HookSignalServerLive = Layer.effect(
                 for (const line of buf.split("\n")) {
                   if (!line.trim()) continue
                   const signal = toSignal(line)
-                  if (signal.ok) events.emit("signal", signal.signal)
-                  else {
-                    runFork(Effect.logWarning(`[arc-hook] dropped record: ${signal.reason}`))
+                  if (Result.isFailure(signal)) {
+                    runFork(Effect.logWarning(`[arc-hook] dropped record: ${signal.failure.reason}`))
                     continue
                   }
+                  events.emit("signal", signal.success)
                   const binding = toBinding(line)
-                  if (binding.ok) events.emit("binding", binding.binding)
+                  if (Result.isSuccess(binding)) events.emit("binding", binding.success)
                 }
               })
               conn.on("error", () => {

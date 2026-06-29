@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto"
 import * as os from "node:os"
 import * as path from "node:path"
-import { arcIdOrNull, type ChatId, type TargetId } from "../../shared/ids.js"
+import { Data, Result, Schema } from "effect"
+import { arcIdOrNull, ChatId, TargetId } from "../../shared/ids.js"
 import { arcWorkRuntimeDir, resolveProfile } from "../db/paths.js"
 
 /**
@@ -60,50 +61,80 @@ export const socketPath = (
   return path.join(os.tmpdir(), `arc-hook-${resolveProfile(env)}-${hash}.sock`)
 }
 
-export interface HookSignalNative {
-  readonly sessionId: string | null
-  readonly transcriptPath: string | null
-  readonly conversationId: string | null
-  readonly turnId: string | null
-  readonly toolUseId: string | null
-  readonly hookEventName: string | null
-  readonly model: string | null
-}
+export const HookSignalNative = Schema.Struct({
+  sessionId: Schema.NullOr(Schema.String),
+  transcriptPath: Schema.NullOr(Schema.String),
+  conversationId: Schema.NullOr(Schema.String),
+  turnId: Schema.NullOr(Schema.String),
+  toolUseId: Schema.NullOr(Schema.String),
+  hookEventName: Schema.NullOr(Schema.String),
+  model: Schema.NullOr(Schema.String),
+})
+export type HookSignalNative = typeof HookSignalNative.Type
 
-export interface HookSignalArc {
-  readonly chatId: ChatId | null
-  readonly targetSessionId: TargetId | null
-  readonly targetProvider: string | null
-  readonly hookSockPresent: boolean
-}
+export const HookSignalArc = Schema.Struct({
+  chatId: Schema.NullOr(ChatId),
+  targetSessionId: Schema.NullOr(TargetId),
+  targetProvider: Schema.NullOr(Schema.String),
+  hookSockPresent: Schema.Boolean,
+})
+export type HookSignalArc = typeof HookSignalArc.Type
 
-/** Versioned wire record from `arc-hook-signal.mjs`. Legacy flat fields remain
- * readable for records written before the envelope upgrade. */
-export interface HookSignalWire {
-  readonly schemaVersion?: number
-  readonly helperVersion?: number
-  readonly declaredProvider?: string
-  readonly declaredEvent?: string
-  readonly observedAt?: string
-  readonly pid?: number
-  readonly hookInputParseOk?: boolean
-  readonly hookInputSha256?: string
-  readonly native?: HookSignalNative
-  readonly arc?: HookSignalArc
+/** The serialized `native`/`arc` sub-records as they ride the wire and sit in
+ * `raw_hook_signals.payloadJson`: every field optional so an older or partial
+ * record still decodes. Branding/normalization happens when the envelope is
+ * lifted into a {@link HookSignal}. */
+const WireNative = Schema.Struct({
+  sessionId: Schema.optional(Schema.NullOr(Schema.String)),
+  transcriptPath: Schema.optional(Schema.NullOr(Schema.String)),
+  conversationId: Schema.optional(Schema.NullOr(Schema.String)),
+  turnId: Schema.optional(Schema.NullOr(Schema.String)),
+  toolUseId: Schema.optional(Schema.NullOr(Schema.String)),
+  hookEventName: Schema.optional(Schema.NullOr(Schema.String)),
+  model: Schema.optional(Schema.NullOr(Schema.String)),
+})
+
+const WireArc = Schema.Struct({
+  chatId: Schema.optional(Schema.NullOr(Schema.String)),
+  targetSessionId: Schema.optional(Schema.NullOr(Schema.String)),
+  targetProvider: Schema.optional(Schema.NullOr(Schema.String)),
+  hookSockPresent: Schema.optional(Schema.Boolean),
+})
+
+/** Versioned wire record from `arc-hook-signal.mjs`, and the `envelope` persisted
+ * to `raw_hook_signals.payloadJson`. The most untrusted input in the app: raw
+ * JSON from external harness processes — so it is decoded, not cast, on ingest
+ * and on replay. Every field is optional and `hookInput` stays `unknown` (the
+ * inner harness payload is genuinely polymorphic across providers). Legacy flat
+ * fields stay readable for records written before the nested envelope. */
+export const HookSignalWire = Schema.Struct({
+  schemaVersion: Schema.optional(Schema.Number),
+  helperVersion: Schema.optional(Schema.Number),
+  declaredProvider: Schema.optional(Schema.String),
+  declaredEvent: Schema.optional(Schema.String),
+  observedAt: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.NullOr(Schema.String)),
+  pid: Schema.optional(Schema.NullOr(Schema.Number)),
+  argv: Schema.optional(Schema.Array(Schema.String)),
+  hookInputParseOk: Schema.optional(Schema.Boolean),
+  hookInputSha256: Schema.optional(Schema.String),
+  native: Schema.optional(WireNative),
+  arc: Schema.optional(WireArc),
+  /** Present only in the persisted envelope: the resolved-provider snapshot. */
+  resolvedProvider: Schema.optional(Schema.String),
   /** @deprecated legacy flat field — prefer `declaredProvider` */
-  readonly provider?: string
+  provider: Schema.optional(Schema.String),
   /** @deprecated legacy flat field — prefer `declaredEvent` */
-  readonly event?: string
+  event: Schema.optional(Schema.String),
   /** @deprecated legacy flat field — prefer `native.sessionId` */
-  readonly sessionId?: string | null
-  readonly arcTargetSessionId?: string | null
-  readonly arcChatSessionId?: string | null
-  readonly arcTargetProvider?: string | null
-  readonly at?: string
-  readonly cwd?: string
-  readonly argv?: ReadonlyArray<string>
-  readonly hookInput?: unknown
-}
+  sessionId: Schema.optional(Schema.NullOr(Schema.String)),
+  arcTargetSessionId: Schema.optional(Schema.NullOr(Schema.String)),
+  arcChatSessionId: Schema.optional(Schema.NullOr(Schema.String)),
+  arcTargetProvider: Schema.optional(Schema.NullOr(Schema.String)),
+  at: Schema.optional(Schema.String),
+  hookInput: Schema.optional(Schema.Unknown),
+})
+export type HookSignalWire = typeof HookSignalWire.Type
 
 /** A validated binding: both ids present. The product of a usable wire record. */
 export interface HookBinding {
@@ -142,9 +173,6 @@ export const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null
 const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null)
 const bool = (v: unknown): boolean => v === true
-
-const hookInputRecord = (parsed: Record<string, unknown>): Record<string, unknown> | null =>
-  isRecord(parsed["hookInput"]) ? (parsed["hookInput"] as Record<string, unknown>) : null
 
 const firstStr = (obj: Record<string, unknown> | null, keys: ReadonlyArray<string>): string | null => {
   if (!obj) return null
@@ -228,130 +256,101 @@ export const resolveProvider = (
 }
 
 const nativeFrom = (
-  parsed: Record<string, unknown>,
+  wire: HookSignalWire,
   hookInput: Record<string, unknown> | null,
-): HookSignalNative => {
-  const wireNative = isRecord(parsed["native"]) ? parsed["native"] : null
-  return {
-    sessionId:
-      str(wireNative?.["sessionId"]) ??
-      str(parsed["sessionId"]) ??
-      sessionIdFrom(hookInput) ??
-      conversationIdFrom(hookInput),
-    transcriptPath:
-      str(wireNative?.["transcriptPath"]) ?? transcriptPathFrom(hookInput),
-    conversationId: str(wireNative?.["conversationId"]) ?? conversationIdFrom(hookInput),
-    turnId: str(wireNative?.["turnId"]) ?? firstStr(hookInput, ["turn_id", "turnId"]),
-    toolUseId: str(wireNative?.["toolUseId"]) ?? firstStr(hookInput, ["tool_use_id", "toolUseId"]),
-    hookEventName:
-      str(wireNative?.["hookEventName"]) ?? firstStr(hookInput, ["hook_event_name", "hookEventName"]),
-    model: str(wireNative?.["model"]) ?? str(hookInput?.["model"] ?? null),
-  }
-}
+): HookSignalNative => ({
+  sessionId:
+    str(wire.native?.sessionId) ??
+    str(wire.sessionId) ??
+    sessionIdFrom(hookInput) ??
+    conversationIdFrom(hookInput),
+  transcriptPath: str(wire.native?.transcriptPath) ?? transcriptPathFrom(hookInput),
+  conversationId: str(wire.native?.conversationId) ?? conversationIdFrom(hookInput),
+  turnId: str(wire.native?.turnId) ?? firstStr(hookInput, ["turn_id", "turnId"]),
+  toolUseId: str(wire.native?.toolUseId) ?? firstStr(hookInput, ["tool_use_id", "toolUseId"]),
+  hookEventName:
+    str(wire.native?.hookEventName) ?? firstStr(hookInput, ["hook_event_name", "hookEventName"]),
+  model: str(wire.native?.model) ?? str(hookInput?.["model"] ?? null),
+})
 
-const arcFrom = (parsed: Record<string, unknown>): HookSignalArc => {
-  const wireArc = isRecord(parsed["arc"]) ? parsed["arc"] : null
-  return {
-    chatId: arcIdOrNull("chat", str(wireArc?.["chatId"]) ?? str(parsed["arcChatSessionId"])),
-    targetSessionId: arcIdOrNull(
-      "target",
-      str(wireArc?.["targetSessionId"]) ?? str(parsed["arcTargetSessionId"]),
-    ),
-    targetProvider: str(wireArc?.["targetProvider"]) ?? str(parsed["arcTargetProvider"]),
-    hookSockPresent: bool(wireArc?.["hookSockPresent"]),
-  }
-}
+const arcFrom = (wire: HookSignalWire): HookSignalArc => ({
+  chatId: arcIdOrNull("chat", str(wire.arc?.chatId) ?? str(wire.arcChatSessionId)),
+  targetSessionId: arcIdOrNull("target", str(wire.arc?.targetSessionId) ?? str(wire.arcTargetSessionId)),
+  targetProvider: str(wire.arc?.targetProvider) ?? str(wire.arcTargetProvider),
+  hookSockPresent: bool(wire.arc?.hookSockPresent),
+})
 
 const sha256Hex = (raw: string): string => createHash("sha256").update(raw).digest("hex")
 
-const parseWireLine = (
-  line: string,
-): { ok: true; parsed: Record<string, unknown> } | { ok: false; reason: string } => {
+/** Why a wire line was dropped instead of becoming a {@link HookSignal}. Rides the
+ * `Result` failure channel so the server can log the reason; a real `Error`
+ * subclass, so unwrapping a known-good fixture with `Result.getOrThrow` rethrows
+ * it cleanly. */
+export class HookSignalDropped extends Data.TaggedError("arc/HookSignalDropped")<{
+  readonly reason: string
+}> {}
+
+const dropped = (reason: string): HookSignalDropped => new HookSignalDropped({ reason })
+
+const decodeWire = Schema.decodeUnknownResult(Schema.fromJsonString(HookSignalWire))
+
+const parseWireLine = (line: string): Result.Result<HookSignalWire, HookSignalDropped> => {
   const trimmed = line.trim()
-  if (!trimmed) return { ok: false, reason: "empty line" }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed)
-  } catch {
-    return { ok: false, reason: `non-JSON line: ${trimmed.slice(0, 80)}` }
-  }
-  if (!isRecord(parsed)) return { ok: false, reason: "not an object" }
-  return { ok: true, parsed }
+  if (!trimmed) return Result.fail(dropped("empty line"))
+  return Result.mapError(decodeWire(trimmed), () => dropped(`invalid wire record: ${trimmed.slice(0, 120)}`))
 }
 
-export const toSignal = (
-  line: string,
-): { ok: true; signal: HookSignal } | { ok: false; reason: string } => {
-  const wire = parseWireLine(line)
-  if (!wire.ok) return wire
-  const parsed = wire.parsed
-  const hookInput = parsed["hookInput"] ?? null
-  const hookInputObj = isRecord(hookInput) ? hookInput : null
-  const declaredProvider = str(parsed["declaredProvider"]) ?? str(parsed["provider"]) ?? "unknown"
-  const declaredEvent = str(parsed["declaredEvent"]) ?? str(parsed["event"]) ?? "unknown"
-  const provider = resolveProvider(declaredProvider, hookInputObj)
-  const argv = Array.isArray(parsed["argv"])
-    ? parsed["argv"].filter((v): v is string => typeof v === "string")
-    : []
-  const native = nativeFrom(parsed, hookInputObj)
-  const arc = arcFrom(parsed)
-  const hookInputSha256 =
-    str(parsed["hookInputSha256"]) ??
-    sha256Hex(typeof hookInput === "string" ? hookInput : JSON.stringify(hookInput ?? ""))
-  return {
-    ok: true,
-    signal: {
-      schemaVersion: typeof parsed["schemaVersion"] === "number" ? parsed["schemaVersion"] : 0,
-      helperVersion: typeof parsed["helperVersion"] === "number" ? parsed["helperVersion"] : 0,
+/** Decode one wire line into a {@link HookSignal}, or the reason it was dropped. */
+export const toSignal = (line: string): Result.Result<HookSignal, HookSignalDropped> =>
+  Result.map(parseWireLine(line), (wire) => {
+    const hookInput = wire.hookInput ?? null
+    const hookInputObj = isRecord(hookInput) ? hookInput : null
+    const declaredProvider = str(wire.declaredProvider) ?? str(wire.provider) ?? "unknown"
+    const declaredEvent = str(wire.declaredEvent) ?? str(wire.event) ?? "unknown"
+    const native = nativeFrom(wire, hookInputObj)
+    const arc = arcFrom(wire)
+    return {
+      schemaVersion: wire.schemaVersion ?? 0,
+      helperVersion: wire.helperVersion ?? 0,
       declaredProvider,
       declaredEvent,
-      observedAt: str(parsed["observedAt"]) ?? str(parsed["at"]) ?? new Date().toISOString(),
-      cwd: str(parsed["cwd"]),
-      pid: typeof parsed["pid"] === "number" ? parsed["pid"] : null,
-      argv,
+      observedAt: str(wire.observedAt) ?? str(wire.at) ?? new Date().toISOString(),
+      cwd: str(wire.cwd),
+      pid: wire.pid ?? null,
+      argv: wire.argv ?? [],
       hookInput,
-      hookInputParseOk: bool(parsed["hookInputParseOk"]),
-      hookInputSha256,
+      hookInputParseOk: bool(wire.hookInputParseOk),
+      hookInputSha256:
+        str(wire.hookInputSha256) ??
+        sha256Hex(typeof hookInput === "string" ? hookInput : JSON.stringify(hookInput ?? "")),
       native,
       arc,
-      provider,
+      provider: resolveProvider(declaredProvider, hookInputObj),
       event: declaredEvent,
       sessionId: native.sessionId,
       arcTargetSessionId: arc.targetSessionId,
       arcChatSessionId: arc.chatId,
       arcTargetProvider: arc.targetProvider,
-    },
-  }
-}
+    }
+  })
 
 /**
- * Parse + validate one received line into a binding. Returns a discriminated
- * result so the server can log *why* a record was dropped (Codex tightening #3:
- * defensively validate before mutating session state).
+ * Parse + validate one received line into a binding. The failure channel names
+ * *why* a record was dropped (Codex tightening #3: defensively validate before
+ * mutating session state).
  */
-export const toBinding = (
-  line: string,
-): { ok: true; binding: HookBinding } | { ok: false; reason: string } => {
-  const signal = toSignal(line)
-  if (!signal.ok) return signal
-  const { provider, event, sessionId, arcTargetSessionId, arcTargetProvider, native } =
-    signal.signal
-  if (!sessionId) return { ok: false, reason: "missing native session_id" }
-  if (!arcTargetSessionId) return { ok: false, reason: "missing arcTargetSessionId" }
-  if (arcTargetProvider && provider !== arcTargetProvider) {
-    return {
-      ok: false,
-      reason: `provider mismatch: payload=${provider} target=${arcTargetProvider}`,
+export const toBinding = (line: string): Result.Result<HookBinding, HookSignalDropped> =>
+  Result.flatMap(toSignal(line), ({ provider, event, sessionId, arcTargetSessionId, arcTargetProvider, native }) => {
+    if (!sessionId) return Result.fail(dropped("missing native session_id"))
+    if (!arcTargetSessionId) return Result.fail(dropped("missing arcTargetSessionId"))
+    if (arcTargetProvider && provider !== arcTargetProvider) {
+      return Result.fail(dropped(`provider mismatch: payload=${provider} target=${arcTargetProvider}`))
     }
-  }
-  return {
-    ok: true,
-    binding: {
+    return Result.succeed({
       provider,
-      event: event ?? "unknown",
+      event,
       targetSessionId: arcTargetSessionId,
       nativeSessionId: sessionId,
       transcriptPath: native.transcriptPath,
-    },
-  }
-}
+    })
+  })

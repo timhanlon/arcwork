@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Result } from "effect"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -40,8 +40,7 @@ const parseSignal = () => {
     arcChatSessionId: "chat_01",
     arcTargetProvider: "cursor",
   }))
-  if (!result.ok) throw new Error(result.reason)
-  return result.signal
+  return Result.getOrThrow(result)
 }
 
 const main = async (): Promise<void> => {

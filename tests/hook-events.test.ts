@@ -1,3 +1,4 @@
+import { Result } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   agentEventDedupKey,
@@ -11,11 +12,8 @@ import { toBinding, toSignal } from "../src/main/hooks/signals.js"
 
 const wire = (body: Record<string, unknown>): string => JSON.stringify(body)
 
-const parseSignal = (body: Record<string, unknown>) => {
-  const result = toSignal(wire(body))
-  if (!result.ok) throw new Error(result.reason)
-  return result.signal
-}
+const parseSignal = (body: Record<string, unknown>) =>
+  Result.getOrThrow(toSignal(wire(body)))
 
 describe("HookSignal envelope", () => {
   it("parses versioned wire records with native extraction", () => {
@@ -106,11 +104,11 @@ describe("Provider resolution + binding", () => {
 
   it("binds the native session id instead of rejecting it as a provider mismatch", () => {
     const result = toBinding(wire(codexSessionStart()))
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-    expect(result.binding.provider).toBe("codex")
-    expect(result.binding.targetSessionId).toBe("target_01")
-    expect(result.binding.nativeSessionId).toBe("019e93f7-fb12-7b82-b6a1-fc620bf400ab")
+    expect(Result.isSuccess(result)).toBe(true)
+    if (Result.isFailure(result)) return
+    expect(result.success.provider).toBe("codex")
+    expect(result.success.targetSessionId).toBe("target_01")
+    expect(result.success.nativeSessionId).toBe("019e93f7-fb12-7b82-b6a1-fc620bf400ab")
   })
 })
 
