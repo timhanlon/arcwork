@@ -1,6 +1,7 @@
 import type { JSX, MouseEvent, ReactNode } from "react"
+import { defaultRehypePlugins } from "streamdown"
 import { arcId, type WorkId } from "../../../shared/ids.js"
-import { Markdown, baseComponents } from "../ui/Markdown.js"
+import { Markdown, baseComponents, type StreamdownProps } from "../ui/Markdown.js"
 import { Button } from "../ui/Button.js"
 import { useShellActions } from "../shell/ShellActionsContext.js"
 
@@ -58,6 +59,42 @@ const remarkWorkLinks = () => {
   return visit
 }
 
+type RehypePlugins = NonNullable<StreamdownProps["rehypePlugins"]>
+type Pluggable = RehypePlugins[number]
+/** The `[plugin, ...options]` tuple form of a Pluggable; `[0]` is the plugin. */
+type PluginTuple = Extract<Pluggable, ReadonlyArray<unknown>>
+
+/** The subset of rehype-sanitize's schema we touch: its per-attribute URL
+ * protocol allow-list. The rest of the schema is preserved untouched. */
+interface SanitizeSchema {
+  readonly protocols?: { readonly href?: ReadonlyArray<string> }
+  readonly [key: string]: unknown
+}
+
+/** Add `arc` to the sanitize schema's allowed `href` protocols, leaving the
+ * plugin and every other rule as-is. The `[plugin, schema]` shape is Streamdown's
+ * (`defaultRehypePlugins.sanitize`); a bare-plugin entry is returned untouched. */
+const allowArcHrefProtocol = (sanitize: Pluggable): Pluggable => {
+  if (!Array.isArray(sanitize)) return sanitize
+  const [plugin, schema, ...rest] = sanitize as [PluginTuple[0], SanitizeSchema, ...ReadonlyArray<unknown>]
+  const href = schema.protocols?.href ?? []
+  if (href.includes("arc")) return sanitize
+  return [plugin, { ...schema, protocols: { ...schema.protocols, href: [...href, "arc"] } }, ...rest]
+}
+
+/**
+ * Streamdown's default rehype chain (raw → sanitize → harden) drops any href
+ * whose protocol isn't in rehype-sanitize's allow-list — so our `arc://work/…`
+ * links lose their href, and harden then renders the now-bare `<a>` as a
+ * blocked-link indicator (`… [blocked]`). Recompose the chain, reusing
+ * Streamdown's own raw + harden untouched and opening exactly the `arc` scheme
+ * at the sanitize step, so work links survive while every other scheme stays
+ * blocked. Keyed on `"sanitize"` so the raw/harden order is preserved verbatim.
+ */
+const workRehypePlugins: RehypePlugins = Object.entries(defaultRehypePlugins).map(([key, plugin]) =>
+  key === "sanitize" ? allowArcHrefProtocol(plugin) : plugin,
+)
+
 const workComponents = (onOpenWork: (workId: WorkId) => void) => ({
   ...baseComponents,
   a: ({ children, href }: { readonly children?: ReactNode; readonly href?: string }) => {
@@ -76,6 +113,10 @@ const workComponents = (onOpenWork: (workId: WorkId) => void) => ({
         </Button>
       )
     }
+    // `arc://work/` is the only arc affordance we render; sanitize allows the
+    // `arc` scheme as a whole, so neutralise any other arc path to inert text
+    // rather than emit a live link into an unregistered/unhandled scheme.
+    if (href?.startsWith("arc://")) return <span>{children}</span>
     return (
       <a href={href} className="text-accent underline">
         {children}
@@ -103,6 +144,8 @@ const workComponents = (onOpenWork: (workId: WorkId) => void) => ({
  * The domain-aware Markdown surface for chat/work bodies: the {@link Markdown}
  * primitive plus a remark plugin that linkifies bare `work_*` ids and an
  * `a`/`inlineCode` override that turns them into buttons opening the work pane.
+ * The recomposed {@link workRehypePlugins} chain whitelists the `arc` href
+ * scheme so those links survive Streamdown's sanitize/harden passes.
  *
  * Opening a work item is a shell action, pulled from context rather than
  * threaded through every transcript/detail ancestor. Work ids are always
@@ -124,6 +167,7 @@ export function WorkMarkdown({
       streaming={streaming}
       components={workComponents((workId) => open({ kind: "work", workId }, "right"))}
       remarkPlugins={[remarkWorkLinks]}
+      rehypePlugins={workRehypePlugins}
     >
       {children}
     </Markdown>

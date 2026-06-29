@@ -4,7 +4,7 @@ import { Streamdown } from "streamdown"
 import { code } from "@streamdown/code"
 import { mermaid } from "@streamdown/mermaid"
 
-type StreamdownProps = ComponentProps<typeof Streamdown>
+export type StreamdownProps = ComponentProps<typeof Streamdown>
 
 // Styling is Streamdown's own (its Tailwind utilities resolve against our @theme
 // tokens) — we only set the prose's base size/color and layout containment on the
@@ -43,9 +43,12 @@ export const baseComponents = {
  * baseComponents} to keep the base styling) and add extra `remarkPlugins`
  * (appended after the required `remark-gfm` — passing `remarkPlugins` to
  * Streamdown directly would REPLACE gfm and silently drop
- * tables/strikethrough/task-lists). The work-aware wrapper that linkifies
- * `work_*` ids lives in `work/WorkMarkdown`, so nothing domain-specific leaks
- * into `ui/`.
+ * tables/strikethrough/task-lists). `rehypePlugins`, by contrast, REPLACES
+ * Streamdown's default raw→sanitize→harden chain wholesale (Streamdown only
+ * falls back to its default when the prop is absent), so a caller passing it
+ * owns the full chain — recompose from `defaultRehypePlugins` rather than
+ * hand-rolling. The work-aware wrapper that linkifies `work_*` ids lives in
+ * `work/WorkMarkdown`, so nothing domain-specific leaks into `ui/`.
  */
 export function Markdown({
   children,
@@ -53,12 +56,14 @@ export function Markdown({
   compact = false,
   components,
   remarkPlugins,
+  rehypePlugins,
 }: {
   readonly children: string
   readonly streaming?: boolean
   readonly compact?: boolean
   readonly components?: StreamdownProps["components"]
   readonly remarkPlugins?: StreamdownProps["remarkPlugins"]
+  readonly rehypePlugins?: StreamdownProps["rehypePlugins"]
 }): JSX.Element {
   return (
     <Streamdown
@@ -67,6 +72,7 @@ export function Markdown({
       parseIncompleteMarkdown={streaming}
       components={components ?? baseComponents}
       remarkPlugins={[remarkGfm, ...(remarkPlugins ?? [])]}
+      rehypePlugins={rehypePlugins}
       plugins={{ code, mermaid }}
       skipHtml
     >

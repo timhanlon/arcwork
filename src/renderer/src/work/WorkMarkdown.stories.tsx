@@ -32,6 +32,23 @@ export const TableWithWorkLinks = () => (
   </Surface>
 )
 
+/**
+ * Bare (non-code) work ids in prose. These are linkified into `arc://work/<id>`
+ * links, which must survive Streamdown's sanitize/harden passes — `WorkMarkdown`
+ * whitelists the `arc` href scheme so they render as buttons. The regression: an
+ * un-whitelisted scheme had its href stripped by sanitize, and harden then
+ * replaced the link with a grey `… [blocked]` indicator after every id.
+ */
+export const BareWorkMentions = () => (
+  <Surface>
+    <WorkMarkdown compact>
+      {"Spawned the subagent for work_01kwads5refzvsygsq2b4zrvt5 and it's done.\n\n" +
+        "Follow-ups in work_01ktqhbke0fzt9v0gmg21841v6 (blocked on a decision) and " +
+        "work_01kvgxbyzye0083bgw33zynvzc — read both, then continue."}
+    </WorkMarkdown>
+  </Surface>
+)
+
 /** The full-prose form used for work descriptions. */
 export const WorkBody = () => (
   <Surface>
