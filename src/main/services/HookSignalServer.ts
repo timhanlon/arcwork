@@ -1,4 +1,4 @@
-import { Context, Effect, FiberSet, Layer, Result } from "effect"
+import { Context, Effect, FiberSet, Layer, Result, Schedule } from "effect"
 import { EventEmitter } from "node:events"
 import * as fs from "node:fs"
 import * as net from "node:net"
@@ -58,64 +58,79 @@ export const HookSignalServerLive = Layer.effect(
       }),
     )
 
-    const ensureListening = (repoRoot: string) =>
-      Effect.promise(
-        () =>
-          new Promise<string>((resolve) => {
-            const sockPath = socketPath(repoRoot)
-            if (servers.has(repoRoot)) {
-              resolve(sockPath)
-              return
+    // One bind attempt: clear a stale socket node, create the server, and listen.
+    // Fails with the Node error (which carries `.code`) so the retry below can
+    // react to EADDRINUSE; succeeds with the listening server.
+    const bindOnce = (sockPath: string) =>
+      Effect.callback<net.Server, NodeJS.ErrnoException>((resume) => {
+        // Clear a stale socket node left by a previous run, else listen EADDRINUSE.
+        try {
+          if (fs.existsSync(sockPath)) fs.unlinkSync(sockPath)
+        } catch {
+          /* fall through; listen will surface any real problem */
+        }
+
+        const server = net.createServer((conn) => {
+          let buf = ""
+          conn.setEncoding("utf8")
+          conn.on("data", (d) => {
+            buf += d
+          })
+          conn.on("end", () => {
+            for (const line of buf.split("\n")) {
+              if (!line.trim()) continue
+              const signal = toSignal(line)
+              if (Result.isFailure(signal)) {
+                runFork(Effect.logWarning(`[arc-hook] dropped record: ${signal.failure.reason}`))
+                continue
+              }
+              events.emit("signal", signal.success)
+              const binding = toBinding(line)
+              if (Result.isSuccess(binding)) events.emit("binding", binding.success)
             }
-            let settled = false
-            const done = (): void => {
-              if (settled) return
-              settled = true
-              resolve(sockPath)
-            }
+          })
+          conn.on("error", () => {
+            /* a hung/aborted helper connection must not crash main */
+          })
+        })
 
-            // Clear a stale socket node left by a previous run, else listen EADDRINUSE.
-            try {
-              if (fs.existsSync(sockPath)) fs.unlinkSync(sockPath)
-            } catch {
-              /* fall through; listen will surface any real problem */
-            }
+        const onBindError = (e: NodeJS.ErrnoException) => {
+          server.close()
+          resume(Effect.fail(e))
+        }
+        server.once("error", onBindError)
+        server.listen(sockPath, () => {
+          server.removeListener("error", onBindError)
+          // Past bind, a later socket error must only be logged, never crash main.
+          server.on("error", (e) =>
+            runFork(Effect.logWarning(`[arc-hook] socket server error (${sockPath}): ${String(e)}`)),
+          )
+          resume(Effect.succeed(server))
+        })
+      })
 
-            const server = net.createServer((conn) => {
-              let buf = ""
-              conn.setEncoding("utf8")
-              conn.on("data", (d) => {
-                buf += d
-              })
-              conn.on("end", () => {
-                for (const line of buf.split("\n")) {
-                  if (!line.trim()) continue
-                  const signal = toSignal(line)
-                  if (Result.isFailure(signal)) {
-                    runFork(Effect.logWarning(`[arc-hook] dropped record: ${signal.failure.reason}`))
-                    continue
-                  }
-                  events.emit("signal", signal.success)
-                  const binding = toBinding(line)
-                  if (Result.isSuccess(binding)) events.emit("binding", binding.success)
-                }
-              })
-              conn.on("error", () => {
-                /* a hung/aborted helper connection must not crash main */
-              })
-            })
-
-            server.on("error", (e) => {
-              runFork(Effect.logWarning(`[arc-hook] socket server error (${sockPath}): ${String(e)}`))
-              done() // do not block launch on a channel failure
-            })
-
-            server.listen(sockPath, () => {
-              servers.set(repoRoot, server)
-              done()
-            })
+    const ensureListening = (repoRoot: string): Effect.Effect<string> =>
+      Effect.suspend(() => {
+        const sockPath = socketPath(repoRoot)
+        if (servers.has(repoRoot)) return Effect.succeed(sockPath)
+        // EADDRINUSE on a quick restart is transient — the prior run's socket may
+        // not be released yet. Retry a few times with a short backoff; any other
+        // error (or exhausting retries) logs and resolves anyway, so a channel
+        // failure never blocks launch.
+        return bindOnce(sockPath).pipe(
+          Effect.retry({
+            while: (e) => e.code === "EADDRINUSE",
+            schedule: Schedule.exponential("50 millis").pipe(Schedule.both(Schedule.recurs(3))),
           }),
-      )
+          Effect.tap((server) => Effect.sync(() => servers.set(repoRoot, server))),
+          Effect.as(sockPath),
+          Effect.catch((e) =>
+            Effect.logWarning(`[arc-hook] socket bind failed (${sockPath}): ${String(e)}`).pipe(
+              Effect.as(sockPath),
+            ),
+          ),
+        )
+      })
 
     return { ensureListening, events }
   }),
