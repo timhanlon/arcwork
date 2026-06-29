@@ -13,6 +13,7 @@
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
 import { newArcId } from "../../shared/ids.js"
+import type { ChatMessageRole, ChatMessageStatus } from "../../shared/chat-message.js"
 import type {
   ActivityId,
   ChatId,
@@ -199,12 +200,12 @@ export interface ChatMessageRow {
   readonly id: MessageId
   readonly chatId: ChatId
   readonly targetSessionId: TargetId | null
-  readonly role: string
+  readonly role: ChatMessageRole
   readonly turnId: string | null
   readonly messageId: string | null
   readonly chunkIndex: number | null
   readonly body: string
-  readonly status: string
+  readonly status: ChatMessageStatus
   /** model that produced an assistant/subagent row; null for other roles or
    * when the provider's hook did not report it */
   readonly model: string | null

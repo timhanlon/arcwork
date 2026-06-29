@@ -78,7 +78,7 @@ export const InteractiveCapability = Schema.Struct({
 export type InteractiveCapability = typeof InteractiveCapability.Type
 
 export const ProviderSpec = Schema.Struct({
-  kind: Schema.String, // "claude" | "codex" | "cursor" | ...
+  kind: Provider,
   displayName: Schema.String,
   detectCmd: Schema.String,
   concurrency: Concurrency,

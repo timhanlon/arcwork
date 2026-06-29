@@ -138,7 +138,7 @@ describe("assistant turn repair (Stop)", () => {
     })
 
 
-  const streamRow = (turnId: string, dedupKey: string, body: string) => ({
+  const streamRow = (turnId: string, dedupKey: string, body: string): ChatMessageRow => ({
     id: arcId("message", `stream_${turnId}`),
     chatId: arcId("chat", "chat_1"),
     targetSessionId: arcId("target", "target_1"),
