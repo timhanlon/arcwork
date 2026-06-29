@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect"
+import { Config, Context, Effect, Layer } from "effect"
 
 export type LocalModelStatus =
   | {
@@ -32,18 +32,33 @@ const DEFAULT_BASE_URL = "http://localhost:1234/v1"
 const DEFAULT_TIMEOUT_MS = 10000
 const MAX_PROMPT_CHARS = 4000
 
-const enabled = (): boolean =>
-  ["1", "true", "yes", "on"].includes((process.env.ARC_LMSTUDIO_ENABLED ?? "").toLowerCase())
+interface LmStudioConfig {
+  readonly enabled: boolean
+  readonly baseUrl: string
+  readonly model: string | null
+  readonly timeoutMs: number
+}
 
-const baseUrl = (): string => (process.env.ARC_LMSTUDIO_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "")
-const configuredModel = (): string | null => {
-  const model = process.env.ARC_LMSTUDIO_MODEL?.trim()
-  return model && model.length > 0 ? model : null
-}
-const timeoutMs = (): number => {
-  const parsed = Number(process.env.ARC_LMSTUDIO_TIMEOUT_MS)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS
-}
+// Local-model support is an optional nicety, so a missing OR malformed env var
+// degrades to the safe default (orElse) rather than failing layer construction —
+// a typo in ARC_LMSTUDIO_* must never crash startup. Read once when the layer
+// builds; the values are process env, which doesn't change at runtime.
+const loadConfig = Config.all({
+  enabled: Config.boolean("ARC_LMSTUDIO_ENABLED").pipe(Config.orElse(() => Config.succeed(false))),
+  baseUrl: Config.string("ARC_LMSTUDIO_BASE_URL").pipe(Config.withDefault(DEFAULT_BASE_URL)),
+  model: Config.string("ARC_LMSTUDIO_MODEL").pipe(Config.withDefault("")),
+  timeoutMs: Config.int("ARC_LMSTUDIO_TIMEOUT_MS").pipe(Config.orElse(() => Config.succeed(DEFAULT_TIMEOUT_MS))),
+}).pipe(
+  Config.map((raw): LmStudioConfig => {
+    const model = raw.model.trim()
+    return {
+      enabled: raw.enabled,
+      baseUrl: raw.baseUrl.replace(/\/+$/, ""),
+      model: model.length > 0 ? model : null,
+      timeoutMs: raw.timeoutMs > 0 ? raw.timeoutMs : DEFAULT_TIMEOUT_MS,
+    }
+  }),
+)
 
 const withTimeout = async <A>(ms: number, f: (signal: AbortSignal) => Promise<A>): Promise<A> => {
   const controller = new AbortController()
@@ -83,99 +98,100 @@ const extractTitle = (payload: unknown): string | null => {
   return title.length > 80 ? `${title.slice(0, 77).trimEnd()}...` : title
 }
 
-const chooseModel = (payload: unknown): string | null => configuredModel() ?? firstModelId(payload)
+const chooseModel = (configuredModel: string | null, payload: unknown): string | null =>
+  configuredModel ?? firstModelId(payload)
 
-export const LocalModelServiceLive = Layer.succeed(
+export const LocalModelServiceLive = Layer.effect(
   LocalModelService,
-  LocalModelService.of({
-    status: Effect.promise(async () => {
-      try {
-        const url = baseUrl()
-        const model = configuredModel()
-        if (!enabled()) {
-          return {
-            enabled: false,
-            provider: "lmstudio",
-            baseUrl: url,
-            model,
-            reachable: false,
-            message: "LM Studio local model support is disabled",
-          } as const
-        }
+  Effect.gen(function* () {
+    const cfg = yield* loadConfig
+    return LocalModelService.of({
+      status: Effect.promise(async () => {
+        try {
+          if (!cfg.enabled) {
+            return {
+              enabled: false,
+              provider: "lmstudio",
+              baseUrl: cfg.baseUrl,
+              model: cfg.model,
+              reachable: false,
+              message: "LM Studio local model support is disabled",
+            } as const
+          }
 
-        const response = await withTimeout(timeoutMs(), (signal) =>
-          fetch(`${url}/models`, { signal }),
-        )
-        if (!response.ok) {
+          const response = await withTimeout(cfg.timeoutMs, (signal) =>
+            fetch(`${cfg.baseUrl}/models`, { signal }),
+          )
+          if (!response.ok) {
+            return {
+              enabled: true,
+              provider: "lmstudio",
+              baseUrl: cfg.baseUrl,
+              model: cfg.model,
+              reachable: false,
+              message: `LM Studio returned HTTP ${response.status}`,
+            } as const
+          }
+          const payload = await response.json() as unknown
+          const selected = chooseModel(cfg.model, payload)
           return {
             enabled: true,
             provider: "lmstudio",
-            baseUrl: url,
-            model,
-            reachable: false,
-            message: `LM Studio returned HTTP ${response.status}`,
+            baseUrl: cfg.baseUrl,
+            model: selected,
+            reachable: Boolean(selected),
+            message: selected ? "LM Studio is reachable" : "LM Studio has no loaded model",
           } as const
-        }
-        const payload = await response.json() as unknown
-        const selected = chooseModel(payload)
-        return {
-          enabled: true,
-          provider: "lmstudio",
-          baseUrl: url,
-          model: selected,
-          reachable: Boolean(selected),
-          message: selected ? "LM Studio is reachable" : "LM Studio has no loaded model",
-        } as const
-      } catch (error) {
-        return {
-        enabled: enabled(),
-        provider: "lmstudio",
-        baseUrl: baseUrl(),
-        model: configuredModel(),
-        reachable: false,
-        message: error instanceof Error ? error.message : String(error),
-        } as LocalModelStatus
-      }
-    }),
-
-    generateChatTitle: ({ firstUserPrompt }) =>
-      Effect.promise(async () => {
-        try {
-          if (!enabled()) return null
-          const url = baseUrl()
-          const modelsResponse = await withTimeout(timeoutMs(), (signal) =>
-            fetch(`${url}/models`, { signal }),
-          )
-          if (!modelsResponse.ok) return null
-          const model = chooseModel(await modelsResponse.json() as unknown)
-          if (!model) return null
-
-          const prompt = firstUserPrompt.trim().slice(0, MAX_PROMPT_CHARS)
-          const completion = await withTimeout(timeoutMs(), (signal) =>
-            fetch(`${url}/chat/completions`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              signal,
-              body: JSON.stringify({
-                model,
-                messages: [
-                  {
-                    role: "system",
-                    content:
-                      "Generate a concise, specific title for this chat. Return only the title, no quotes or punctuation.",
-                  },
-                  { role: "user", content: prompt },
-                ],
-                temperature: 0.2,
-                max_tokens: 20,
-              }),
-            }),
-          )
-          if (!completion.ok) return null
-          return extractTitle(await completion.json() as unknown)
-        } catch {
-          return null
+        } catch (error) {
+          return {
+            enabled: cfg.enabled,
+            provider: "lmstudio",
+            baseUrl: cfg.baseUrl,
+            model: cfg.model,
+            reachable: false,
+            message: error instanceof Error ? error.message : String(error),
+          } as LocalModelStatus
         }
       }),
+
+      generateChatTitle: ({ firstUserPrompt }) =>
+        Effect.promise(async () => {
+          try {
+            if (!cfg.enabled) return null
+            const modelsResponse = await withTimeout(cfg.timeoutMs, (signal) =>
+              fetch(`${cfg.baseUrl}/models`, { signal }),
+            )
+            if (!modelsResponse.ok) return null
+            const model = chooseModel(cfg.model, await modelsResponse.json() as unknown)
+            if (!model) return null
+
+            const prompt = firstUserPrompt.trim().slice(0, MAX_PROMPT_CHARS)
+            const completion = await withTimeout(cfg.timeoutMs, (signal) =>
+              fetch(`${cfg.baseUrl}/chat/completions`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                signal,
+                body: JSON.stringify({
+                  model,
+                  messages: [
+                    {
+                      role: "system",
+                      content:
+                        "Generate a concise, specific title for this chat. Return only the title, no quotes or punctuation.",
+                    },
+                    { role: "user", content: prompt },
+                  ],
+                  temperature: 0.2,
+                  max_tokens: 20,
+                }),
+              }),
+            )
+            if (!completion.ok) return null
+            return extractTitle(await completion.json() as unknown)
+          } catch {
+            return null
+          }
+        }),
+    })
   }),
 )
