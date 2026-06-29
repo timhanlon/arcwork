@@ -52,27 +52,47 @@ export const stopTargetAtom = ArcRpcAtomClient.mutation("StopTarget")
 export const listWorkspaceFilesAtom = ArcRpcAtomClient.mutation("ListWorkspaceFiles")
 
 /**
- * A renderer refresh signal sourced from a `Watch*Changes` server stream (off the
- * custom IPC push): each change descriptor increments a counter, so an atom wired
- * with `makeRefreshOnSignal` re-pulls its query on every change. `runtime.atom`
- * runs the stream on the AtomRpc runtime so the flat client (and its Electron
- * protocol) is in scope. The `Stream.scan` seed `0` matches `initialValue`, so
- * the query's own authoritative first pull isn't doubled by a boot tick — and
- * because these are signals (not lists), nothing is re-streamed on each change.
+ * One subscription per chat change feed (`WatchChatMessageChanges` /
+ * `WatchChatActivityChanges`), shared by every per-chat signal below and by
+ * `pendingRequestsAtom`. Each scans its stream into a `total` (ticks on every
+ * change — the source for the global pending refresh) plus a per-chat counter map,
+ * so a derived per-chat signal re-emits only when *its* chat ticks and the
+ * registry's `Object.is` dedup drops the rest. Mirrors {@link gitChangeCountsAtom}:
+ * one upstream stream instead of one per consumer. `runtime.atom` runs the stream
+ * on the AtomRpc runtime so the flat client (and its Electron protocol) is in
+ * scope; the seed matches `initialValue` so a consumer's own first pull isn't
+ * doubled by a boot tick.
  */
-const signalCount = <A>(stream: Stream.Stream<A, unknown>): Stream.Stream<number, unknown> =>
-  stream.pipe(Stream.scan(0, (n) => n + 1))
+type ChatCounts = { readonly total: number; readonly byChat: ReadonlyMap<string, number> }
+const CHAT_COUNTS_INIT: ChatCounts = { total: 0, byChat: new Map<string, number>() }
+const countByChat = (acc: ChatCounts, change: { readonly chatId: string }): ChatCounts => {
+  const byChat = new Map(acc.byChat)
+  byChat.set(change.chatId, (byChat.get(change.chatId) ?? 0) + 1)
+  return { total: acc.total + 1, byChat }
+}
+const chatMessageCountsAtom = ArcRpcAtomClient.runtime.atom(
+  Stream.unwrap(
+    ArcRpcAtomClient.use((client) =>
+      Effect.succeed(client("WatchChatMessageChanges", undefined).pipe(Stream.scan(CHAT_COUNTS_INIT, countByChat))),
+    ),
+  ),
+  { initialValue: CHAT_COUNTS_INIT },
+)
+const chatActivityCountsAtom = ArcRpcAtomClient.runtime.atom(
+  Stream.unwrap(
+    ArcRpcAtomClient.use((client) =>
+      Effect.succeed(client("WatchChatActivityChanges", undefined).pipe(Stream.scan(CHAT_COUNTS_INIT, countByChat))),
+    ),
+  ),
+  { initialValue: CHAT_COUNTS_INIT },
+)
 
 export const pendingRequestsAtom = ArcRpcAtomClient.query("ListPendingRequests", undefined).pipe(
   // Pending re-derives off chat-message changes (a request appears/clears as a
-  // message row), so it rides the same change stream.
+  // message row), so it refreshes on the shared count's `total` — no second
+  // WatchChatMessageChanges subscription of its own.
   Atom.makeRefreshOnSignal(
-    ArcRpcAtomClient.runtime.atom(
-      Stream.unwrap(
-        ArcRpcAtomClient.use((client) => Effect.succeed(signalCount(client("WatchChatMessageChanges", undefined)))),
-      ),
-      { initialValue: 0 },
-    ),
+    Atom.map(chatMessageCountsAtom, (r) => (AsyncResult.isSuccess(r) ? r.value.total : 0)),
   ),
 )
 
@@ -100,30 +120,17 @@ export const liveTargetStatesAtom = ArcRpcAtomClient.runtime.atom(
   Stream.unwrap(ArcRpcAtomClient.use((client) => Effect.succeed(client("WatchLiveTargetStates", undefined)))),
 )
 
+/** Per-chat message-change signal, derived from the shared {@link chatMessageCountsAtom}
+ * as the bare per-chat count — so a change for another chat is deduped away by the
+ * registry's `Object.is` check, exactly like {@link gitChangesSignalAtom}. */
 const chatMessagesSignalAtom = Atom.family((chatId: string) =>
-  ArcRpcAtomClient.runtime.atom(
-    Stream.unwrap(
-      ArcRpcAtomClient.use((client) =>
-        Effect.succeed(
-          signalCount(client("WatchChatMessageChanges", undefined).pipe(Stream.filter((c) => c.chatId === chatId))),
-        ),
-      ),
-    ),
-    { initialValue: 0 },
-  )
+  Atom.map(chatMessageCountsAtom, (r) => (AsyncResult.isSuccess(r) ? (r.value.byChat.get(chatId) ?? 0) : 0)),
 )
 
+/** Per-chat activity-change signal — the {@link chatMessagesSignalAtom} of the
+ * activity feed. */
 const chatActivitySignalAtom = Atom.family((chatId: string) =>
-  ArcRpcAtomClient.runtime.atom(
-    Stream.unwrap(
-      ArcRpcAtomClient.use((client) =>
-        Effect.succeed(
-          signalCount(client("WatchChatActivityChanges", undefined).pipe(Stream.filter((c) => c.chatId === chatId))),
-        ),
-      ),
-    ),
-    { initialValue: 0 },
-  )
+  Atom.map(chatActivityCountsAtom, (r) => (AsyncResult.isSuccess(r) ? (r.value.byChat.get(chatId) ?? 0) : 0)),
 )
 
 /**
