@@ -294,11 +294,7 @@ export const TargetSessionManagerLive = Layer.effect(
         }
         const cap = spec.interactive
 
-        const chatList = yield* chats.list
-        const chat = chatList.find((c) => c.id === req.chatId)
-        if (!chat) {
-          return yield* Effect.fail(arcRequestError(`Unknown chat "${req.chatId}"`))
-        }
+        const chat = yield* chats.get(req.chatId)
         const wsList = yield* workspaces.list
         const wsId = req.workspaceId ?? chat.workspaceId
         const ws = wsList.find((w) => w.id === wsId)

@@ -17,6 +17,8 @@ export class ChatService extends Context.Service<
   ChatService,
   {
     readonly list: Effect.Effect<ReadonlyArray<Chat>>
+    /** A single chat by id, or {@link ArcRequestError} if unknown. */
+    readonly get: (id: string) => Effect.Effect<Chat, ArcRequestError>
     readonly changes: Stream.Stream<ReadonlyArray<Chat>>
     readonly create: (
       workspaceId: WorkspaceId,
@@ -56,6 +58,11 @@ export const ChatServiceLive = Layer.effect(
     const store = yield* SubscriptionRef.make(initial)
 
     const list = SubscriptionRef.get(store)
+    const get = (id: string): Effect.Effect<Chat, ArcRequestError> =>
+      Effect.flatMap(list, (all) => {
+        const chat = all.find((c) => c.id === id)
+        return chat ? Effect.succeed(chat) : Effect.fail(arcRequestError(`Unknown chat "${id}"`))
+      })
     const changes = SubscriptionRef.changes(store)
 
     const create = Effect.fn("ChatService.create")((workspaceId: WorkspaceId, title?: string) =>
@@ -115,10 +122,7 @@ export const ChatServiceLive = Layer.effect(
           return yield* Effect.fail(arcRequestError("Chat title cannot be empty"))
         }
 
-        const current = (yield* SubscriptionRef.get(store)).find((chat) => chat.id === chatId)
-        if (!current) {
-          return yield* Effect.fail(arcRequestError(`Unknown chat "${chatId}"`))
-        }
+        const current = yield* get(chatId)
         if (current.title === trimmed) return current
 
         const changed = yield* db.updateChatTitle(chatId, trimmed)
@@ -138,6 +142,6 @@ export const ChatServiceLive = Layer.effect(
       ),
     )
 
-    return { list, changes, create, updateTitleIfDefault, updateTitle }
+    return { list, get, changes, create, updateTitleIfDefault, updateTitle }
   }),
 )

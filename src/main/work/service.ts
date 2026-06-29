@@ -207,6 +207,15 @@ export const WorkServiceLive = Layer.effect(
     const store = yield* WorkStore
     const arcStore = yield* Effect.serviceOption(ArcStore)
 
+    // Load a work projection or fail with the canonical not-found — every mutation
+    // verb needs the current row before it can act on it.
+    const requireWork = (refId: WorkId) =>
+      store.loadWork(refId).pipe(
+        Effect.flatMap((current) =>
+          current ? Effect.succeed(current) : Effect.fail(arcRequestError(`unknown work: ${refId}`)),
+        ),
+      )
+
     // Invalidation bus for the `arc:work` push channel. Unbounded so a publish
     // never blocks a mutation; consumers that fall behind just coalesce reads.
     const updates = yield* PubSub.unbounded<WorkChange>()
@@ -510,8 +519,7 @@ export const WorkServiceLive = Layer.effect(
     ) =>
       Effect.gen(function* () {
         const prov = yield* scopedProvenance(provenance)
-        const current = yield* store.loadWork(refId)
-        if (!current) return yield* Effect.fail(arcRequestError(`unknown work: ${refId}`))
+        const current = yield* requireWork(refId)
         if (yield* isNoop(current)) return yield* toWork(current)
 
         const now = yield* nowIso
@@ -612,8 +620,7 @@ export const WorkServiceLive = Layer.effect(
       (refId: WorkId, edits: WorkReviseInput, provenance: WorkProvenance) =>
         Effect.gen(function* () {
           provenance = yield* scopedProvenance(provenance)
-          const current = yield* store.loadWork(refId)
-          if (!current) return yield* Effect.fail(arcRequestError(`unknown work: ${refId}`))
+          const current = yield* requireWork(refId)
 
           // Omitted fields keep their value; present fields replace (labels as a
           // whole set). Status is never edited here — it lives in events.
@@ -736,8 +743,7 @@ export const WorkServiceLive = Layer.effect(
       (refId: WorkId, input: WorkCommentInput, provenance: WorkProvenance) =>
         Effect.gen(function* () {
           provenance = yield* scopedProvenance(provenance)
-          const current = yield* store.loadWork(refId)
-          if (!current) return yield* Effect.fail(arcRequestError(`unknown work: ${refId}`))
+          const current = yield* requireWork(refId)
 
           const now = yield* nowIso
           // Default subject is the current revision node, so the remark stays
@@ -769,8 +775,7 @@ export const WorkServiceLive = Layer.effect(
     const listComments = Effect.fn("WorkService.listComments")(
       (refId: WorkId, opts?: { readonly allRevisions?: boolean }) =>
         Effect.gen(function* () {
-          const current = yield* store.loadWork(refId)
-          if (!current) return yield* Effect.fail(arcRequestError(`unknown work: ${refId}`))
+          const current = yield* requireWork(refId)
 
           const all = (yield* store.loadComments(refId)).map(toComment)
           // A node comment whose subject is not the current revision was left on
