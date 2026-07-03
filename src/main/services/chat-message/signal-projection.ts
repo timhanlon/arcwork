@@ -5,11 +5,20 @@
  * two permission-lifecycle predicates that drive the in-memory
  * `waiting_for_approval` flag. Pure — no stores.
  */
+import { Option, Schema } from "effect"
 import type { HookSignal } from "../../hooks/signals.js"
+import { HookSignalArc, HookSignalNative } from "../../hooks/signals.js"
 import type { RawHookSignalRow } from "../../db/schema.js"
 import type { ChatId } from "../../../shared/ids.js"
 import * as canon from "../../hooks/canonical.js"
 import { isTurnEnd } from "../../hooks/turn-lifecycle.js"
+
+// The persisted envelope is the most untrusted input in the app, so its nested
+// `native`/`arc` objects are decoded (branded ids validated), not cast, on
+// replay — matching the ingest contract. A decode failure falls back to the
+// row's denormalized columns, so a corrupt payload still replays what it can.
+const decodeNative = Schema.decodeUnknownOption(HookSignalNative)
+const decodeArc = Schema.decodeUnknownOption(HookSignalArc)
 
 export const chatIdFromSignal = (signal: HookSignal): ChatId | null =>
   signal.arcChatSessionId ?? signal.arc.chatId ?? null
@@ -28,25 +37,21 @@ export const rawHookSignalFromRow = (row: RawHookSignalRow): HookSignal | null =
       !Array.isArray(payloadRecord["envelope"])
     ? payloadRecord["envelope"] as Record<string, unknown>
     : {}
-  const native = envelope["native"] && typeof envelope["native"] === "object" && !Array.isArray(envelope["native"])
-    ? envelope["native"] as HookSignal["native"]
-    : {
-        sessionId: row.nativeSessionId,
-        transcriptPath: null,
-        conversationId: row.nativeConversationId,
-        turnId: row.nativeTurnId,
-        toolUseId: row.nativeToolUseId,
-        hookEventName: row.nativeHookEventName,
-        model: null,
-      }
-  const arc = envelope["arc"] && typeof envelope["arc"] === "object" && !Array.isArray(envelope["arc"])
-    ? envelope["arc"] as HookSignal["arc"]
-    : {
-        chatId: row.chatId,
-        targetSessionId: row.targetSessionId,
-        targetProvider: row.targetProvider,
-        hookSockPresent: false,
-      }
+  const native = Option.getOrElse(decodeNative(envelope["native"]), () => ({
+    sessionId: row.nativeSessionId,
+    transcriptPath: null,
+    conversationId: row.nativeConversationId,
+    turnId: row.nativeTurnId,
+    toolUseId: row.nativeToolUseId,
+    hookEventName: row.nativeHookEventName,
+    model: null,
+  }))
+  const arc = Option.getOrElse(decodeArc(envelope["arc"]), () => ({
+    chatId: row.chatId,
+    targetSessionId: row.targetSessionId,
+    targetProvider: row.targetProvider,
+    hookSockPresent: false,
+  }))
   const provider = row.resolvedProvider
   return {
     schemaVersion: typeof envelope["schemaVersion"] === "number" ? envelope["schemaVersion"] : 0,
