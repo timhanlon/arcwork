@@ -567,10 +567,28 @@ export const launchArcMainController = (
           const path = activePaths.get(session.id)
           if (!path || watchedTargets.has(session.id)) continue
           watchedTargets.set(session.id, path)
-          yield* FiberMap.run(transcriptWatchers, session.id, runTranscriptWatcher(session), {
-            onlyIfMissing: true,
-            startImmediately: true,
-          })
+          yield* FiberMap.run(
+            transcriptWatchers,
+            session.id,
+            // Self-clean the parallel `watchedTargets` registry when the watcher
+            // ends — a failed watch (converted to success by its own catchCause)
+            // or an interruption. Without this the entry lingers after FiberMap
+            // has dropped the fiber, and the `watchedTargets.has` guard above
+            // blocks re-creation forever while the session stays live on the same
+            // transcript. Identity-guarded on the path so a concurrent
+            // path-change swap (deleted + re-added above) isn't clobbered.
+            runTranscriptWatcher(session).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  if (watchedTargets.get(session.id) === path) watchedTargets.delete(session.id)
+                }),
+              ),
+            ),
+            {
+              onlyIfMissing: true,
+              startImmediately: true,
+            },
+          )
         }
       }),
     ).pipe(Effect.forkScoped)
