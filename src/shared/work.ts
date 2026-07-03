@@ -269,15 +269,16 @@ export type WorkCommentListing = typeof WorkCommentListing.Type
 
 /**
  * The change descriptor `WorkService.changes` publishes on every real mutation,
- * forwarded to renderers over the `arc:work` push channel. It is an
- * *invalidation*, not a list: work has several heterogeneous reads (per-chat,
+ * carried to renderers as the element of the `WatchWorkChanges` RPC stream. It is
+ * an *invalidation*, not a list: work has several heterogeneous reads (per-chat,
  * workspace-wide, per-work comments), so consumers re-pull their own query on a
- * tick rather than receiving one canonical list. A plain structured-clone-safe
- * object (no Schema) — it crosses the IPC broadcast, not the typed RPC seam.
+ * tick rather than receiving one canonical list. Defined as a schema here so the
+ * RPC contract keys off this one definition rather than a parallel wire copy.
  */
-export interface WorkChange {
+export const WorkChange = Schema.Struct({
   /** The mutated work ref. */
-  readonly refId: WorkId
+  refId: WorkId,
   /** The work's authoring chat, when known — lets a consumer scope its refetch. */
-  readonly chatId: ChatId | null
-}
+  chatId: Schema.NullOr(ChatId),
+})
+export type WorkChange = typeof WorkChange.Type

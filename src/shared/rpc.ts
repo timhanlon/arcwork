@@ -1,7 +1,7 @@
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { ChatId, TargetId, WorkId, WorkspaceId } from "./ids.js"
-import { ProviderSpec } from "./provider.js"
+import { Provider, ProviderSpec } from "./provider.js"
 import { Preset } from "./preset.js"
 import { Chat } from "./chat.js"
 import { ActivityEvent } from "./activity-event.js"
@@ -14,6 +14,7 @@ import { ArcGetParams, ArcGetResult, ArcSearchParams, ArcSearchResult } from "./
 import { Workspace } from "./workspace.js"
 import {
   Work,
+  WorkChange,
   WorkCommentListing,
   WorkCreateInput,
   WorkPriority,
@@ -81,7 +82,7 @@ const LocalModelStatus = Schema.Struct({
 
 /** Per-provider artifact ingest counts, shared by the two ingest results. */
 const IngestSummary = Schema.Struct({
-  provider: Schema.Literals(["claude", "codex", "cursor", "pi"]),
+  provider: Provider,
   sessions: Schema.Number,
   messages: Schema.Number,
   toolCalls: Schema.Number,
@@ -103,7 +104,9 @@ export const WorkspaceFiles = Schema.Struct({
 })
 export type WorkspaceFiles = typeof WorkspaceFiles.Type
 
-const IngestKinds = Schema.Literals(["all", "claude", "codex", "cursor", "pi"])
+// "all" (sweep every provider) plus each provider, derived from the canonical
+// union so a new provider can't be added there and silently omitted here.
+const IngestKinds = Schema.Union([Schema.Literal("all"), Provider])
 
 /**
  * Lightweight change descriptors for the `Watch*Changes` signal streams. These
@@ -113,7 +116,6 @@ const IngestKinds = Schema.Literals(["all", "claude", "codex", "cursor", "pi"])
  * turn) must not re-stream a whole list on every tick.
  */
 const ChatChange = Schema.Struct({ chatId: ChatId })
-const WorkChangeWire = Schema.Struct({ refId: WorkId, chatId: Schema.NullOr(ChatId) })
 // `kind` separates the two reasons the git read model moves: `status` is a
 // working-tree edit (refresh the changed-files list only); `repo` is a branch/PR
 // remap from a hook or worktree op (refresh context/commits too). The renderer
@@ -305,7 +307,7 @@ export const ArcRpcs = RpcGroup.make(
    */
   Rpc.make("WatchChatMessageChanges", { success: ChatChange, error: RpcError, stream: true }),
   Rpc.make("WatchChatActivityChanges", { success: ChatChange, error: RpcError, stream: true }),
-  Rpc.make("WatchWorkChanges", { success: WorkChangeWire, error: RpcError, stream: true }),
+  Rpc.make("WatchWorkChanges", { success: WorkChange, error: RpcError, stream: true }),
   /** Git read-model invalidation: a hook-driven branch remap or PR sync touched
    * a workspace's repo/PR state — the Git pane re-pulls `GetWorkspaceGitContext`. */
   Rpc.make("WatchGitChanges", { success: GitChange, error: RpcError, stream: true }),
