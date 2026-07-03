@@ -1,4 +1,5 @@
 import { Clock, Context, Effect, Layer, Queue, Stream, SubscriptionRef } from "effect"
+import * as Semaphore from "effect/Semaphore"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import { nowIso } from "../clock.js"
 import { EventEmitter } from "node:events"
@@ -146,6 +147,15 @@ export const TargetSessionManagerLive = Layer.effect(
     const events = new EventEmitter()
     const arcDb = resolveArcDb()
 
+    // Serialize launch/resume so their check-then-spawn windows can't overlap.
+    // Both read the store to decide whether a session already exists (manual
+    // reuse for the same chat+provider; an already-attached pty on resume) and
+    // then spawn — two concurrent RPCs (a double-click, a double resume) would
+    // both observe "none" and mint duplicate PTYs into the same session. The
+    // critical section is fast (spawn is a synchronous node-pty call; readiness
+    // is driven later off callbacks), so one global permit is enough.
+    const launchLock = yield* Semaphore.make(1)
+
     // PTY exit handling runs as structured Effect work, not inline in node-pty's
     // `onExit` callback. The callback only offers the exit notification here; a
     // single scoped fiber (below) drains the queue and applies the whole exit
@@ -286,6 +296,7 @@ export const TargetSessionManagerLive = Layer.effect(
       })
 
     const launch = (req: LaunchRequest) =>
+      launchLock.withPermits(1)(
       Effect.gen(function* () {
         const origin = req.origin ?? "manual"
         const reuseExisting = req.reuseExisting ?? origin === "manual"
@@ -431,9 +442,11 @@ export const TargetSessionManagerLive = Layer.effect(
         Effect.withSpan("arc.target.launch", {
           attributes: { "arc.provider": req.provider, "arc.chat_id": req.chatId },
         }),
+      ),
       )
 
     const resume = (req: ResumeRequest) =>
+      launchLock.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* SubscriptionRef.get(store)
         const existing = current.get(req.sessionId)
@@ -499,7 +512,8 @@ export const TargetSessionManagerLive = Layer.effect(
           `target resumed provider=${session.provider} chat=${session.chatId} target=${session.id}`,
         )
         return session
-      })
+      }),
+      )
 
     // Stop a live child on demand. The same kill the app-quit finalizer does,
     // but for one session and graceful: SIGTERM first so the agent CLI can
@@ -555,13 +569,20 @@ export const TargetSessionManagerLive = Layer.effect(
             `native session changed target=${targetSessionId} provider=${session.provider} chat=${session.chatId} old=${session.nativeSessionId} new=${nativeSessionId}`,
           )
         }
-        yield* SubscriptionRef.update(store, (m) =>
-          new Map(m).set(session.id, {
-            ...session,
+        // Re-read the session from the map inside `update`, not from the snapshot
+        // above: `handleExit` may have flipped it to "exited" while this effect
+        // yielded through the log/guard steps. Spreading the captured `session`
+        // would resurrect its "running" state; spread the latest so only the
+        // native-binding fields change (and drop the write if it vanished).
+        yield* SubscriptionRef.update(store, (m) => {
+          const latest = m.get(targetSessionId)
+          if (!latest) return m
+          return new Map(m).set(latest.id, {
+            ...latest,
             nativeSessionId,
-            nativeTranscriptPath: nativeTranscriptPath ?? session.nativeTranscriptPath,
-          }),
-        )
+            nativeTranscriptPath: nativeTranscriptPath ?? latest.nativeTranscriptPath,
+          })
+        })
         // Persist the binding so it survives restart (the whole point of this
         // arc) — awaited, but a write failure never fails the live mutation above.
         yield* db

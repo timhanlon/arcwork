@@ -1,4 +1,5 @@
 import { Context, Effect, FiberSet, Layer, Result, Schedule } from "effect"
+import * as Semaphore from "effect/Semaphore"
 import { EventEmitter } from "node:events"
 import * as fs from "node:fs"
 import * as net from "node:net"
@@ -32,6 +33,14 @@ export const HookSignalServerLive = Layer.effect(
   Effect.gen(function* () {
     const events = new EventEmitter()
     const servers = new Map<string, net.Server>()
+
+    // Serialize `ensureListening` so the has-check and the bind can't interleave:
+    // two concurrent launches into the same workspace (concurrent agent spawns)
+    // would both pass `servers.has`, both `bindOnce` — the second unlinking and
+    // rebinding the first's socket, and `servers.set` overwriting the first
+    // server so it leaks outside the shutdown finalizer. One global permit keeps
+    // it simple; a bind is a rare, fast per-workspace operation.
+    const bindLock = yield* Semaphore.make(1)
 
     // The socket callbacks below fire in raw Node event-loop land, outside any
     // Effect fiber. `makeRuntime` captures this layer's context — crucially the
@@ -110,27 +119,29 @@ export const HookSignalServerLive = Layer.effect(
       })
 
     const ensureListening = (repoRoot: string): Effect.Effect<string> =>
-      Effect.suspend(() => {
-        const sockPath = socketPath(repoRoot)
-        if (servers.has(repoRoot)) return Effect.succeed(sockPath)
-        // EADDRINUSE on a quick restart is transient — the prior run's socket may
-        // not be released yet. Retry a few times with a short backoff; any other
-        // error (or exhausting retries) logs and resolves anyway, so a channel
-        // failure never blocks launch.
-        return bindOnce(sockPath).pipe(
-          Effect.retry({
-            while: (e) => e.code === "EADDRINUSE",
-            schedule: Schedule.exponential("50 millis").pipe(Schedule.both(Schedule.recurs(3))),
-          }),
-          Effect.tap((server) => Effect.sync(() => servers.set(repoRoot, server))),
-          Effect.as(sockPath),
-          Effect.catch((e) =>
-            Effect.logWarning(`[arc-hook] socket bind failed (${sockPath}): ${String(e)}`).pipe(
-              Effect.as(sockPath),
+      bindLock.withPermits(1)(
+        Effect.suspend(() => {
+          const sockPath = socketPath(repoRoot)
+          if (servers.has(repoRoot)) return Effect.succeed(sockPath)
+          // EADDRINUSE on a quick restart is transient — the prior run's socket may
+          // not be released yet. Retry a few times with a short backoff; any other
+          // error (or exhausting retries) logs and resolves anyway, so a channel
+          // failure never blocks launch.
+          return bindOnce(sockPath).pipe(
+            Effect.retry({
+              while: (e) => e.code === "EADDRINUSE",
+              schedule: Schedule.exponential("50 millis").pipe(Schedule.both(Schedule.recurs(3))),
+            }),
+            Effect.tap((server) => Effect.sync(() => servers.set(repoRoot, server))),
+            Effect.as(sockPath),
+            Effect.catch((e) =>
+              Effect.logWarning(`[arc-hook] socket bind failed (${sockPath}): ${String(e)}`).pipe(
+                Effect.as(sockPath),
+              ),
             ),
-          ),
-        )
-      })
+          )
+        }),
+      )
 
     return { ensureListening, events }
   }),
