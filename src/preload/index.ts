@@ -1,17 +1,23 @@
 import { contextBridge, ipcRenderer } from "electron"
 import { RPC_CHANNEL, RPC_REPLY_CHANNEL } from "../shared/rpc.js"
 import type { AssistantStreamDelta } from "../shared/assistant-stream.js"
+import type { TargetId } from "../shared/ids.js"
 
-type PtyData = { sessionId: string; data: string }
-type PtyExit = { sessionId: string; exitCode: number }
+type PtyData = { sessionId: TargetId; data: string }
+type PtyExit = { sessionId: TargetId; exitCode: number }
 
 /**
  * Bridge. Control plane: the RPC transport — `rpcSend` ships an encoded client
  * message to main, `onRpcMessage` subscribes to encoded server replies; the
  * renderer client (`rpc-client.ts`) drives both. Data plane: `onPtyData` /
  * `onPtyExit` subscriptions and `ptyWrite` for raw keystrokes.
+ *
+ * This object is the single source of truth for the bridge shape: `env.d.ts`
+ * derives `Window["arc"]` from `typeof arcApi` (exported below), so a method
+ * added or a payload retyped here reaches the renderer with no second
+ * declaration to keep in sync. `sessionId`s are branded `TargetId` end to end.
  */
-contextBridge.exposeInMainWorld("arc", {
+const arcApi = {
   /**
    * Which build is this — `dev` (`pnpm dev`) or `stable` (built/preview)? The
    * main process stamps `ARC_PROFILE` before any window opens, and this preload
@@ -61,21 +67,27 @@ contextBridge.exposeInMainWorld("arc", {
     return () => ipcRenderer.removeListener("arc:assistant-stream", handler)
   },
 
-  ptyWrite: (sessionId: string, data: string): void =>
+  ptyWrite: (sessionId: TargetId, data: string): void =>
     ipcRenderer.send("arc:pty-write", { sessionId, data }),
 
-  ptyResize: (sessionId: string, cols: number, rows: number): void =>
+  ptyResize: (sessionId: TargetId, cols: number, rows: number): void =>
     ipcRenderer.send("arc:pty-resize", { sessionId, cols, rows }),
 
   /** Observability: report PTY bytes that arrived for a session *before* its id
    * bound and were recovered — buffered, then replayed into the terminal on bind
    * (the splash banner). Main logs these as `arc.pty.replayed` for Lensflare. */
-  ptyReportReplayed: (sessionId: string, bytes: number, chunks: number): void =>
+  ptyReportReplayed: (sessionId: TargetId, bytes: number, chunks: number): void =>
     ipcRenderer.send("arc:pty-replayed", { sessionId, bytes, chunks }),
 
   /** Observability: report PTY bytes genuinely lost before id-bind — output that
    * overflowed the pre-bind replay buffer's per-session cap. Healthy launches
    * report none. Main logs these as `arc.pty.dropped` for Lensflare. */
-  ptyReportDropped: (sessionId: string, bytes: number, chunks: number): void =>
+  ptyReportDropped: (sessionId: TargetId, bytes: number, chunks: number): void =>
     ipcRenderer.send("arc:pty-dropped", { sessionId, bytes, chunks }),
-})
+}
+
+contextBridge.exposeInMainWorld("arc", arcApi)
+
+/** The `window.arc` bridge surface, derived from the exposed object so the
+ * renderer's ambient `Window["arc"]` declaration (env.d.ts) cannot drift. */
+export type ArcApi = typeof arcApi
