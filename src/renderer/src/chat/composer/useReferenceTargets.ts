@@ -52,6 +52,11 @@ export function useReferenceTargets(args: {
     if (!workspaceId || loadedFor.current === workspaceId) return
     loadedFor.current = workspaceId
     void loadFiles({ payload: { workspaceId } }).then((exit) => {
+      // The chat may have moved to a different workspace while this fetch was in
+      // flight (the reset effect points loadedFor at the new root). A late
+      // response for the old root must not populate the picker with another
+      // repo's paths, nor re-arm a load the new root already owns.
+      if (loadedFor.current !== workspaceId) return
       if (Exit.isSuccess(exit)) {
         setFiles(exit.value.files)
         setFilesTruncated(exit.value.truncated)

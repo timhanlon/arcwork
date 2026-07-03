@@ -110,15 +110,25 @@ export function ArcSearchPanel({
 
   const loadMore = (): void => {
     if (!nextCursor || loadingMore) return
+    // Guard against the same stale-response race the debounced search guards:
+    // if the query changes while this page is in flight, its hits belong to the
+    // old query and must not be appended onto (or its cursor overwrite) the new
+    // results. `.finally` still clears the spinner unconditionally so it can't
+    // stick after a query change.
+    const id = requestId.current
     setLoadingMore(true)
     setError(undefined)
     rpc("SearchArc", { params: buildArcSearchParams(draft, nextCursor) })
       .then((result) => {
+        if (id !== requestId.current) return
         setHits((current) => [...current, ...result.hits])
         setTotal(result.total)
         setNextCursor(result.nextCursor)
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : "Search failed"))
+      .catch((err: unknown) => {
+        if (id !== requestId.current) return
+        setError(err instanceof Error ? err.message : "Search failed")
+      })
       .finally(() => setLoadingMore(false))
   }
 
