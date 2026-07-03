@@ -24,6 +24,15 @@ import type { Provider } from "../ingest/db/schema.js"
 import type { HookBinding, HookSignal } from "../hooks/signals.js"
 import { hookSignalToAssistantStreamDelta } from "../hooks/assistant-stream-delta.js"
 import { PTY_TRACE_ENABLED, tracePtySend } from "./pty-trace.js"
+import {
+  ASSISTANT_STREAM_CHANNEL,
+  PTY_DATA_CHANNEL,
+  PTY_DROPPED_CHANNEL,
+  PTY_EXIT_CHANNEL,
+  PTY_REPLAYED_CHANNEL,
+  PTY_RESIZE_CHANNEL,
+  PTY_WRITE_CHANNEL,
+} from "../../shared/rpc.js"
 import { ipcMain } from "../electron-optional.js"
 
 /** How the controller reaches renderer windows. The Electron implementation
@@ -334,9 +343,9 @@ export const launchArcMainController = (
       if (PTY_TRACE_ENABLED && typeof e.sessionId === "string" && typeof e.data === "string") {
         tracePtySend(e.sessionId, e.data)
       }
-      transport.broadcast("arc:pty-data", evt)
+      transport.broadcast(PTY_DATA_CHANNEL, evt)
     }
-    const onPtyExit = (evt: unknown): void => transport.broadcast("arc:pty-exit", evt)
+    const onPtyExit = (evt: unknown): void => transport.broadcast(PTY_EXIT_CHANNEL, evt)
     sessions.events.on("data", onPtyData)
     sessions.events.on("exit", onPtyExit)
     yield* Effect.addFinalizer(() =>
@@ -402,16 +411,16 @@ export const launchArcMainController = (
     // hook/PTY data plane and orchestration below — runs unchanged without it.
     if (ipcMain) {
       const ipc = ipcMain
-      ipc.on("arc:pty-write", onPtyWrite)
-      ipc.on("arc:pty-resize", onPtyResize)
-      ipc.on("arc:pty-replayed", onPtyReplayed)
-      ipc.on("arc:pty-dropped", onPtyDropped)
+      ipc.on(PTY_WRITE_CHANNEL, onPtyWrite)
+      ipc.on(PTY_RESIZE_CHANNEL, onPtyResize)
+      ipc.on(PTY_REPLAYED_CHANNEL, onPtyReplayed)
+      ipc.on(PTY_DROPPED_CHANNEL, onPtyDropped)
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
-          ipc.removeListener("arc:pty-write", onPtyWrite)
-          ipc.removeListener("arc:pty-resize", onPtyResize)
-          ipc.removeListener("arc:pty-replayed", onPtyReplayed)
-          ipc.removeListener("arc:pty-dropped", onPtyDropped)
+          ipc.removeListener(PTY_WRITE_CHANNEL, onPtyWrite)
+          ipc.removeListener(PTY_RESIZE_CHANNEL, onPtyResize)
+          ipc.removeListener(PTY_REPLAYED_CHANNEL, onPtyReplayed)
+          ipc.removeListener(PTY_DROPPED_CHANNEL, onPtyDropped)
         }),
       )
     }
@@ -492,7 +501,7 @@ export const launchArcMainController = (
           // arrives via the transcript backfill/watcher (artifact projection).
           const delta = hookSignalToAssistantStreamDelta(signal)
           if (delta?.targetSessionId) {
-            transport.broadcast("arc:assistant-stream", delta)
+            transport.broadcast(ASSISTANT_STREAM_CHANNEL, delta)
           }
           yield* ingestHookSignal(
             { raw: rawHookSignals, activity: activityEvents, chat: chatMessages },

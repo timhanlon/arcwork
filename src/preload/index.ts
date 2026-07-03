@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer } from "electron"
-import { RPC_CHANNEL, RPC_REPLY_CHANNEL } from "../shared/rpc.js"
+import {
+  ASSISTANT_STREAM_CHANNEL,
+  PTY_DATA_CHANNEL,
+  PTY_DROPPED_CHANNEL,
+  PTY_EXIT_CHANNEL,
+  PTY_REPLAYED_CHANNEL,
+  PTY_RESIZE_CHANNEL,
+  PTY_WRITE_CHANNEL,
+  RPC_CHANNEL,
+  RPC_REPLY_CHANNEL,
+} from "../shared/rpc.js"
 import type { AssistantStreamDelta } from "../shared/assistant-stream.js"
 import type { TargetId } from "../shared/ids.js"
 
@@ -49,41 +59,41 @@ const arcApi = {
 
   onPtyData: (cb: (evt: PtyData) => void): (() => void) => {
     const handler = (_e: unknown, evt: PtyData) => cb(evt)
-    ipcRenderer.on("arc:pty-data", handler)
-    return () => ipcRenderer.removeListener("arc:pty-data", handler)
+    ipcRenderer.on(PTY_DATA_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(PTY_DATA_CHANNEL, handler)
   },
 
   onPtyExit: (cb: (evt: PtyExit) => void): (() => void) => {
     const handler = (_e: unknown, evt: PtyExit) => cb(evt)
-    ipcRenderer.on("arc:pty-exit", handler)
-    return () => ipcRenderer.removeListener("arc:pty-exit", handler)
+    ipcRenderer.on(PTY_EXIT_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(PTY_EXIT_CHANNEL, handler)
   },
 
   /** Ephemeral live assistant tokens for the in-flight turn (Claude only).
    * Render-only — never persisted; the durable bubble lands from the transcript. */
   onAssistantStream: (cb: (delta: AssistantStreamDelta) => void): (() => void) => {
     const handler = (_e: unknown, delta: AssistantStreamDelta) => cb(delta)
-    ipcRenderer.on("arc:assistant-stream", handler)
-    return () => ipcRenderer.removeListener("arc:assistant-stream", handler)
+    ipcRenderer.on(ASSISTANT_STREAM_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(ASSISTANT_STREAM_CHANNEL, handler)
   },
 
   ptyWrite: (sessionId: TargetId, data: string): void =>
-    ipcRenderer.send("arc:pty-write", { sessionId, data }),
+    ipcRenderer.send(PTY_WRITE_CHANNEL, { sessionId, data }),
 
   ptyResize: (sessionId: TargetId, cols: number, rows: number): void =>
-    ipcRenderer.send("arc:pty-resize", { sessionId, cols, rows }),
+    ipcRenderer.send(PTY_RESIZE_CHANNEL, { sessionId, cols, rows }),
 
   /** Observability: report PTY bytes that arrived for a session *before* its id
    * bound and were recovered — buffered, then replayed into the terminal on bind
    * (the splash banner). Main logs these as `arc.pty.replayed` for Lensflare. */
   ptyReportReplayed: (sessionId: TargetId, bytes: number, chunks: number): void =>
-    ipcRenderer.send("arc:pty-replayed", { sessionId, bytes, chunks }),
+    ipcRenderer.send(PTY_REPLAYED_CHANNEL, { sessionId, bytes, chunks }),
 
   /** Observability: report PTY bytes genuinely lost before id-bind — output that
    * overflowed the pre-bind replay buffer's per-session cap. Healthy launches
    * report none. Main logs these as `arc.pty.dropped` for Lensflare. */
   ptyReportDropped: (sessionId: TargetId, bytes: number, chunks: number): void =>
-    ipcRenderer.send("arc:pty-dropped", { sessionId, bytes, chunks }),
+    ipcRenderer.send(PTY_DROPPED_CHANNEL, { sessionId, bytes, chunks }),
 }
 
 contextBridge.exposeInMainWorld("arc", arcApi)

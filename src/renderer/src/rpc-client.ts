@@ -1,6 +1,6 @@
-import { Cause, Effect, Exit, Layer, ManagedRuntime, Queue, Scope } from "effect"
+import { Cause, Effect, Exit, Layer, ManagedRuntime, Queue, Schema, Scope } from "effect"
 import { type Rpc, RpcClient, type RpcMessage } from "effect/unstable/rpc"
-import { ArcRpcError, ArcRpcs, type ArcRpc, type RpcError } from "../../shared/rpc.js"
+import { ArcRpcError, ArcRpcs, RpcError, type ArcRpc } from "../../shared/rpc.js"
 import { devLog, waitForBridge } from "./bridge.js"
 
 /**
@@ -85,13 +85,10 @@ const ensureClient = (): ReturnType<typeof buildClient> => (pending ??= buildCli
 
 export const sharedFlatRpcClient = Effect.promise(() => ensureClient().then(({ client }) => client))
 
-const isRpcError = (error: unknown): error is RpcError =>
-  typeof error === "object" &&
-  error !== null &&
-  "_tag" in error &&
-  ((error as Record<string, unknown>)["_tag"] === "ArcRequestError" ||
-    (error as Record<string, unknown>)["_tag"] === "ArcUnexpectedError") &&
-  typeof (error as Record<string, unknown>)["message"] === "string"
+// Schema-derived guard for a structured RpcError crossing back from a handler —
+// the RpcError schema is the single source of truth for the shape, so no manual
+// _tag/message structural check.
+const isRpcError = Schema.is(RpcError)
 
 /**
  * Fold a failed call into the renderer's `ArcRpcError`. A structured `RpcError`
@@ -100,12 +97,12 @@ const isRpcError = (error: unknown): error is RpcError =>
  * mirroring how main hides internals behind a clean message.
  */
 const toArcRpcError = (error: unknown, logTransportError: (error: unknown) => void): ArcRpcError => {
-  if (isRpcError(error)) return new ArcRpcError(error)
+  if (isRpcError(error)) return new ArcRpcError({ kind: error._tag, message: error.message })
   // A transport fault is collapsed to a generic message for the caller, but the
   // detail would otherwise be lost — log the cause through Effect (not console)
   // so it stays on the same observability seam as everything else.
   logTransportError(error)
-  return new ArcRpcError({ _tag: "ArcUnexpectedError", message: "Unexpected RPC transport error" })
+  return new ArcRpcError({ kind: "ArcUnexpectedError", message: "Unexpected RPC transport error" })
 }
 
 /**

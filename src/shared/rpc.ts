@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Data, Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/unstable/rpc"
 import { ChatId, TargetId, WorkId, WorkspaceId } from "./ids.js"
 import { Provider, ProviderSpec } from "./provider.js"
@@ -44,6 +44,20 @@ export const RPC_CHANNEL = "arc:rpc"
 export const RPC_REPLY_CHANNEL = "arc:rpc-reply"
 
 /**
+ * Raw data-plane IPC channels (not the typed RPC seam): PTY bytes/exits and the
+ * ephemeral assistant-token stream. Named here so main (the broadcaster) and the
+ * preload bridge (the subscriber) can't drift on a bare string literal — a typo
+ * on either side would fail silently (an empty terminal, no error).
+ */
+export const PTY_DATA_CHANNEL = "arc:pty-data"
+export const PTY_EXIT_CHANNEL = "arc:pty-exit"
+export const PTY_WRITE_CHANNEL = "arc:pty-write"
+export const PTY_RESIZE_CHANNEL = "arc:pty-resize"
+export const PTY_REPLAYED_CHANNEL = "arc:pty-replayed"
+export const PTY_DROPPED_CHANNEL = "arc:pty-dropped"
+export const ASSISTANT_STREAM_CHANNEL = "arc:assistant-stream"
+
+/**
  * Typed error returned across the seam. `ArcRequestError` is an expected,
  * user-facing condition (unknown chat, target not running, empty prompt...);
  * `ArcUnexpectedError` is everything else (a SqlError, a defect) collapsed to a
@@ -56,15 +70,13 @@ export const RpcError = Schema.Struct({
 })
 export type RpcError = typeof RpcError.Type
 
-/** Error thrown by the renderer `rpc()` facade when a call fails. */
-export class ArcRpcError extends Error {
-  readonly _tag: RpcError["_tag"]
-  constructor(payload: RpcError) {
-    super(payload.message)
-    this.name = "ArcRpcError"
-    this._tag = payload._tag
-  }
-}
+/** Error thrown by the renderer `rpc()` facade when a call fails. `_tag` is always
+ * `"ArcRpcError"`; `kind` preserves which side of the seam failed (an expected
+ * `ArcRequestError` vs a collapsed `ArcUnexpectedError`). */
+export class ArcRpcError extends Data.TaggedError("ArcRpcError")<{
+  readonly kind: RpcError["_tag"]
+  readonly message: string
+}> {}
 
 // --- Success schemas that aren't a bare domain type or `Array(domain)`. ---
 
