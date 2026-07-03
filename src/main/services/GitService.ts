@@ -414,11 +414,29 @@ export const GitServiceLive = Layer.effect(
         return repository
       }).pipe(Effect.withSpan("arc.git.detect_repository", { attributes: { "arc.workspace_id": workspaceId } }))
 
+    // Fast path shared by syncPullRequests and requireRepository: a bound
+    // workspace's persisted repository row, or null if it isn't bound yet. No
+    // detection — that shells out to git and re-upserts on every call.
+    const persistedRepository = (
+      workspaceId: WorkspaceId,
+    ): Effect.Effect<RepositoryRow | null, ArcRequestError> =>
+      Effect.gen(function* () {
+        const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
+        if (!workspace?.repositoryId) return null
+        return yield* store
+          .repositoryById(workspace.repositoryId)
+          .pipe(Effect.mapError((e) => arcRequestError(`repository load failed: ${e}`)))
+      })
+
     const syncPullRequests = (
       workspaceId: WorkspaceId,
     ): Effect.Effect<ReadonlyArray<PullRequestRow>, ArcRequestError> =>
       Effect.gen(function* () {
-        const repository = yield* detectRepository(workspaceId)
+        // Read the bound repo row; only fall back to full detection when the
+        // workspace isn't bound yet. This runs on every debounced pre-push tick
+        // and again right after createPullRequest's requireRepository — neither
+        // needs to re-detect (git subprocesses + upserts + workspaces.refresh).
+        const repository = (yield* persistedRepository(workspaceId)) ?? (yield* detectRepository(workspaceId))
         if (!repository) return []
         if (!repository.githubOwner || !repository.githubRepo) {
           yield* Effect.logDebug(`PR sync skipped: no GitHub remote for ${repository.rootPath}`)
@@ -705,13 +723,8 @@ export const GitServiceLive = Layer.effect(
         // rather than re-running full detection (which shells out and re-upserts
         // on every lifecycle op). Detection is the fallback for a workspace not
         // yet bound — the boot scan / post-checkout hook bind it first in practice.
-        const workspace = resolveWorkspace(yield* workspaces.list, workspaceId)
-        if (workspace?.repositoryId) {
-          const persisted = yield* store
-            .repositoryById(workspace.repositoryId)
-            .pipe(Effect.mapError((e) => arcRequestError(`repository load failed: ${e}`)))
-          if (persisted) return persisted
-        }
+        const persisted = yield* persistedRepository(workspaceId)
+        if (persisted) return persisted
         const detected = yield* detectRepository(workspaceId)
         if (!detected) {
           return yield* Effect.fail(arcRequestError(`Workspace ${workspaceId} is not in a git repository`))

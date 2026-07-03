@@ -335,13 +335,15 @@ const toolCallKind: ArtifactProjectionKind = (ctx) => {
     const toolId = tool.nativeToolId ?? tool.id
     const occurredAt = artifactToolOccurredAt(ctx, tool)
     const status: ChatMessageRow["status"] = tool.outputText ? "final" : "pending"
-    const questionBody = artifactQuestionBody(tool)
-    const questionRequest = artifactQuestionRequest(tool)
-    if (questionBody && questionRequest) {
+    // Project once and derive both body and request from it: this runs on the
+    // 750ms artifact poll, and the two exported helpers each re-parse the tool's
+    // JSON + re-decode the question. (A null projection means "not a question".)
+    const questionRequest = artifactQuestionProjection(tool)
+    if (questionRequest) {
       specs.push({
         role: "request",
         messageId: toolId,
-        body: questionBody,
+        body: questionLines(questionRequest).join("\n"),
         status,
         requestJson: JSON.stringify(questionRequest),
         occurredAt,

@@ -1,4 +1,4 @@
-import type { JSX, MouseEvent, ReactNode } from "react"
+import { type JSX, type MouseEvent, type ReactNode, useMemo } from "react"
 import { defaultRehypePlugins } from "streamdown"
 import { arcId, type WorkId } from "../../../shared/ids.js"
 import { Markdown, baseComponents, type StreamdownProps } from "../ui/Markdown.js"
@@ -151,6 +151,9 @@ const workComponents = (onOpenWork: (workId: WorkId) => void) => ({
  * threaded through every transcript/detail ancestor. Work ids are always
  * linkified — outside a provider (Storybook) the click is a safe no-op.
  */
+/** Stable identity across renders — see the memoization note in WorkMarkdown. */
+const WORK_REMARK_PLUGINS = [remarkWorkLinks]
+
 export function WorkMarkdown({
   children,
   streaming = false,
@@ -161,12 +164,20 @@ export function WorkMarkdown({
   readonly compact?: boolean
 }): JSX.Element {
   const { open } = useShellActions()
+  // Memoize so Streamdown's per-block memo survives streaming re-renders (a new
+  // components object or remark array each delta would re-render every block,
+  // Shiki code included). `open` is a stable shell action; the remark array has
+  // no deps, so it's hoisted to module scope.
+  const components = useMemo(
+    () => workComponents((workId) => open({ kind: "work", workId }, "right")),
+    [open],
+  )
   return (
     <Markdown
       compact={compact}
       streaming={streaming}
-      components={workComponents((workId) => open({ kind: "work", workId }, "right"))}
-      remarkPlugins={[remarkWorkLinks]}
+      components={components}
+      remarkPlugins={WORK_REMARK_PLUGINS}
       rehypePlugins={workRehypePlugins}
     >
       {children}

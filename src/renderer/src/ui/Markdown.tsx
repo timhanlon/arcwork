@@ -1,10 +1,16 @@
-import type { ComponentProps, JSX, ReactNode } from "react"
+import { type ComponentProps, type JSX, type ReactNode, useMemo } from "react"
 import remarkGfm from "remark-gfm"
 import { Streamdown } from "streamdown"
 import { code } from "@streamdown/code"
 import { mermaid } from "@streamdown/mermaid"
 
 export type StreamdownProps = ComponentProps<typeof Streamdown>
+
+// Stable identity: Streamdown memoizes each rendered block by shallow-comparing
+// these props, so a fresh object/array literal per render (during streaming,
+// StreamingMessage re-renders per token) would re-run the whole document —
+// including Shiki-highlighted code blocks — every delta.
+const STREAMDOWN_PLUGINS = { code, mermaid }
 
 // Styling is Streamdown's own (its Tailwind utilities resolve against our @theme
 // tokens) — we only set the prose's base size/color and layout containment on the
@@ -65,15 +71,21 @@ export function Markdown({
   readonly remarkPlugins?: StreamdownProps["remarkPlugins"]
   readonly rehypePlugins?: StreamdownProps["rehypePlugins"]
 }): JSX.Element {
+  // Keep the required remark-gfm + caller plugins array identity-stable across
+  // renders (callers pass a stable array); see STREAMDOWN_PLUGINS.
+  const mergedRemarkPlugins = useMemo(
+    () => [remarkGfm, ...(remarkPlugins ?? [])],
+    [remarkPlugins],
+  )
   return (
     <Streamdown
       className={`min-w-0 font-mono ${compact ? "text-xs" : "text-sm"} text-foreground [overflow-wrap:anywhere]`}
       mode={streaming ? "streaming" : "static"}
       parseIncompleteMarkdown={streaming}
       components={components ?? baseComponents}
-      remarkPlugins={[remarkGfm, ...(remarkPlugins ?? [])]}
+      remarkPlugins={mergedRemarkPlugins}
       rehypePlugins={rehypePlugins}
-      plugins={{ code, mermaid }}
+      plugins={STREAMDOWN_PLUGINS}
       skipHtml
     >
       {children}
