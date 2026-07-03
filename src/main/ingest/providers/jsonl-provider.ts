@@ -67,15 +67,24 @@ export const makeJsonlSessionProvider = (
       return metas
     })
 
-    // Scan headers once, then read+normalize each matching file. Each file is one
-    // session, so this is already O(transcript) — no re-parse. The `nativeSessionId`
-    // hint is ignored: a flat scan can't cheaply locate one file by session id, and
-    // callers filter the result anyway (see AgentProvider docs).
-    const collect = (workspace: string) =>
+    // Scan headers once (one line per file — cheap), then read+normalize each
+    // matching file. A full collect is already O(transcript): each file is one
+    // session. When a `nativeSessionId` hint is given (the turn-end re-ingest
+    // path), narrow to the single file carrying that id before the expensive
+    // `readJsonl` — the header scan already knows every file's id, so only the
+    // changed session is parsed instead of every rollout sharing the workspace
+    // cwd (the O(sessions × transcript) blow-up the claude/cursor providers were
+    // fixed to avoid). Callers still filter the result, so the hint stays a cost
+    // optimization, never a correctness requirement.
+    const collect = (workspace: string, nativeSessionId?: string) =>
       Effect.gen(function* () {
         const real = yield* fs.realPath(workspace).pipe(Effect.orElseSucceed(() => workspace))
         const metas = yield* scan
-        const matched = metas.filter((m) => m.cwd === real || m.cwd === workspace)
+        const matched = metas.filter(
+          (m) =>
+            (m.cwd === real || m.cwd === workspace) &&
+            (nativeSessionId === undefined || m.nativeSessionId === nativeSessionId),
+        )
         const out: Array<ExtractedRows> = []
         for (const m of matched) {
           const result = yield* readJsonl(fs, config.id, m.path)
