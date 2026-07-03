@@ -6,6 +6,7 @@ import type {
   Mutable,
   Provider,
   ToolCallRow,
+  UsageEventRow,
 } from "../db/schema.js"
 import { hintsFromToolInput } from "./file-hints.js"
 import * as ids from "./ids.js"
@@ -59,11 +60,13 @@ export class SessionRowBuilder {
   private readonly messages: Array<MessageRow> = []
   private readonly toolCalls: Array<Mutable<ToolCallRow>> = []
   private readonly fileHints: Array<FileHintRow> = []
+  private readonly usageEvents: Array<UsageEventRow> = []
   private readonly toolByCallId = new Map<string, Mutable<ToolCallRow>>()
 
   private msgSeq = 0
   private toolSeq = 0
   private hintSeq = 0
+  private usageSeq = 0
   // Shared display counter across messages + tool calls (see MessageRow.ordinal).
   private ord = 0
   private firstUserText?: string
@@ -232,6 +235,34 @@ export class SessionRowBuilder {
     }
   }
 
+  /** Append a provider-reported token/context usage snapshot. */
+  usage(opts: {
+    readonly occurredAt?: string | null
+    readonly nativeRequestId?: string | null
+    readonly model?: string | null
+    readonly contextUsedTokens?: number | null
+    readonly contextWindowTokens?: number | null
+    readonly inputTokens?: number | null
+    readonly outputTokens?: number | null
+    readonly rawJson?: string | null
+  }): void {
+    this.usageEvents.push({
+      id: ids.usageEventId(this.sid, this.usageSeq),
+      sessionId: this.sid,
+      provider: this.provider,
+      occurredAt: opts.occurredAt ?? null,
+      nativeRequestId: opts.nativeRequestId ?? null,
+      model: opts.model ?? null,
+      contextUsedTokens: opts.contextUsedTokens ?? null,
+      contextWindowTokens: opts.contextWindowTokens ?? null,
+      inputTokens: opts.inputTokens ?? null,
+      outputTokens: opts.outputTokens ?? null,
+      rawJson: opts.rawJson ?? null,
+      sequence: this.usageSeq,
+    })
+    this.usageSeq++
+  }
+
   /** Assemble the session row + diagnostics and return the full extracted rows. */
   finish(meta: {
     readonly nativeSessionId: string
@@ -282,6 +313,7 @@ export class SessionRowBuilder {
       messages: this.messages,
       toolCalls: this.toolCalls,
       fileHints: this.fileHints,
+      usageEvents: this.usageEvents,
       diagnostics,
     }
   }

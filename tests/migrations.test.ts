@@ -1,9 +1,9 @@
-import { Effect, Layer, ManagedRuntime } from "effect"
+import { Effect, ManagedRuntime } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import { describe, expect, it } from "vitest"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
-import { runMigrations, sqlMigration } from "../src/main/db/migrator.js"
+import { runMigrations, sqlMigration, type Migrations } from "../src/main/db/migrator.js"
 import { arcMigrations } from "../src/main/db/schema.js"
 import { workMigrations } from "../src/main/work/schema.js"
 import { ingestMigrations } from "../src/main/ingest/db/schema.js"
@@ -22,15 +22,6 @@ const run = async <A>(program: Effect.Effect<A, SqlError, SqlClient>): Promise<A
   }
 }
 
-const tableExists = (table: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient
-    const rows = yield* sql.unsafe<{ name: string }>(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`,
-    )
-    return rows.length > 0
-  })
-
 const columnNames = (table: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient
@@ -45,62 +36,69 @@ const ledgerCount = (table: string) =>
     return rows[0]?.c ?? 0
   })
 
-describe("versioned migrations (ledger over node:sqlite)", () => {
-  it("arc baseline creates every table + the once-additive chat_messages columns, and records the ledger", async () => {
-    const result = await run(
-      Effect.gen(function* () {
-        yield* runMigrations("arc_migrations", arcMigrations)
-        return {
-          workspaces: yield* tableExists("workspaces"),
-          chats: yield* tableExists("chats"),
-          targetSessions: yield* tableExists("target_sessions"),
-          activityEvents: yield* tableExists("activity_events"),
-          chatMessages: yield* tableExists("chat_messages"),
-          rawHookSignals: yield* tableExists("raw_hook_signals"),
-          ledgerExists: yield* tableExists("arc_migrations"),
-          chatMessageCols: yield* columnNames("chat_messages"),
-          targetMessageCols: yield* columnNames("target_messages"),
-          targetSessionCols: yield* columnNames("target_sessions"),
-        }
-      }),
-    )
+/**
+ * Whitespace-normalized dump of every user table/index/trigger/view. Two DBs
+ * with equal dumps have the same schema, whatever migration path built them.
+ */
+const schemaDump = Effect.gen(function* () {
+  const sql = yield* SqlClient
+  const rows = yield* sql.unsafe<{ type: string; name: string; sql: string | null }>(
+    `SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`,
+  )
+  return rows.map((r) => `${r.type} ${r.name}: ${(r.sql ?? "").replace(/\s+/g, " ").trim()}`)
+})
 
-    expect(result.workspaces).toBe(true)
-    expect(result.chats).toBe(true)
-    expect(result.targetSessions).toBe(true)
-    expect(result.activityEvents).toBe(true)
-    expect(result.chatMessages).toBe(true)
-    expect(result.rawHookSignals).toBe(true)
-    expect(result.ledgerExists).toBe(true)
-    // The columns once bolted on by an ad-hoc ALTER are part of the baseline.
-    expect(result.chatMessageCols).toContain("request_json")
-    expect(result.chatMessageCols).toContain("model")
-    // 0012: injected-agent-message attribution, added by ALTER over the baseline.
-    expect(result.chatMessageCols).toContain("injected_from_target_session_id")
-    expect(result.chatMessageCols).toContain("injected_target_message_id")
-    expect(result.targetMessageCols).toContain("sender_target_session_id")
-    // 0013: orchestrator back-channel link.
-    expect(result.targetSessionCols).toContain("spawned_by")
+const stores = [
+  ["arc_migrations", arcMigrations],
+  ["work_migrations", workMigrations],
+  ["ingest_migrations", ingestMigrations],
+] as const
+
+/** The record restricted to its first `length` keys, in id order. */
+const prefixOf = (migrations: Migrations, length: number): Migrations =>
+  Object.fromEntries(
+    Object.entries(migrations)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .slice(0, length),
+  )
+
+describe("versioned migrations (ledger over node:sqlite)", () => {
+  it("pins the fresh end-state schema of every store", async () => {
+    for (const [table, migrations] of stores) {
+      const dump = await run(
+        Effect.gen(function* () {
+          yield* runMigrations(table, migrations)
+          return yield* schemaDump
+        }),
+      )
+      expect(dump).toMatchSnapshot(table)
+    }
   })
 
-  it("work migrations create the graph + comment tables and record each in the ledger", async () => {
-    const result = await run(
-      Effect.gen(function* () {
-        yield* runMigrations("work_migrations", workMigrations)
-        return {
-          node: yield* tableExists("graph_node"),
-          ref: yield* tableExists("graph_ref"),
-          refUpdate: yield* tableExists("graph_ref_update"),
-          edge: yield* tableExists("graph_edge"),
-          comment: yield* tableExists("work_comment"),
-        }
-      }),
-    )
-    expect(result.node).toBe(true)
-    expect(result.ref).toBe(true)
-    expect(result.refUpdate).toBe(true)
-    expect(result.edge).toBe(true)
-    expect(result.comment).toBe(true)
+  it("migrates every historical ledger prefix to the same schema as a fresh run", async () => {
+    // The property that keeps upgrades honest: a DB that stopped after ANY
+    // shipped migration, later migrated to head, has byte-identical schema to a
+    // fresh install. Catches edited baselines, order-dependent DDL, and repair
+    // migrations that leave stragglers behind.
+    for (const [table, migrations] of stores) {
+      const fresh = await run(
+        Effect.gen(function* () {
+          yield* runMigrations(table, migrations)
+          return yield* schemaDump
+        }),
+      )
+      const total = Object.keys(migrations).length
+      for (let applied = 1; applied < total; applied++) {
+        const staged = await run(
+          Effect.gen(function* () {
+            yield* runMigrations(table, prefixOf(migrations, applied))
+            yield* runMigrations(table, migrations)
+            return yield* schemaDump
+          }),
+        )
+        expect(staged, `${table}: resume after ${applied}/${total}`).toEqual(fresh)
+      }
+    }
   })
 
   it("target sessions are keyed by TypeID, not by chat/provider", async () => {
@@ -124,26 +122,6 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
       }),
     )
     expect(count).toBe(2)
-  })
-
-  it("ingest baseline creates its tables with the folded-in `ordinal` column", async () => {
-    const result = await run(
-      Effect.gen(function* () {
-        yield* runMigrations("ingest_migrations", ingestMigrations)
-        return {
-          sessions: yield* tableExists("sessions"),
-          messages: yield* tableExists("messages"),
-          toolCalls: yield* tableExists("tool_calls"),
-          messageCols: yield* columnNames("messages"),
-          toolCallCols: yield* columnNames("tool_calls"),
-        }
-      }),
-    )
-    expect(result.sessions).toBe(true)
-    expect(result.messages).toBe(true)
-    expect(result.toolCalls).toBe(true)
-    expect(result.messageCols).toContain("ordinal")
-    expect(result.toolCallCols).toContain("ordinal")
   })
 
   it("is idempotent: a second run applies nothing and leaves the ledger unchanged", async () => {
@@ -287,5 +265,52 @@ describe("versioned migrations (ledger over node:sqlite)", () => {
     expect(result.beforeLedger).toBe(1)
     expect(result.afterCols).toContain("color")
     expect(result.afterLedger).toBe(2)
+  })
+
+  describe("ledger/record divergence fails loud", () => {
+    const v1: Migrations = {
+      "0001_initial": sqlMigration(`CREATE TABLE t (id TEXT PRIMARY KEY)`),
+      "0002_add_note": sqlMigration(`ALTER TABLE t ADD COLUMN note TEXT`),
+    }
+
+    it("dies when an applied migration was renamed in the record", async () => {
+      await expect(
+        run(
+          Effect.gen(function* () {
+            yield* runMigrations("t_migrations", v1)
+            yield* runMigrations("t_migrations", {
+              "0001_initial": v1["0001_initial"]!,
+              "0002_add_comment": sqlMigration(`ALTER TABLE t ADD COLUMN comment TEXT`),
+            })
+          }),
+        ),
+      ).rejects.toThrow(/names it "add_comment"/)
+    })
+
+    it("dies when an applied migration was deleted from the record", async () => {
+      await expect(
+        run(
+          Effect.gen(function* () {
+            yield* runMigrations("t_migrations", v1)
+            yield* runMigrations("t_migrations", { "0001_initial": v1["0001_initial"]! })
+          }),
+        ),
+      ).rejects.toThrow(/no longer contains/)
+    })
+
+    it("dies when a gap below the ledger high-water mark is refilled", async () => {
+      const gapped: Migrations = {
+        "0001_initial": v1["0001_initial"]!,
+        "0003_add_flag": sqlMigration(`ALTER TABLE t ADD COLUMN flag INTEGER`),
+      }
+      await expect(
+        run(
+          Effect.gen(function* () {
+            yield* runMigrations("t_migrations", gapped)
+            yield* runMigrations("t_migrations", { ...gapped, "0002_add_note": v1["0002_add_note"]! })
+          }),
+        ),
+      ).rejects.toThrow(/silently skipped/)
+    })
   })
 })

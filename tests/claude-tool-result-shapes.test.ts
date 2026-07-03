@@ -91,4 +91,65 @@ describe("claude tool_result content shapes", () => {
     const rows = normalizeClaudeSession(sessions[0]!, { workspaceRoot: "/work", sourcePath: "/project" })
     expect(rows.toolCalls.find((t) => t.nativeToolId === "toolu_e")?.outputText).toBe("[error] boom")
   })
+
+  it("extracts one final usage event per assistant request", () => {
+    const sessions = parseClaudeSessions([
+      [
+        {
+          type: "assistant",
+          uuid: "a1",
+          requestId: "req_1",
+          parentUuid: null,
+          sessionId: "sess-usage",
+          timestamp: "2026-06-01T19:40:00.000Z",
+          message: {
+            model: "claude-opus-4-8",
+            content: [{ type: "thinking", thinking: "..." }],
+            usage: {
+              input_tokens: 10,
+              cache_read_input_tokens: 20,
+              cache_creation_input_tokens: 30,
+              output_tokens: 4,
+            },
+          },
+        },
+        {
+          type: "assistant",
+          uuid: "a2",
+          requestId: "req_1",
+          parentUuid: "a1",
+          sessionId: "sess-usage",
+          timestamp: "2026-06-01T19:40:01.000Z",
+          message: {
+            model: "claude-opus-4-8",
+            content: [{ type: "text", text: "done" }],
+            usage: {
+              input_tokens: 10,
+              cache_read_input_tokens: 20,
+              cache_creation_input_tokens: 30,
+              output_tokens: 40,
+            },
+          },
+        },
+      ],
+    ])
+
+    const rows = normalizeClaudeSession(sessions[0]!, { workspaceRoot: "/work", sourcePath: "/project" })
+    expect(rows.usageEvents).toMatchObject([
+      {
+        id: "claude:sess-usage:usage:0",
+        sessionId: "claude:sess-usage",
+        provider: "claude",
+        occurredAt: "2026-06-01T19:40:01.000Z",
+        nativeRequestId: "req_1",
+        model: "claude-opus-4-8",
+        contextUsedTokens: 60,
+        contextWindowTokens: null,
+        inputTokens: 10,
+        outputTokens: 40,
+        sequence: 0,
+      },
+    ])
+    expect(rows.usageEvents[0]?.rawJson).toContain("cache_creation_input_tokens")
+  })
 })

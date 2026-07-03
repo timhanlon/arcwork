@@ -52,4 +52,68 @@ describe("codex exec-output wrapper stripping", () => {
   it("passes through output without the wrapper untouched", () => {
     expect(outputFor('{"_tag":"Work","id":"work_123"}')).toBe('{"_tag":"Work","id":"work_123"}')
   })
+
+  it("extracts token_count records as usage events", () => {
+    const rows = normalizeCodexRecords(
+      [
+        {
+          type: "session_meta",
+          timestamp: "2026-06-01T19:40:00.000Z",
+          payload: { id: "sess-usage", cwd: "/work" },
+        },
+        {
+          timestamp: "2026-06-01T19:40:03.000Z",
+          type: "event_msg",
+          payload: {
+            type: "token_count",
+            info: {
+              total_token_usage: {
+                input_tokens: 753835,
+                cached_input_tokens: 593152,
+                output_tokens: 6688,
+                reasoning_output_tokens: 460,
+                total_tokens: 760523,
+              },
+              last_token_usage: {
+                input_tokens: 64119,
+                cached_input_tokens: 23424,
+                output_tokens: 511,
+                reasoning_output_tokens: 25,
+                total_tokens: 64630,
+              },
+              model_context_window: 258400,
+            },
+            rate_limits: {
+              primary: { used_percent: 7 },
+              secondary: { used_percent: 1 },
+            },
+          },
+        },
+      ],
+      {
+        nativeSessionId: "sess-usage",
+        sourcePath: "/rollout.jsonl",
+        workspaceRoot: "/work",
+      },
+    )
+
+    expect(rows.usageEvents).toMatchObject([
+      {
+        id: "codex:sess-usage:usage:0",
+        sessionId: "codex:sess-usage",
+        provider: "codex",
+        occurredAt: "2026-06-01T19:40:03.000Z",
+        nativeRequestId: null,
+        model: null,
+        contextUsedTokens: 64119,
+        contextWindowTokens: 258400,
+        inputTokens: 64119,
+        outputTokens: 511,
+        sequence: 0,
+      },
+    ])
+    expect(rows.usageEvents[0]?.rawJson).toContain("cached_input_tokens")
+    expect(rows.usageEvents[0]?.rawJson).toContain("rate_limits")
+    expect(rows.messages).toHaveLength(0)
+  })
 })

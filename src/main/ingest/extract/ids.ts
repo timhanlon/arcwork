@@ -18,5 +18,8 @@ export const toolCallId = (session: string, sequence: number): string =>
 export const fileHintId = (session: string, sequence: number): string =>
   `${session}:hint:${sequence}`
 
+export const usageEventId = (session: string, sequence: number): string =>
+  `${session}:usage:${sequence}`
+
 export const diagnosticId = (session: string, sequence: number): string =>
   `${session}:diag:${sequence}`

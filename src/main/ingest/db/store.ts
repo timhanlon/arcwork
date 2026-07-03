@@ -12,11 +12,20 @@ import {
   type StoredSession,
   type StoredSessionRow,
   type ToolCallRow,
+  type UsageEventRow,
 } from "./schema.js"
 import { runMigrations } from "../../db/migrator.js"
 
 const asRecords = <T>(rows: ReadonlyArray<T>): ReadonlyArray<Record<string, unknown>> =>
   rows as ReadonlyArray<Record<string, unknown>>
+
+// `sql.insert(rows)` compiles to one bound parameter per column per row, against
+// SQLite's hard `SQLITE_MAX_VARIABLE_NUMBER` ceiling (32766 on the better-sqlite3
+// build). A long resumed session — files folded together by `mergeBySessionId` —
+// can carry thousands of rows per table, over the ceiling for the wider tables,
+// so a single-statement insert fails the whole `replaceSession`. Keep this a few
+// thousand variables below the ceiling for headroom.
+const MAX_SQL_VARIABLES = 30_000
 
 export interface SessionFilter {
   readonly provider?: Provider
@@ -51,6 +60,26 @@ export const IngestStoreLive = Layer.effect(
     yield* runMigrations("ingest_migrations", ingestMigrations)
 
     const nowIso = Effect.map(Clock.currentTimeMillis, (ms) => new Date(ms).toISOString())
+
+    // Insert `rows` into `table` in chunks small enough to stay under SQLite's
+    // bound-parameter ceiling (see MAX_SQL_VARIABLES). The chunk size is derived
+    // from the row width, so adding a column can never silently push a table back
+    // over the limit. One span per table carries the total row count, as before.
+    const insertChunked = (
+      table: string,
+      rows: ReadonlyArray<Record<string, unknown>>,
+      span: string,
+    ): Effect.Effect<void, SqlError> => {
+      if (rows.length === 0) return Effect.void
+      const fieldsPerRow = Math.max(1, Object.keys(rows[0]!).length)
+      const chunkSize = Math.max(1, Math.floor(MAX_SQL_VARIABLES / fieldsPerRow))
+      return Effect.gen(function* () {
+        for (let i = 0; i < rows.length; i += chunkSize) {
+          const chunk = rows.slice(i, i + chunkSize)
+          yield* sql`INSERT INTO ${sql(table)} ${sql.insert(chunk)}`
+        }
+      }).pipe(Effect.withSpan(span, { attributes: { "arc.ingest.rows": rows.length } }))
+    }
 
     // The single long SQLite permit holder: a full-projection replace runs as
     // one transaction (upsert + 4 deletes + up to 4 bulk inserts), so a launch
@@ -93,6 +122,7 @@ export const IngestStoreLive = Layer.effect(
             yield* Effect.all(
               [
                 sql`DELETE FROM file_hints WHERE session_id = ${s.id}`,
+                sql`DELETE FROM usage_events WHERE session_id = ${s.id}`,
                 sql`DELETE FROM diagnostics WHERE session_id = ${s.id}`,
                 sql`DELETE FROM tool_calls WHERE session_id = ${s.id}`,
                 sql`DELETE FROM messages WHERE session_id = ${s.id}`,
@@ -100,37 +130,14 @@ export const IngestStoreLive = Layer.effect(
               { discard: true },
             ).pipe(Effect.withSpan("arc.ingest.delete_children"))
 
-            // Insert in FK order: messages, then tool_calls, then file_hints.
-            // Casts: row interfaces are structurally records but lack an index
-            // signature, which `sql.insert` requires.
-            if (rows.messages.length > 0) {
-              yield* sql`INSERT INTO messages ${sql.insert(asRecords(rows.messages))}`.pipe(
-                Effect.withSpan("arc.ingest.insert_messages", {
-                  attributes: { "arc.ingest.rows": rows.messages.length },
-                }),
-              )
-            }
-            if (rows.toolCalls.length > 0) {
-              yield* sql`INSERT INTO tool_calls ${sql.insert(asRecords(rows.toolCalls))}`.pipe(
-                Effect.withSpan("arc.ingest.insert_tool_calls", {
-                  attributes: { "arc.ingest.rows": rows.toolCalls.length },
-                }),
-              )
-            }
-            if (rows.fileHints.length > 0) {
-              yield* sql`INSERT INTO file_hints ${sql.insert(asRecords(rows.fileHints))}`.pipe(
-                Effect.withSpan("arc.ingest.insert_file_hints", {
-                  attributes: { "arc.ingest.rows": rows.fileHints.length },
-                }),
-              )
-            }
-            if (rows.diagnostics.length > 0) {
-              yield* sql`INSERT INTO diagnostics ${sql.insert(asRecords(rows.diagnostics))}`.pipe(
-                Effect.withSpan("arc.ingest.insert_diagnostics", {
-                  attributes: { "arc.ingest.rows": rows.diagnostics.length },
-                }),
-              )
-            }
+            // Insert in FK order: messages, then tool_calls, then the rows that
+            // reference them. Casts: row interfaces are structurally records but
+            // lack an index signature, which `sql.insert` requires.
+            yield* insertChunked("messages", asRecords(rows.messages), "arc.ingest.insert_messages")
+            yield* insertChunked("tool_calls", asRecords(rows.toolCalls), "arc.ingest.insert_tool_calls")
+            yield* insertChunked("file_hints", asRecords(rows.fileHints), "arc.ingest.insert_file_hints")
+            yield* insertChunked("usage_events", asRecords(rows.usageEvents), "arc.ingest.insert_usage_events")
+            yield* insertChunked("diagnostics", asRecords(rows.diagnostics), "arc.ingest.insert_diagnostics")
           }),
         )
         .pipe(
@@ -141,6 +148,7 @@ export const IngestStoreLive = Layer.effect(
               "arc.ingest.messages": rows.messages.length,
               "arc.ingest.tool_calls": rows.toolCalls.length,
               "arc.ingest.file_hints": rows.fileHints.length,
+              "arc.ingest.usage_events": rows.usageEvents.length,
               "arc.ingest.diagnostics": rows.diagnostics.length,
             },
           }),
@@ -164,8 +172,9 @@ export const IngestStoreLive = Layer.effect(
         const messages = yield* sql<MessageRow>`SELECT * FROM messages WHERE session_id = ${id} ORDER BY sequence`
         const toolCalls = yield* sql<ToolCallRow>`SELECT * FROM tool_calls WHERE session_id = ${id} ORDER BY sequence`
         const fileHints = yield* sql<FileHintRow>`SELECT * FROM file_hints WHERE session_id = ${id} ORDER BY id`
+        const usageEvents = yield* sql<UsageEventRow>`SELECT * FROM usage_events WHERE session_id = ${id} ORDER BY sequence`
         const diagnostics = yield* sql<DiagnosticRow>`SELECT * FROM diagnostics WHERE session_id = ${id} ORDER BY id`
-        return { session, messages, toolCalls, fileHints, diagnostics } satisfies StoredSession
+        return { session, messages, toolCalls, fileHints, usageEvents, diagnostics } satisfies StoredSession
       })
 
     return { replaceSession, listSessions, getSession } as const

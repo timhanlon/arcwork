@@ -1,4 +1,3 @@
-import { Schema } from "effect"
 import { sqlMigration, type Migrations } from "../../db/migrator.js"
 
 // Re-exported from the shared canonical definition so ingest rows and the
@@ -83,6 +82,23 @@ export interface FileHintRow {
   readonly rawJson: string | null
 }
 
+/** Provider-reported token/context usage snapshots. */
+export interface UsageEventRow {
+  readonly id: string
+  readonly sessionId: string
+  readonly provider: Provider
+  readonly occurredAt: string | null
+  readonly nativeRequestId: string | null
+  readonly model: string | null
+  readonly contextUsedTokens: number | null
+  readonly contextWindowTokens: number | null
+  readonly inputTokens: number | null
+  readonly outputTokens: number | null
+  readonly rawJson: string | null
+  /** Per-table usage index, used for the row id and UNIQUE constraint. */
+  readonly sequence: number
+}
+
 /** Parser failures are data, not crashes: one bad line/blob never fails the session. */
 export interface DiagnosticRow {
   readonly id: string
@@ -109,6 +125,7 @@ export interface ExtractedRows {
   readonly messages: ReadonlyArray<MessageRow>
   readonly toolCalls: ReadonlyArray<ToolCallRow>
   readonly fileHints: ReadonlyArray<FileHintRow>
+  readonly usageEvents: ReadonlyArray<UsageEventRow>
   readonly diagnostics: ReadonlyArray<DiagnosticRow>
 }
 
@@ -124,6 +141,7 @@ export interface StoredSession {
   readonly messages: ReadonlyArray<MessageRow>
   readonly toolCalls: ReadonlyArray<ToolCallRow>
   readonly fileHints: ReadonlyArray<FileHintRow>
+  readonly usageEvents: ReadonlyArray<UsageEventRow>
   readonly diagnostics: ReadonlyArray<DiagnosticRow>
 }
 
@@ -223,5 +241,23 @@ export const ingestMigrations: Migrations = {
     `CREATE INDEX IF NOT EXISTS tool_calls_message_id ON tool_calls(message_id)`,
     `CREATE INDEX IF NOT EXISTS file_hints_message_id ON file_hints(message_id)`,
     `CREATE INDEX IF NOT EXISTS file_hints_tool_call_id ON file_hints(tool_call_id)`,
+  ),
+  "0003_usage_events": sqlMigration(
+    `CREATE TABLE usage_events (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    occurred_at TEXT,
+    native_request_id TEXT,
+    model TEXT,
+    context_used_tokens INTEGER,
+    context_window_tokens INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    raw_json TEXT,
+    sequence INTEGER NOT NULL,
+    UNIQUE(session_id, sequence)
+  )`,
+    `CREATE INDEX usage_events_session_sequence ON usage_events(session_id, sequence)`,
   ),
 }

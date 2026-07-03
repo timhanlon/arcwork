@@ -20,10 +20,32 @@ import { type Rec, obj, parseJson, str } from "../extract/json.js"
 // add fragility (one malformed top-level field would drop the whole record).
 const NeStr = Schema.NonEmptyString
 
+const TokenUsage = Schema.Struct({
+  input_tokens: Schema.optional(Schema.Number),
+  cached_input_tokens: Schema.optional(Schema.Number),
+  output_tokens: Schema.optional(Schema.Number),
+  reasoning_output_tokens: Schema.optional(Schema.Number),
+  total_tokens: Schema.optional(Schema.Number),
+})
+
 const EventMsgPayload = Schema.Union([
   Schema.Struct({ type: Schema.Literal("user_message"), message: NeStr }),
   Schema.Struct({ type: Schema.Literal("agent_message"), message: NeStr }),
   Schema.Struct({ type: Schema.Literal("agent_reasoning"), text: NeStr }),
+  Schema.Struct({
+    type: Schema.Literal("token_count"),
+    info: Schema.Struct({
+      total_token_usage: Schema.optional(TokenUsage),
+      last_token_usage: Schema.optional(TokenUsage),
+      model_context_window: Schema.optional(Schema.Number),
+    }),
+    rate_limits: Schema.optional(
+      Schema.Struct({
+        primary: Schema.optional(Schema.Struct({ used_percent: Schema.optional(Schema.Number) })),
+        secondary: Schema.optional(Schema.Struct({ used_percent: Schema.optional(Schema.Number) })),
+      }),
+    ),
+  }),
 ])
 const decodeEventMsg = Schema.decodeUnknownOption(EventMsgPayload)
 
@@ -86,6 +108,9 @@ const unwrapExecOutput = (output: string): string => {
   return exitCode === undefined || exitCode === "0" ? body : `[exit ${exitCode}]\n${body}`
 }
 
+const finite = (value: number | undefined): number | null =>
+  value === undefined || !Number.isFinite(value) ? null : value
+
 // ---------------------------------------------------------------------------
 // Pure: fold a Codex rollout's records into rows.
 // Codex JSONL is a chronological event stream (no DAG): session_meta, then
@@ -144,6 +169,20 @@ export const normalizeCodexRecords = (
         case "agent_reasoning":
           b.message({ role: "assistant", thinking: ev.value.text, model: currentModel, createdAt: timestamp })
           break
+        case "token_count": {
+          const last = ev.value.info.last_token_usage
+          const inputTokens = finite(last?.input_tokens)
+          b.usage({
+            occurredAt: timestamp,
+            model: currentModel,
+            contextUsedTokens: inputTokens,
+            contextWindowTokens: finite(ev.value.info.model_context_window),
+            inputTokens,
+            outputTokens: finite(last?.output_tokens),
+            rawJson: JSON.stringify(payload),
+          })
+          break
+        }
       }
       continue
     }

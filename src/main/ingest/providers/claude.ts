@@ -88,6 +88,14 @@ const toolResultText = (content: unknown): string => {
 
 const NeStr = Schema.NonEmptyString
 
+const Usage = Schema.Struct({
+  input_tokens: Schema.optional(Schema.Number),
+  cache_read_input_tokens: Schema.optional(Schema.Number),
+  cache_creation_input_tokens: Schema.optional(Schema.Number),
+  output_tokens: Schema.optional(Schema.Number),
+})
+const decodeUsage = Schema.decodeUnknownOption(Usage)
+
 // A message's top-level content parts, discriminated by `type` (distinct from the
 // tool_result *inner* blocks above). Decoding each part replaces the per-part
 // `obj` + `switch (part["type"])` + `str(part["…"])` plucking; an unknown or
@@ -112,6 +120,28 @@ const ContentPart = Schema.Union([
 ])
 const decodeContentPart = Schema.decodeUnknownOption(ContentPart)
 
+const finite = (value: number | undefined): number | null =>
+  value === undefined || !Number.isFinite(value) ? null : value
+
+/**
+ * Model name Claude Code stamps on the assistant records it fabricates for API
+ * errors, interrupts, and other non-turn notices. These carry an all-zero
+ * `usage` object with no `requestId`; treating that as real usage would land a
+ * `contextUsedTokens: 0` row at the error point, so a context meter reading the
+ * latest usage after an API error would read 0. Their usage is skipped.
+ */
+const SYNTHETIC_MODEL = "<synthetic>"
+
+interface ClaudeUsageDraft {
+  readonly occurredAt: string | null
+  readonly nativeRequestId: string | null
+  readonly model: string | null
+  readonly contextUsedTokens: number | null
+  readonly inputTokens: number | null
+  readonly outputTokens: number | null
+  readonly rawJson: string
+}
+
 export interface NormalizeOptions {
   readonly workspaceRoot: string
   readonly sourcePath: string
@@ -124,6 +154,7 @@ export const normalizeClaudeSession = (
   options: NormalizeOptions,
 ): ExtractedRows => {
   const b = new SessionRowBuilder("claude", session.sessionId)
+  const usageByRequest = new Map<string, ClaudeUsageDraft>()
 
   for (const record of session.records) {
     const type = str(record["type"])
@@ -131,6 +162,32 @@ export const normalizeClaudeSession = (
     b.observeTimestamp(timestamp)
     const message = obj(record["message"])
     const uuid = str(record["uuid"]) ?? null
+    const requestId = str(record["requestId"])
+
+    if (type === "assistant" && message) {
+      const model = str(message["model"]) ?? null
+      const decodedUsage = model === SYNTHETIC_MODEL ? Option.none() : decodeUsage(message["usage"])
+      if (Option.isSome(decodedUsage)) {
+        const usage = decodedUsage.value
+        const inputTokens = finite(usage.input_tokens)
+        const cachedInputTokens = finite(usage.cache_read_input_tokens)
+        const cacheCreationInputTokens = finite(usage.cache_creation_input_tokens)
+        const outputTokens = finite(usage.output_tokens)
+        const contextUsedTokens =
+          inputTokens === null && cachedInputTokens === null && cacheCreationInputTokens === null
+            ? null
+            : (inputTokens ?? 0) + (cachedInputTokens ?? 0) + (cacheCreationInputTokens ?? 0)
+        usageByRequest.set(requestId ?? `${uuid ?? "assistant"}:${timestamp ?? usageByRequest.size}`, {
+          occurredAt: timestamp,
+          nativeRequestId: requestId ?? null,
+          model,
+          contextUsedTokens,
+          inputTokens,
+          outputTokens,
+          rawJson: JSON.stringify(message["usage"]),
+        })
+      }
+    }
 
     // Return-from-away recap: Claude writes a `system`/`away_summary` record
     // (isSidechain:false) whose top-level `content` is the "here's where we left
@@ -243,6 +300,10 @@ export const normalizeClaudeSession = (
       }
       turn.flush() // trailing text after the last tool
     }
+  }
+
+  for (const usage of usageByRequest.values()) {
+    b.usage(usage)
   }
 
   return b.finish({

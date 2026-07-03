@@ -58,6 +58,7 @@ const extracted = (over: Partial<ExtractedRows>): ExtractedRows => ({
   messages: [],
   toolCalls: [],
   fileHints: [],
+  usageEvents: [],
   diagnostics: [],
   ...over,
 })
