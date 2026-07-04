@@ -156,6 +156,7 @@ export const RpcSessionManagerLive = Layer.effect(
           cwd: req.cwd,
           nativeSessionId: driver.threadId,
           attached: true,
+          runtime: "rpc",
           state: "running",
           startedAt: req.startedAt,
         }

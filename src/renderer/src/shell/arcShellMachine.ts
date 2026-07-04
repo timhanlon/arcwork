@@ -28,6 +28,9 @@ export interface ShellSessionRef {
   readonly provider: string
   readonly chatId: ChatId
   readonly attached: boolean
+  /** `rpc` (app-server, no terminal) or `pty`/absent (terminal). Focus skips the
+   * terminal pane for an rpc session so it doesn't mount an empty xterm. */
+  readonly runtime?: "pty" | "rpc"
 }
 
 // Layout is *where* things render — three named regions, each holding a product
@@ -479,6 +482,24 @@ export const arcShellMachine = createMachine({
           // bare action list.
           actions: enqueueActions(({ enqueue, event }) => {
             enqueue.assign(({ context, event }) => {
+              // rpc (app-server): no terminal — mounting a pane shows an empty
+              // xterm (a stray cursor). Focus just surfaces the chat; leave the
+              // right region alone and keep the session selected.
+              if (event.session.runtime === "rpc") {
+                const base = event.workspaceId
+                  ? selectChat(context, event.workspaceId, event.session.chatId)
+                  : { ...context, layout: showCenter(context.layout, { kind: "chat" as const }) }
+                return {
+                  ...base,
+                  detachedSessionId: undefined,
+                  selection: {
+                    ...base.selection,
+                    workspaceId: event.workspaceId ?? base.selection.workspaceId,
+                    chatId: event.session.chatId,
+                    sessionId: event.session.id,
+                  },
+                }
+              }
               // Detached: show the resume prompt instead of mounting a pane — keep
               // the session selected but don't grab the terminal (the emit below
               // is gated on `attached`). Live: find-or-create the pane.
@@ -507,7 +528,11 @@ export const arcShellMachine = createMachine({
                 paneId: event.paneId,
               })
             })
-            if (event.type === "SESSION_FOCUSED" && event.session.attached) {
+            if (
+              event.type === "SESSION_FOCUSED" &&
+              event.session.attached &&
+              event.session.runtime !== "rpc"
+            ) {
               enqueue.emit({ type: "focusTerminal" })
             }
           }),

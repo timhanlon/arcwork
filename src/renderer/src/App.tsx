@@ -123,11 +123,15 @@ export function App(): JSX.Element {
   // launch mid-bind), so this stays idempotent across every `arc:sessions` push.
   useEffect(() => {
     for (const session of unadoptedSessions(sessions, panes)) {
+      // rpc (app-server) sessions have no terminal — adopting one would mount an
+      // empty xterm (a stray cursor when focused). They live in the chat pane only.
+      if (session.runtime === "rpc") continue
       shell.actions.adoptSession({
         id: session.id,
         provider: session.provider,
         chatId: session.chatId,
         attached: session.attached ?? false,
+        runtime: session.runtime,
       })
     }
   }, [sessions, panes, shell.actions])

@@ -67,6 +67,7 @@ const workspaceForSession = (
       provider: session.provider,
       chatId: session.chatId,
       attached: session.attached ?? false,
+      runtime: session.runtime,
     },
     workspaceId: workspaceIdForChat(chats, session.chatId),
   }

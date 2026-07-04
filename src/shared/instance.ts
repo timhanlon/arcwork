@@ -54,6 +54,11 @@ export const TargetSession = Schema.Struct({
   /** true only when this Electron process owns a live PTY handle for the session */
   attached: Schema.optional(Schema.Boolean),
   resumable: Schema.optional(Schema.Boolean),
+  /** The live runtime backing this session right now — `rpc` (app-server, no
+   * terminal) or `pty`/absent (terminal). Not persisted; it reflects which
+   * manager currently owns the session, so the renderer can skip the terminal
+   * surface for an rpc session. */
+  runtime: Schema.optional(Schema.Literals(["pty", "rpc"])),
   state: TargetState,
   startedAt: Schema.String,
 })

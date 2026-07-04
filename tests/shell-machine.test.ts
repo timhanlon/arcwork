@@ -43,6 +43,15 @@ const detachedSession: ShellSessionRef = {
   attached: false,
 }
 
+// An attached app-server session: live, but no terminal (runtime: "rpc").
+const rpcSession: ShellSessionRef = {
+  id: arcId("target", "target_rpc"),
+  provider: "codex",
+  chatId: arcId("chat", "chat_3"),
+  attached: true,
+  runtime: "rpc",
+}
+
 describe("arc shell machine", () => {
   it("starts as an active actor that can receive UI events", () => {
     const actor = createActor(arcShellMachine).start()
@@ -234,6 +243,26 @@ describe("arc shell machine", () => {
     expect(emittedAfter(focus)).toEqual(["focusTerminal"])
     expect(emittedAfter(focus, focus)).toEqual(["focusTerminal", "focusTerminal"])
     expect(twice.selection.terminalPaneId).toBe("pane_attached")
+  })
+
+  it("focuses an rpc session as chat-only — no terminal pane, no terminal focus", () => {
+    const focus: ArcShellEvent = {
+      type: "SESSION_FOCUSED",
+      paneId: arcId("pane", "pane_unused"),
+      session: rpcSession,
+      workspaceId: arcId("workspace", "workspace_3"),
+    }
+    const context = snapshotAfter(focus)
+
+    // No pane is minted (an rpc session has no terminal to mount)...
+    expect(context.panes).toEqual([])
+    expect(context.selection.terminalPaneId).toBeUndefined()
+    // ...but the chat + session are selected so the transcript surfaces.
+    expect(context.selection.chatId).toBe("chat_3")
+    expect(context.selection.sessionId).toBe("target_rpc")
+    expect(context.detachedSessionId).toBeUndefined()
+    // And it never grabs the terminal (which would show an empty xterm cursor).
+    expect(emittedAfter(focus)).toEqual([])
   })
 
   it("does not emit focusTerminal when focusing a detached session", () => {
