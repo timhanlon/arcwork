@@ -448,6 +448,10 @@ export const ChatMessageServiceLive = Layer.effect(
           if (!ok) {
             return yield* Effect.fail(arcRequestError("Failed to record prompt in chat transcript"))
           }
+          // Publish now so the bubble shows immediately — an rpc turn holds this
+          // handler open until it completes, so the end-of-send publish would
+          // otherwise delay the user's own message until codex replies.
+          yield* PubSub.publish(updates, { chatId: req.chatId })
         }
 
         const delivery = yield* router
