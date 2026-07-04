@@ -25,7 +25,10 @@ export class CodexDriverError extends Data.TaggedError("CodexDriverError")<{
 
 /** An outstanding approval request — the pending-input signal for the app-server path. */
 export interface PendingApproval {
+  /** The JSON-RPC request id — the reliable routing key for `answerApproval`. */
   readonly id: number | string
+  /** Codex's approval handle when present (commandExecution only) — display/correlation detail. */
+  readonly approvalId: string | null
   /** Links to the exact tool-call item already in the projection. */
   readonly itemId: string | null
   readonly command: string | null
@@ -166,6 +169,7 @@ export const makeCodexAppServerDriver = (
           )
           const approval: PendingApproval = {
             id: request.id,
+            approvalId: params.approvalId ?? null,
             itemId: params.itemId ?? null,
             command: params.command ?? null,
             availableDecisions: params.availableDecisions ?? [],

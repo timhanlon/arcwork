@@ -102,6 +102,13 @@ export const decodeThreadStart = Schema.decodeUnknownOption(ThreadStartResult)
  * acceptWithExecpolicyAmendment / cancel …) the UI must offer verbatim.
  */
 export const ApprovalRequestParams = Schema.Struct({
+  /**
+   * Codex's own approval handle. Present on commandExecution approvals but not
+   * all types (fileChange approvals omit it), so it is display/correlation
+   * detail — the reliable routing key stays the always-present JSON-RPC request
+   * id the request arrived with.
+   */
+  approvalId: Schema.optional(Schema.String),
   itemId: Schema.optional(Schema.String),
   command: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
