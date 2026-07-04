@@ -20,6 +20,7 @@ const DEFAULT_ACTIONS: ArcShellActions = {
   launchTarget: noop,
   bindTarget: noop,
   focusSession: noop,
+  focusTarget: noop,
   adoptSession: noop,
   resumeDetached: noop,
   resumeSession: noop,

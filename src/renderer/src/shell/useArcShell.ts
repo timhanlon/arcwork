@@ -27,6 +27,10 @@ export interface ArcShellActions {
   readonly launchTarget: (provider: string, chatId: ChatId) => void
   readonly bindTarget: (paneId: PaneId, sessionId: TargetId) => void
   readonly focusSession: (sessionId: TargetId) => void
+  /** Make a target current (composer addressee) from its session ref directly —
+   * for the rpc launch/resume path, which returns the session before it lands in
+   * the live list, so a `focusSession(id)` lookup would race and miss. */
+  readonly focusTarget: (session: ShellSessionRef) => void
   readonly adoptSession: (session: ShellSessionRef) => void
   readonly resumeDetached: () => void
   /** Re-attach a specific detached/resumable session (e.g. its sidebar row). */
@@ -141,6 +145,14 @@ export function useArcShell({
           paneId: newArcId("pane"),
           session: resolved.session,
           workspaceId: resolved.workspaceId,
+        })
+      },
+      focusTarget: (session) => {
+        actor.send({
+          type: "SESSION_FOCUSED",
+          paneId: newArcId("pane"),
+          session,
+          workspaceId: workspaceIdForChat(chats, session.chatId),
         })
       },
       adoptSession: (session) => {

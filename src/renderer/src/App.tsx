@@ -14,6 +14,7 @@ import {
   workspacesAtom,
 } from "./atoms.js"
 import type { ChatId, PaneId, TargetId, WorkspaceId } from "../../shared/ids.js"
+import type { TargetSession } from "../../shared/instance.js"
 import { ArcSidebarTree } from "./sidebar/ArcSidebarTree.js"
 import { TargetSessionPane } from "./chat/TargetSessionPane.js"
 import { sync as syncTerminals } from "./terminal/terminalRegistry.js"
@@ -237,6 +238,20 @@ export function App(): JSX.Element {
     shell.actions.selectChat(workspaceId, chatId)
   }
 
+  // rpc launch/resume bypass the shell's pane/measure machinery (no `TARGET_BOUND`
+  // to make the session current), so once the RPC returns the session we focus it
+  // by ref — making it the composer target without waiting for it to land in the
+  // live list (a `focusSession(id)` lookup would race and miss).
+  const focusRpcTarget = (session: TargetSession): void => {
+    shell.actions.focusTarget({
+      id: session.id,
+      provider: session.provider,
+      chatId: session.chatId,
+      attached: session.attached ?? false,
+      runtime: session.runtime,
+    })
+  }
+
   const onLaunch = (provider: string, chatId: ChatId, runtime: "pty" | "rpc"): void => {
     // An rpc (app-server) session has no terminal, so it skips the pane/measure
     // machinery entirely: fire `LaunchTarget` directly and let the session appear
@@ -244,7 +259,9 @@ export function App(): JSX.Element {
     // from that projection — no xterm to bind. PTY launches still go through the
     // shell machine, which creates a pane and defers the RPC until xterm measures.
     if (runtime === "rpc") {
-      void runLaunchTarget({ payload: { provider, chatId, runtime: "rpc" } })
+      void runLaunchTarget({ payload: { provider, chatId, runtime: "rpc" } }).then((exit) => {
+        if (Exit.isSuccess(exit)) focusRpcTarget(exit.value)
+      })
       return
     }
     shell.actions.launchTarget(provider, chatId)
@@ -309,7 +326,11 @@ export function App(): JSX.Element {
   const canResumeDetachedRpc = Boolean(vm.detachedSession && detachedProvider?.appServer)
   const onResumeDetachedRpc = (): void => {
     if (vm.detachedSession) {
-      void runResumeTarget({ payload: { sessionId: vm.detachedSession.id, runtime: "rpc" } })
+      void runResumeTarget({ payload: { sessionId: vm.detachedSession.id, runtime: "rpc" } }).then(
+        (exit) => {
+          if (Exit.isSuccess(exit)) focusRpcTarget(exit.value)
+        },
+      )
     }
   }
 
@@ -388,7 +409,7 @@ export function App(): JSX.Element {
                 workspace={vm.chatWorkspace}
                 sessions={sessions}
                 liveStateById={liveStateById}
-                activeSessionId={vm.activeSessionId}
+                activeTargetId={vm.activeTargetId}
                 sessionCount={vm.sessionCount}
                 providers={launchableProviders}
                 onLaunch={onLaunch}

@@ -245,7 +245,7 @@ describe("arc shell machine", () => {
     expect(twice.selection.terminalPaneId).toBe("pane_attached")
   })
 
-  it("focuses an rpc session as chat-only — no terminal pane, no terminal focus", () => {
+  it("focuses an rpc session as the composer target — no pane, no terminal focus", () => {
     const focus: ArcShellEvent = {
       type: "SESSION_FOCUSED",
       paneId: arcId("pane", "pane_unused"),
@@ -257,12 +257,109 @@ describe("arc shell machine", () => {
     // No pane is minted (an rpc session has no terminal to mount)...
     expect(context.panes).toEqual([])
     expect(context.selection.terminalPaneId).toBeUndefined()
-    // ...but the chat + session are selected so the transcript surfaces.
+    // ...but it IS the current composer target, and the chat is surfaced.
+    expect(context.activeTargetId).toBe("target_rpc")
     expect(context.selection.chatId).toBe("chat_3")
-    expect(context.selection.sessionId).toBe("target_rpc")
     expect(context.detachedSessionId).toBeUndefined()
     // And it never grabs the terminal (which would show an empty xterm cursor).
     expect(emittedAfter(focus)).toEqual([])
+  })
+
+  it("focusing a PTY session sets both the terminal pane and the composer target", () => {
+    const context = snapshotAfter({
+      type: "SESSION_FOCUSED",
+      paneId: arcId("pane", "pane_attached"),
+      session: attachedSession,
+      workspaceId: arcId("workspace", "workspace_1"),
+    })
+    expect(context.selection.terminalPaneId).toBe("pane_attached")
+    expect(context.activeTargetId).toBe("target_attached")
+  })
+
+  it("the composer target follows the last focused target across runtimes", () => {
+    // Focus a PTY target, then an rpc target in the same flow: the composer target
+    // moves to the rpc one, while the PTY terminal pane stays put (passive view).
+    const context = snapshotAfter(
+      {
+        type: "SESSION_FOCUSED",
+        paneId: arcId("pane", "pane_attached"),
+        session: attachedSession,
+        workspaceId: arcId("workspace", "workspace_1"),
+      },
+      {
+        type: "SESSION_FOCUSED",
+        paneId: arcId("pane", "pane_unused"),
+        session: rpcSession,
+        workspaceId: arcId("workspace", "workspace_3"),
+      },
+    )
+    expect(context.activeTargetId).toBe("target_rpc")
+    expect(context.selection.terminalPaneId).toBe("pane_attached") // terminal untouched
+  })
+
+  it("TARGET_BOUND makes the bound session the composer target", () => {
+    const context = snapshotAfter(
+      {
+        type: "TARGET_LAUNCH_REQUESTED",
+        paneId: arcId("pane", "pane_1"),
+        provider: "claude",
+        chatId: arcId("chat", "chat_1"),
+      },
+      { type: "TARGET_BOUND", paneId: arcId("pane", "pane_1"), sessionId: arcId("target", "target_1") },
+    )
+    expect(context.activeTargetId).toBe("target_1")
+  })
+
+  it("keeps the composer target when a non-active PTY pane exits, clears when the active one does", () => {
+    const launchBind = (pane: string, target: string, provider: string): ReadonlyArray<ArcShellEvent> => [
+      {
+        type: "TARGET_LAUNCH_REQUESTED",
+        paneId: arcId("pane", pane),
+        provider,
+        chatId: arcId("chat", "chat_1"),
+      },
+      { type: "TARGET_BOUND", paneId: arcId("pane", pane), sessionId: arcId("target", target) },
+    ]
+    // Two PTY targets; target_2 is the last bound, so it's active. Exiting the
+    // non-active target_1 must not move the composer target.
+    const afterInactiveExit = snapshotAfter(
+      ...launchBind("pane_1", "target_1", "claude"),
+      ...launchBind("pane_2", "target_2", "codex"),
+      { type: "PTY_EXITED", sessionId: arcId("target", "target_1") },
+    )
+    expect(afterInactiveExit.activeTargetId).toBe("target_2")
+
+    // Exiting the active target_2 falls the composer target back to the surviving pane.
+    const afterActiveExit = snapshotAfter(
+      ...launchBind("pane_1", "target_1", "claude"),
+      ...launchBind("pane_2", "target_2", "codex"),
+      { type: "PTY_EXITED", sessionId: arcId("target", "target_2") },
+    )
+    expect(afterActiveExit.activeTargetId).toBe("target_1")
+  })
+
+  it("switching chats clears the composer target", () => {
+    const context = snapshotAfter(
+      {
+        type: "SESSION_FOCUSED",
+        paneId: arcId("pane", "pane_attached"),
+        session: attachedSession,
+        workspaceId: arcId("workspace", "workspace_1"),
+      },
+      { type: "CHAT_SELECTED", workspaceId: arcId("workspace", "workspace_1"), chatId: arcId("chat", "other") },
+    )
+    expect(context.activeTargetId).toBeUndefined()
+  })
+
+  it("focusing a detached session never makes it the composer target", () => {
+    const context = snapshotAfter({
+      type: "SESSION_FOCUSED",
+      paneId: arcId("pane", "pane_unused"),
+      session: detachedSession,
+      workspaceId: arcId("workspace", "workspace_2"),
+    })
+    expect(context.activeTargetId).toBeUndefined()
+    expect(context.detachedSessionId).toBe("target_detached")
   })
 
   it("does not emit focusTerminal when focusing a detached session", () => {

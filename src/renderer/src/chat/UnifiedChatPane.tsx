@@ -41,7 +41,8 @@ export interface UnifiedChatPaneProps {
   readonly sessions: ReadonlyArray<TargetSession>
   /** session id → live activity, from the `arc:live-target-states` projection */
   readonly liveStateById?: LiveStateById
-  readonly activeSessionId?: TargetId
+  /** the current composer target (any runtime) — the addressee, when attached */
+  readonly activeTargetId?: TargetId
   readonly sessionCount: number
   readonly providers: ReadonlyArray<LaunchableProvider>
   readonly onLaunch: (provider: string, chatId: ChatId, runtime: "pty" | "rpc") => void
@@ -53,12 +54,15 @@ export interface UnifiedChatPaneProps {
 const addressableTarget = (
   chatId: ChatId,
   sessions: ReadonlyArray<TargetSession>,
-  activeSessionId?: TargetId,
+  activeTargetId?: TargetId,
 ): TargetSession | undefined => {
   const inChat = sessions.filter((session) => session.chatId === chatId)
+  // The focused target is the addressee when it's attached and in this chat; the
+  // first-attached fallback is only a cold-start default (no/invalid active
+  // target) — never the primary path, which would be arbitrary with 2+ targets.
   const active =
-    activeSessionId !== undefined
-      ? inChat.find((session) => session.id === activeSessionId && session.attached)
+    activeTargetId !== undefined
+      ? inChat.find((session) => session.id === activeTargetId && session.attached)
       : undefined
   if (active) return active
   return inChat.find((session) => session.attached)
@@ -81,7 +85,7 @@ export interface ChatPaneHandle {
 
 export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
   function UnifiedChatPane(props, ref): JSX.Element {
-  const { chat, workspace, sessions, activeSessionId, sessionCount, providers, onLaunch, onFocusSession } =
+  const { chat, workspace, sessions, activeTargetId, sessionCount, providers, onLaunch, onFocusSession } =
     props
   const liveStateById = props.liveStateById ?? EMPTY_LIVE_STATES
   const messages = useChatMessages(chat?.id)
@@ -157,7 +161,7 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
     ? sessionsInChat.find((session) => session.id === targetOverride)
     : undefined
   const addressee =
-    overrideSession ?? (chat ? addressableTarget(chat.id, sessions, activeSessionId) : undefined)
+    overrideSession ?? (chat ? addressableTarget(chat.id, sessions, activeTargetId) : undefined)
 
   // Targets the composer's `@` picker can reference: this chat's work + sessions
   // (in memory) and the workspace's files (lazily fetched on first mention).

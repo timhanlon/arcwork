@@ -23,7 +23,10 @@ export interface ShellViewModel {
   /** The workspace owning the selected chat — may differ from `workspace`. */
   readonly chatWorkspace?: Workspace
   readonly sessionCount: number
-  readonly activeSessionId?: TargetId
+  /** The current composer target — the session the composer addresses and the
+   * sidebar highlights as active. Resolved from `context.activeTargetId` against
+   * the live list (attached + in the selected chat), so a stale id never leaks. */
+  readonly activeTargetId?: TargetId
   /** A restored, not-attached session to surface a resume prompt for, if any. */
   readonly detachedSession?: TargetSession
   readonly gitPath?: string
@@ -35,7 +38,7 @@ export const deriveShellViewModel = (
   context: ArcShellContext,
   { workspaces, chats, sessions }: ShellServerData,
 ): ShellViewModel => {
-  const { selection, panes } = context
+  const { selection } = context
 
   // Guard each picked id against the live lists: a persisted (or in-session)
   // selection can outlive the chat/workspace it names, so an unknown id falls
@@ -64,7 +67,16 @@ export const deriveShellViewModel = (
     ? workspaces.find((candidate) => candidate.id === chat.workspaceId)
     : undefined
 
-  const activeSessionId = panes.find((pane) => pane.id === selection.terminalPaneId)?.sessionId
+  // The composer target, resolved against the live sessions: it must still exist,
+  // be attached, and belong to the selected chat — otherwise it's stale (the
+  // machine holds an id, not a live ref) and we drop it so the composer falls back
+  // to the first attached in-chat target. Independent of `terminalPaneId` (the PTY
+  // pane focus), so a paneless rpc/SDK target can be the current target.
+  const activeTargetId = context.activeTargetId
+    ? sessions.find(
+        (s) => s.id === context.activeTargetId && s.attached === true && (!chatId || s.chatId === chatId),
+      )?.id
+    : undefined
 
   // A detached session can be surfaced two ways: a focus intent the machine
   // recorded, or a not-attached session the user simply selected in the tree.
@@ -82,7 +94,7 @@ export const deriveShellViewModel = (
     chat,
     chatWorkspace,
     sessionCount: chatId ? sessions.filter((s) => s.chatId === chatId).length : 0,
-    activeSessionId,
+    activeTargetId,
     detachedSession: machineDetached ?? selectedDetached,
     gitPath: workspaceId ? selection.gitPathByWorkspace[workspaceId] : undefined,
     workId: workspaceId ? selection.workByWorkspace[workspaceId] : undefined,

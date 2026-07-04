@@ -65,7 +65,7 @@ interface SidebarTreeController {
   readonly disclosure: SidebarDisclosureHandle
   readonly selectedWorkspaceId?: string
   readonly selectedChatId?: string
-  readonly activeSessionId?: TargetId
+  readonly activeTargetId?: TargetId
   readonly liveStateById: LiveStateById
   readonly pendingSessionIds?: ReadonlySet<string>
   readonly requestSlots?: ReadonlyMap<string, number>
@@ -156,7 +156,7 @@ function TreeSessionRow({
   readonly session: TargetSession
 }): JSX.Element {
   const tree = useTree()
-  const active = tree.activeSessionId === session.id
+  const active = tree.activeTargetId === session.id
   return (
     <SessionRow
       session={session}
@@ -185,7 +185,7 @@ function ChatNode({
   const tree = useTree()
   const pendingCount = sessions.filter((session) => tree.pendingSessionIds?.has(session.id)).length
   const autoOpen =
-    tree.selectedChatId === chat.id || sessions.some((session) => session.id === tree.activeSessionId)
+    tree.selectedChatId === chat.id || sessions.some((session) => session.id === tree.activeTargetId)
   const open = tree.disclosure.isOpen("chat", chat.id, autoOpen)
   return (
     <Collapsible.Root
@@ -391,7 +391,7 @@ export function ArcSidebarTree(): JSX.Element {
     () => deriveShellViewModel(shellState, { workspaces, chats, sessions }),
     [shellState, workspaces, chats, sessions],
   )
-  const { workspaceId: selectedWorkspaceId, chatId: selectedChatId, activeSessionId } = vm
+  const { workspaceId: selectedWorkspaceId, chatId: selectedChatId, activeTargetId } = vm
 
   const { liveStateById, pendingSessionIds, requestSlots } = useSessionActivityProjection({
     workspaces,
@@ -461,9 +461,9 @@ export function ArcSidebarTree(): JSX.Element {
   // The chat to keep revealed: the selected one, else whichever owns the active
   // session.
   const activeChatId = useMemo(() => {
-    if (activeSessionId === undefined) return undefined
-    return sessions.find((session) => session.id === activeSessionId)?.chatId
-  }, [activeSessionId, sessions])
+    if (activeTargetId === undefined) return undefined
+    return sessions.find((session) => session.id === activeTargetId)?.chatId
+  }, [activeTargetId, sessions])
   const revealChatId = selectedChatId ?? activeChatId
 
   // Reveal-on-selection: when the target chat changes, open its ancestors so the
@@ -491,7 +491,7 @@ export function ArcSidebarTree(): JSX.Element {
       disclosure,
       selectedWorkspaceId,
       selectedChatId,
-      activeSessionId,
+      activeTargetId,
       liveStateById,
       pendingSessionIds,
       requestSlots,
@@ -516,7 +516,7 @@ export function ArcSidebarTree(): JSX.Element {
       disclosure,
       selectedWorkspaceId,
       selectedChatId,
-      activeSessionId,
+      activeTargetId,
       liveStateById,
       pendingSessionIds,
       requestSlots,
