@@ -8,6 +8,7 @@ import { ActivityEventServiceLive } from "../src/main/services/ActivityEventServ
 import { ChatServiceLive } from "../src/main/services/ChatService.js"
 import { LocalModelServiceLive } from "../src/main/services/LocalModelService.js"
 import { TargetSessionManager } from "../src/main/services/TargetSessionManager.js"
+import { SessionRuntimeRouter } from "../src/main/services/SessionRuntimeRouter.js"
 import { ChatMessageService, ChatMessageServiceLive } from "../src/main/services/ChatMessageService.js"
 import type { HookSignal } from "../src/main/hooks/signals.js"
 import { toSignal } from "../src/main/hooks/signals.js"
@@ -20,6 +21,18 @@ const TARGET = "target_1"
 // The live-pending-permission flag never drives a PTY, so TargetSessionManager is
 // only *acquired* by the layer — a stub keeps node-pty/socket setup out of the
 // test while satisfying the dependency. Any method actually called is a bug.
+// sendPrompt is not exercised here, so the router is only acquired — a stub
+// that dies on use keeps its full dependency graph out of the test.
+const stubRouter = Layer.succeed(
+  SessionRuntimeRouter,
+  SessionRuntimeRouter.of({
+    launch: () => Effect.die("SessionRuntimeRouter.launch is unused in this test"),
+    submit: () => Effect.die("SessionRuntimeRouter.submit is unused in this test"),
+    stop: () => Effect.succeed({ stopped: false }),
+    ownsRpc: () => Effect.succeed(false),
+  }),
+)
+
 const stubSessions = Layer.succeed(
   TargetSessionManager,
   TargetSessionManager.of({
@@ -50,6 +63,7 @@ const run = async <A, E>(
     ChatServiceLive.pipe(Layer.provide(arc)),
     LocalModelServiceLive,
     stubSessions,
+    stubRouter,
   )
   const runtime = ManagedRuntime.make(ChatMessageServiceLive.pipe(Layer.provideMerge(deps)))
   try {

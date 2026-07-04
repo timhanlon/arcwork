@@ -39,6 +39,14 @@ import {
 export interface LaunchRequest {
   readonly provider: string
   readonly chatId: ChatId
+  /**
+   * Which live runtime backs this session. A launch-time *intent*, not a
+   * provider property — codex declares both `interactive` (PTY TUI) and
+   * `appServer` (rpc), so the same provider can be launched either way. Defaults
+   * to `pty` (unchanged behaviour); `rpc` routes to `RpcSessionManager` via
+   * `SessionRuntimeRouter`.
+   */
+  readonly runtime?: "pty" | "rpc"
   readonly origin?: "manual" | "orchestrated"
   /** the orchestrator spawning this session (its target id), for an orchestrated
    * launch — persisted as the durable parent→child back-channel link. */

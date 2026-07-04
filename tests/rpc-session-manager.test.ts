@@ -70,7 +70,9 @@ describe("RpcSessionManager", () => {
           )
 
           const res = yield* manager.submit({ targetSessionId: "target_1", text: "hi" })
-          expect(res).toEqual({ accepted: true, status: "completed" })
+          expect(res.accepted).toBe(true)
+          expect(res.status).toBe("completed")
+          expect(res.rows?.session.nativeSessionId).toBe("thr_mgr")
 
           // The turn landed in the shared store (indistinguishable from a scraped session).
           const stored = yield* store.listSessions()

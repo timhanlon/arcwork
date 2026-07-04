@@ -15,6 +15,7 @@ import { LocalModelService } from "./services/LocalModelService.js"
 import { TargetSessionManager } from "./services/TargetSessionManager.js"
 import { LiveTargetStateService } from "./services/LiveTargetStateService.js"
 import { CodexDriverRegistry } from "./services/CodexDriverRegistry.js"
+import { SessionRuntimeRouter } from "./services/SessionRuntimeRouter.js"
 import { projectApprovals, parseDecisionPayload } from "./services/codex-approval-view.js"
 import { ArtifactIngestService } from "./services/ArtifactIngestService.js"
 import { WorkService } from "./work/service.js"
@@ -168,9 +169,9 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     ReingestAndReprojectChatMessages: svc("ReingestAndReprojectChatMessages", ArtifactIngestService, (_, req) =>
       _.reingestAndReprojectChat(req.chatId, req.provider),
     ),
-    LaunchTarget: svc("LaunchTarget", TargetSessionManager, (_, req) => _.launch(req)),
+    LaunchTarget: svc("LaunchTarget", SessionRuntimeRouter, (_, req) => _.launch(req)),
     ResumeTarget: svc("ResumeTarget", TargetSessionManager, (_, req) => _.resume(req)),
-    StopTarget: svc("StopTarget", TargetSessionManager, (_, req) => _.stop(req)),
+    StopTarget: svc("StopTarget", SessionRuntimeRouter, (_, req) => _.stop(req)),
     SubmitPrompt: svc("SubmitPrompt", TargetSessionManager, (_, req) => _.submit(req)),
     SendChatPrompt: svc("SendChatPrompt", ChatMessageService, (_, req) => _.sendPrompt(req)),
     ListWork: svc("ListWork", WorkService, (_) => _.listOpen),

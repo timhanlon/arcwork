@@ -1,4 +1,5 @@
 import { Context, Effect, Exit, Layer, Scope } from "effect"
+import type { ExtractedRows } from "../ingest/db/schema.js"
 import type {
   CodexAppServerDriver,
   CodexDriverError,
@@ -42,13 +43,20 @@ export class RpcSessionManager extends Context.Service<
   RpcSessionManager,
   {
     /** Launch (idempotent per targetSessionId): spawn the driver, persist its
-     * turns, and register its approvals. */
-    readonly launch: (req: RpcLaunchRequest) => Effect.Effect<void, CodexDriverError>
-    /** Run a user turn against a launched session. `accepted:false` if unknown. */
+     * turns, register its approvals; returns the driver's thread id so the caller
+     * can `bindNative` it (needed for the timeline projection). */
+    readonly launch: (
+      req: RpcLaunchRequest,
+    ) => Effect.Effect<{ readonly threadId: string }, CodexDriverError>
+    /** Run a user turn against a launched session. `accepted:false` if unknown;
+     * `rows` is the session's cumulative rows for the caller to project. */
     readonly submit: (req: {
       readonly targetSessionId: string
       readonly text: string
-    }) => Effect.Effect<{ readonly accepted: boolean; readonly status?: string }, CodexDriverError>
+    }) => Effect.Effect<
+      { readonly accepted: boolean; readonly status?: string; readonly rows?: ExtractedRows },
+      CodexDriverError
+    >
     /** Tear a session down: closes its scope (kills driver, deregisters approvals). */
     readonly stop: (targetSessionId: string) => Effect.Effect<{ readonly stopped: boolean }>
     /** The target session ids currently live under this manager. */
@@ -69,9 +77,10 @@ export const RpcSessionManagerLive = Layer.effect(
     const parentScope = yield* Effect.scope
     const sessions = new Map<string, LiveRpcSession>()
 
-    const launch = (req: RpcLaunchRequest): Effect.Effect<void, CodexDriverError> =>
+    const launch = (req: RpcLaunchRequest): Effect.Effect<{ readonly threadId: string }, CodexDriverError> =>
       Effect.gen(function* () {
-        if (sessions.has(req.targetSessionId)) return // idempotent
+        const existing = sessions.get(req.targetSessionId)
+        if (existing) return { threadId: existing.driver.threadId } // idempotent
 
         // Child of the layer scope: closes on `stop` or on app quit.
         const scope = yield* Scope.fork(parentScope)
@@ -98,6 +107,7 @@ export const RpcSessionManagerLive = Layer.effect(
           Effect.tapError(() => Scope.close(scope, Exit.void)),
         )
         sessions.set(req.targetSessionId, { driver, scope })
+        return { threadId: driver.threadId }
       })
 
     const submit = (req: { readonly targetSessionId: string; readonly text: string }) =>
@@ -105,7 +115,7 @@ export const RpcSessionManagerLive = Layer.effect(
         const session = sessions.get(req.targetSessionId)
         if (!session) return { accepted: false as const }
         const result = yield* session.driver.runTurn(req.text)
-        return { accepted: true as const, status: result.status }
+        return { accepted: true as const, status: result.status, rows: result.rows }
       })
 
     const stop = (targetSessionId: string) =>

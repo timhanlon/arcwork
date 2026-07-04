@@ -361,6 +361,9 @@ export const ArcRpcs = RpcGroup.make(
     payload: {
       provider: Schema.String,
       chatId: ChatId,
+      /** Which live runtime backs the session — `pty` (terminal TUI, default) or
+       * `rpc` (app-server). A launch-time intent, not a provider property. */
+      runtime: Schema.optional(Schema.Literals(["pty", "rpc"])),
       /** Diff endpoint to run in — the worker writes here and hooks/file refs
        * resolve against it. Omit to use the chat's own workspace. */
       workspaceId: Schema.optional(WorkspaceId),

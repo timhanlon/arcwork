@@ -15,6 +15,7 @@ import type { ChatMessage } from "../../shared/chat-message.js"
 import type { PendingRequest } from "../../shared/chat-request.js"
 import { type ChatId, newArcId, type TargetId } from "../../shared/ids.js"
 import { TargetSessionManager } from "./TargetSessionManager.js"
+import { SessionRuntimeRouter } from "./SessionRuntimeRouter.js"
 import { ChatService } from "./ChatService.js"
 import { LocalModelService } from "./LocalModelService.js"
 import { ActivityEventService } from "./ActivityEventService.js"
@@ -78,6 +79,7 @@ export const ChatMessageServiceLive = Layer.effect(
     const db = yield* ArcStore
     const ingest = yield* IngestStore
     const sessions = yield* TargetSessionManager
+    const router = yield* SessionRuntimeRouter
     const chats = yield* ChatService
     const localModel = yield* LocalModelService
     const activity = yield* ActivityEventService
@@ -398,13 +400,19 @@ export const ChatMessageServiceLive = Layer.effect(
           )
         }
 
-        const live = (yield* sessions.list).find((session) => session.id === req.targetSessionId)
-        if (!live?.attached) {
-          return yield* Effect.fail(
-            arcRequestError(
-              `Target session "${stored.provider}" is not running — attach or resume it before sending`,
-            ),
-          )
+        // rpc (app-server) sessions live under RpcSessionManager, not the PTY
+        // manager, and have no "attached" byte-stream — skip the PTY liveness
+        // check for them (router.submit reports its own not-running).
+        const isRpc = yield* router.ownsRpc(req.targetSessionId)
+        if (!isRpc) {
+          const live = (yield* sessions.list).find((session) => session.id === req.targetSessionId)
+          if (!live?.attached) {
+            return yield* Effect.fail(
+              arcRequestError(
+                `Target session "${stored.provider}" is not running — attach or resume it before sending`,
+              ),
+            )
+          }
         }
 
         const occurredAt = yield* nowIso
@@ -442,7 +450,15 @@ export const ChatMessageServiceLive = Layer.effect(
           }
         }
 
-        const delivery = yield* sessions.submit({ instanceId: req.targetSessionId, text })
+        const delivery = yield* router
+          .submit({ instanceId: req.targetSessionId, text })
+          .pipe(
+            Effect.catchTag("CodexDriverError", (e) =>
+              Effect.logWarning(`rpc turn failed (${req.targetSessionId}): ${e.message}`).pipe(
+                Effect.as({ accepted: false as const }),
+              ),
+            ),
+          )
         if (!delivery.accepted) {
           yield* db.deleteChatMessageByDedupKey(row.dedupKey).pipe(
             Effect.tapError((e: SqlError) =>
@@ -455,6 +471,13 @@ export const ChatMessageServiceLive = Layer.effect(
               `Target session "${stored.provider}" is not attached — prompt was not delivered`,
             ),
           )
+        }
+
+        // An rpc turn returns its cumulative rows; project them into the chat
+        // timeline (the driver wrote IngestStore, the renderer reads the ArcStore
+        // projection). A pty turn's transcript arrives via the file watcher instead.
+        if ("rows" in delivery && delivery.rows) {
+          yield* ingestArtifactSession(delivery.rows)
         }
 
         const titleSeed = titleSeedFromMessages(

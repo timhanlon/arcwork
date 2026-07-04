@@ -4,6 +4,7 @@ import * as NodePath from "@effect/platform-node/NodePath"
 import { ProviderRegistryLive } from "./services/ProviderRegistry.js"
 import { CodexDriverRegistryLive } from "./services/CodexDriverRegistry.js"
 import { RpcSessionManagerLive } from "./services/RpcSessionManager.js"
+import { SessionRuntimeRouterLive } from "./services/SessionRuntimeRouter.js"
 import { PresetRegistryLive } from "./services/PresetRegistry.js"
 import { WorkspaceServiceLive } from "./services/WorkspaceService.js"
 import { WorkspaceFilesServiceLive } from "./services/WorkspaceFilesService.js"
@@ -70,11 +71,31 @@ const SessionsLive = TargetSessionManagerLive.pipe(
   Layer.provide(HookSignalServerLive),
   Layer.provide(StoreLive),
 )
+// Runtime owner for RPC-backed (app-server) sessions — the structured-process
+// sibling of the PTY TargetSessionManager. Launches drivers, persists their
+// turns, and registers their approvals for the renderer answer surface.
+const RpcSessionsLive = RpcSessionManagerLive.pipe(
+  Layer.provide(CodexDriverRegistryLive),
+  Layer.provide(IngestStoreLiveLayer),
+)
+// The one door onto both session runtimes: dispatches launch/submit/stop to the
+// PTY or RPC manager (launch by intent, submit/stop by ownership). `sendPrompt`
+// routes through it; it returns rpc turn rows for the caller to project (staying
+// acyclic — the router does not depend on ChatMessageService).
+const SessionRouterLive = SessionRuntimeRouterLive.pipe(
+  Layer.provide(ProviderRegistryLive),
+  Layer.provide(WorkspacesLive),
+  Layer.provide(ChatsLive),
+  Layer.provide(StoreLive),
+  Layer.provide(SessionsLive),
+  Layer.provide(RpcSessionsLive),
+)
 
 const ChatMessagesLive = ChatMessageServiceLive.pipe(
   Layer.provide(StoreLive),
   Layer.provide(IngestStoreLiveLayer),
   Layer.provide(SessionsLive),
+  Layer.provide(SessionRouterLive),
   Layer.provide(ChatsLive),
   Layer.provide(LocalModelServiceLive),
   Layer.provide(ActivityEventsLive),
@@ -93,13 +114,6 @@ const TargetInboxLive = TargetInboxServiceLive.pipe(
   Layer.provide(SessionsLive),
   Layer.provide(LiveTargetStatesLive),
 )
-// Runtime owner for RPC-backed (app-server) sessions — the structured-process
-// sibling of the PTY TargetSessionManager. Launches drivers, persists their
-// turns, and registers their approvals for the renderer answer surface.
-const RpcSessionsLive = RpcSessionManagerLive.pipe(
-  Layer.provide(CodexDriverRegistryLive),
-  Layer.provide(IngestStoreLiveLayer),
-)
 
 const DomainServiceLayers = [
   WorkLive,
@@ -114,6 +128,7 @@ const DomainServiceLayers = [
   LiveTargetStatesLive,
   TargetInboxLive,
   RpcSessionsLive,
+  SessionRouterLive,
   SessionsLive,
 ] as const
 
