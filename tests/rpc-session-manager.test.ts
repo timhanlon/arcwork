@@ -1,4 +1,4 @@
-import { Effect, Layer, ManagedRuntime, type Scope, Stream } from "effect"
+import { Effect, Fiber, Layer, ManagedRuntime, type Scope, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import { arcId } from "../src/shared/ids.js"
 import { IngestStore, IngestStoreLive } from "../src/main/ingest/db/store.js"
@@ -89,6 +89,47 @@ describe("RpcSessionManager", () => {
           expect(yield* manager.list).toHaveLength(0)
           expect(yield* manager.sessions).toHaveLength(0)
           expect(yield* registry.pending).toHaveLength(0)
+        }),
+      ),
+    15000,
+  )
+
+  it(
+    "marks the session generating while a turn is in flight, then clears it",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const manager = yield* RpcSessionManager
+          const registry = yield* CodexDriverRegistry
+          yield* manager.launch({
+            chatId: arcId("chat", "chat_1"),
+            targetSessionId: arcId("target", "target_1"),
+            provider: "codex",
+            startedAt: "2026-06-11T00:00:00.000Z",
+            cwd: process.cwd(),
+            command: process.execPath,
+            args: ["-e", PEER],
+          })
+          expect(yield* manager.generating).toHaveLength(0)
+
+          // Run the turn in the background — the PEER blocks it on an approval, so
+          // it stays in flight while we observe the signal.
+          const turn = yield* Effect.forkScoped(manager.submit({ targetSessionId: "target_1", text: "hi" }))
+
+          // Once the approval is pending, the turn is mid-flight → generating is set.
+          yield* registry.changes.pipe(Stream.filter((l) => l.length > 0), Stream.take(1), Stream.runDrain)
+          expect(yield* manager.generating).toContain("target_1")
+
+          // Answer it; the turn completes and the marker clears.
+          const pending = yield* registry.pending
+          yield* registry.answerApproval(
+            pending[0]!.targetSessionId,
+            pending[0]!.approvals[0]!.id,
+            "accept",
+          )
+          const res = yield* Fiber.join(turn)
+          expect(res.accepted).toBe(true)
+          expect(yield* manager.generating).toHaveLength(0)
         }),
       ),
     15000,

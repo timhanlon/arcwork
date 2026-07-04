@@ -1,4 +1,5 @@
 import { Context, Effect, Exit, Layer, Scope, Stream, SubscriptionRef } from "effect"
+import * as Semaphore from "effect/Semaphore"
 import type { ChatId, TargetId } from "../../shared/ids.js"
 import type { TargetOrigin, TargetSession } from "../../shared/instance.js"
 import type { ExtractedRows } from "../ingest/db/schema.js"
@@ -74,12 +75,20 @@ export class RpcSessionManager extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<TargetSession>>
     /** Reactive view of {@link sessions}: current value, then every change. */
     readonly changes: Stream.Stream<ReadonlyArray<TargetSession>>
+    /** Target ids with a turn in flight — feeds the live "generating" activity
+     * (an rpc session has no hook stream, so this is its turn-lifecycle signal). */
+    readonly generating: Effect.Effect<ReadonlyArray<string>>
+    /** Reactive view of {@link generating}: current value, then every change. */
+    readonly generatingChanges: Stream.Stream<ReadonlyArray<string>>
   }
 >()("arcwork/RpcSessionManager") {}
 
 interface LiveRpcSession {
   readonly driver: CodexAppServerDriver
   readonly scope: Scope.Closeable
+  /** Serializes turns for this session: the driver folds one turn at a time
+   * (unkeyed turn outcomes), so concurrent submits would misattribute completions. */
+  readonly sem: Semaphore.Semaphore
 }
 
 export const RpcSessionManagerLive = Layer.effect(
@@ -93,6 +102,17 @@ export const RpcSessionManagerLive = Layer.effect(
     // unified `WatchSessions` stream — an rpc session has no PTY registry to
     // appear in, so it lives here.
     const store = yield* SubscriptionRef.make<ReadonlyMap<string, TargetSession>>(new Map())
+    // Target ids with a turn in flight — the rpc equivalent of the hook-driven
+    // open-turn set, read by LiveTargetStateService to paint "generating".
+    const generating = yield* SubscriptionRef.make<ReadonlySet<string>>(new Set())
+    const markGenerating = (id: string, on: boolean) =>
+      SubscriptionRef.update(generating, (s) => {
+        if (on === s.has(id)) return s
+        const next = new Set(s)
+        if (on) next.add(id)
+        else next.delete(id)
+        return next
+      })
 
     const launch = (req: RpcLaunchRequest): Effect.Effect<TargetSession, CodexDriverError> =>
       Effect.gen(function* () {
@@ -125,7 +145,8 @@ export const RpcSessionManagerLive = Layer.effect(
           // A failed launch must not leak the forked scope (or a half-spawned child).
           Effect.tapError(() => Scope.close(scope, Exit.void)),
         )
-        sessions.set(req.targetSessionId, { driver, scope })
+        const sem = yield* Semaphore.make(1)
+        sessions.set(req.targetSessionId, { driver, scope, sem })
         const session: TargetSession = {
           _tag: "TargetSession",
           id: req.targetSessionId,
@@ -146,7 +167,16 @@ export const RpcSessionManagerLive = Layer.effect(
       Effect.gen(function* () {
         const session = sessions.get(req.targetSessionId)
         if (!session) return { accepted: false as const }
-        const result = yield* session.driver.runTurn(req.text)
+        // One turn at a time per session (the driver's turn outcomes are unkeyed),
+        // and mark the session "generating" for the duration so the composer/sidebar
+        // paint live activity the way a PTY turn does off its hooks.
+        const result = yield* session.sem.withPermits(1)(
+          Effect.acquireUseRelease(
+            markGenerating(req.targetSessionId, true),
+            () => session.driver.runTurn(req.text),
+            () => markGenerating(req.targetSessionId, false),
+          ),
+        )
         return { accepted: true as const, status: result.status, rows: result.rows }
       })
 
@@ -160,6 +190,7 @@ export const RpcSessionManagerLive = Layer.effect(
           next.delete(targetSessionId)
           return next
         })
+        yield* markGenerating(targetSessionId, false)
         yield* Scope.close(session.scope, Exit.void)
         return { stopped: true }
       })
@@ -171,6 +202,8 @@ export const RpcSessionManagerLive = Layer.effect(
       list: Effect.sync(() => [...sessions.keys()]),
       sessions: SubscriptionRef.get(store).pipe(Effect.map((m) => [...m.values()])),
       changes: Stream.map(SubscriptionRef.changes(store), (m) => [...m.values()]),
+      generating: SubscriptionRef.get(generating).pipe(Effect.map((s) => [...s])),
+      generatingChanges: Stream.map(SubscriptionRef.changes(generating), (s) => [...s]),
     }
   }),
 )

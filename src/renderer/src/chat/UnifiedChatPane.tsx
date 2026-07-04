@@ -97,7 +97,6 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
   // the auto-picked addressee. Reset when the chat changes (it's chat-scoped).
   const [targetOverride, setTargetOverride] = useState<string | undefined>(undefined)
   const [composerError, setComposerError] = useState<string | undefined>(undefined)
-  const [sending, setSending] = useState(false)
   const [titleEditing, setTitleEditing] = useState(false)
   const [titleDraft, setTitleDraft] = useState(chat?.title ?? "")
   const [titleError, setTitleError] = useState<string | undefined>(undefined)
@@ -188,7 +187,12 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
       return
     }
 
-    setSending(true)
+    // Optimistic: clear the composer immediately and let the turn run in the
+    // background. An rpc (app-server) turn runs to completion server-side, so
+    // awaiting it would hold the composer disabled for the whole turn; the reply
+    // lands via the chat-changes stream and "generating" shows live activity
+    // meanwhile — matching how a PTY submit returns instantly.
+    setDraft("")
     setComposerError(undefined)
     try {
       await rpc("SendChatPrompt", {
@@ -196,12 +200,11 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
         targetSessionId: addressee.id,
         text,
       })
-      setDraft("")
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
       setComposerError(message)
-    } finally {
-      setSending(false)
+      // Restore the prompt so it isn't lost — unless the user already typed a new one.
+      setDraft((current) => (current === "" ? text : current))
     }
   }, [addressee, attachedInChat.length, chat, draft])
 
@@ -436,7 +439,6 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
         <ChatComposer
           ref={composerHandleRef}
           value={draft}
-          disabled={sending}
           candidates={candidates}
           onSelectTarget={setTargetOverride}
           onMention={ensureFilesLoaded}

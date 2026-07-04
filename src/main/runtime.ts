@@ -104,7 +104,8 @@ const ChatMessagesLive = ChatMessageServiceLive.pipe(
 // requests + hook turn lifecycle. Pure read model — it shares the one
 // TargetSessionManager / ChatMessageService instance (memoized by reference).
 const LiveTargetStatesLive = LiveTargetStateServiceLive.pipe(
-  Layer.provide(SessionsLive),
+  Layer.provide(SessionRouterLive),
+  Layer.provide(RpcSessionsLive),
   Layer.provide(ChatMessagesLive),
 )
 // Deliver messages into a running target session: queues on the inbox, pastes
