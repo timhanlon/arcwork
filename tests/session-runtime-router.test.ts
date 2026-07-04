@@ -15,6 +15,7 @@ import {
 import { TargetSessionManager } from "../src/main/services/TargetSessionManager.js"
 import { WorkspaceServiceLive } from "../src/main/services/WorkspaceService.js"
 import { arcId } from "../src/shared/ids.js"
+import type { TargetSession } from "../src/shared/instance.js"
 
 const PEER = `
 const readline = require('node:readline')
@@ -79,6 +80,7 @@ const stubPty = Layer.succeed(
     launch: () => Effect.die("pty launch unused"),
     resume: () => Effect.die("pty resume unused"),
     stop: () => Effect.succeed({ stopped: false }),
+    release: () => Effect.void,
     bindNative: () => Effect.void,
     submit: () => Effect.succeed({ accepted: false }),
     write: () => Effect.void,
@@ -89,9 +91,43 @@ const stubPty = Layer.succeed(
 
 const NOW = "2026-06-11T00:00:00.000Z"
 
+// A PTY manager stub that starts holding one id as a boot-restored *detached*
+// shell and drops it on `release` — the exact state the real manager is in after
+// a restart, so the router's ownership-transfer on rpc-resume is exercised.
+const ptyHolding = (id: string) => {
+  const held = new Set([id])
+  const shell = (sid: string): TargetSession => ({
+    _tag: "TargetSession",
+    id: arcId("target", sid),
+    provider: "codex",
+    chatId: arcId("chat", "chat_res"),
+    cwd: "/tmp/ws",
+    attached: false,
+    state: "unknown",
+    startedAt: NOW,
+  })
+  return Layer.succeed(
+    TargetSessionManager,
+    TargetSessionManager.of({
+      list: Effect.sync(() => [...held].map(shell)),
+      changes: Stream.empty,
+      launch: () => Effect.die("pty launch unused"),
+      resume: () => Effect.die("pty resume unused"),
+      stop: () => Effect.succeed({ stopped: false }),
+      release: (sid) => Effect.sync(() => void held.delete(sid)),
+      bindNative: () => Effect.void,
+      submit: () => Effect.succeed({ accepted: false }),
+      write: () => Effect.void,
+      resize: () => Effect.void,
+      events: new EventEmitter(),
+    }),
+  )
+}
+
 const run = <A, E>(
   program: Effect.Effect<A, E, SessionRuntimeRouter | RpcSessionManager | ArcStore>,
   providers: Layer.Layer<ProviderRegistry> = ProviderRegistryLive,
+  pty: Layer.Layer<TargetSessionManager> = stubPty,
 ): Promise<A> => {
   const sql = sqliteLayer(":memory:")
   const arc = ArcStoreLive.pipe(Layer.provide(sql))
@@ -103,7 +139,7 @@ const run = <A, E>(
     providers,
     WorkspaceServiceLive.pipe(Layer.provide(arc)),
     ChatServiceLive.pipe(Layer.provide(arc)),
-    stubPty,
+    pty,
   )
   const runtime = ManagedRuntime.make(SessionRuntimeRouterLive.pipe(Layer.provideMerge(base)))
   return runtime.runPromise(program).finally(() => runtime.dispose())
@@ -256,8 +292,18 @@ describe("SessionRuntimeRouter dispatch", () => {
           const rows = yield* db.loadTargetSessions
           expect(rows.find((r) => r.id === "tsR")?.state).toBe("running")
           expect(yield* router.ownsRpc("tsR")).toBe(true)
+
+          // Ownership transferred: the PTY manager released its boot-restored shell,
+          // so the unified list carries the id exactly once (not once per manager).
+          const unified = yield* router.sessions
+          expect(unified.filter((s) => s.id === "tsR")).toHaveLength(1)
+          expect(unified.find((s) => s.id === "tsR")?.attached).toBe(true)
         }),
         stubProviders(["-e", RESUME_PEER]),
+        // A PTY manager that holds "tsR" as a boot-restored detached shell (as the
+        // real one does after restart) and honors `release` — so the test proves the
+        // resume evicts it rather than leaving a duplicate.
+        ptyHolding("tsR"),
       ),
     15000,
   )

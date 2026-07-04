@@ -113,6 +113,11 @@ export class TargetSessionManager extends Context.Service<
      * `{ stopped: false }` when no live PTY is held for the session.
      */
     readonly stop: (req: StopRequest) => Effect.Effect<{ readonly stopped: boolean }>
+    /** Relinquish a session id this manager holds only as a boot-restored detached
+     * shell (no live PTY child) — used when another runtime takes over the
+     * identity (e.g. a resume into the app-server runtime), so a single id is
+     * never owned by two managers at once. No-op (logs) if a live child exists. */
+    readonly release: (sessionId: string) => Effect.Effect<void>
     /** Fill a session's `nativeSessionId` once a hook reveals it (Arc-owned
      * session metadata, persisted for resume/debugging/import — not a cross-DB
      * join key). Matches by session `id`; idempotent for the same value. */
@@ -557,6 +562,23 @@ export const TargetSessionManagerLive = Layer.effect(
         }),
       )
 
+    // Drop a boot-restored detached shell from the store so another runtime can
+    // own the identity. Refuses if a live PTY child is held — that would orphan a
+    // process; a live PTY session is never the thing being taken over.
+    const release = (sessionId: string) =>
+      Effect.gen(function* () {
+        if (ptys.has(sessionId)) {
+          yield* Effect.logWarning(`release refused: target ${sessionId} has a live PTY child`)
+          return
+        }
+        yield* SubscriptionRef.update(store, (m) => {
+          if (!m.has(sessionId)) return m
+          const next = new Map(m)
+          next.delete(sessionId)
+          return next
+        })
+      })
+
     const bindNative = (
       targetSessionId: string,
       nativeSessionId: string,
@@ -624,6 +646,6 @@ export const TargetSessionManagerLive = Layer.effect(
         ptys.get(sessionId)?.resize(Math.floor(cols), Math.floor(rows))
       })
 
-    return { list, changes, launch, resume, stop, bindNative, submit, write, resize, events }
+    return { list, changes, launch, resume, stop, release, bindNative, submit, write, resize, events }
   }),
 )

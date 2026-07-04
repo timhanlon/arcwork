@@ -164,6 +164,11 @@ export const SessionRuntimeRouterLive = Layer.effect(
           approvalPolicy: "on-request",
           resumeThreadId: row.nativeSessionId,
         })
+        // Ownership transfer: every persisted row is boot-restored into the PTY
+        // manager as a detached shell (it can't tell rpc from pty). Now that rpc
+        // owns this identity, release the PTY shell so a single id isn't held by
+        // both managers — otherwise the unified list carries it twice.
+        yield* pty.release(row.id)
         // Flip the durable row back to running (stop/quit may have left it exited).
         yield* db
           .setTargetSessionState(row.id, "running")
