@@ -36,12 +36,13 @@ export interface PendingApproval {
 export interface TurnResult {
   /** `completed` | `interrupted` | `failed` | `unknown`. */
   readonly status: string
+  /** The session's cumulative rows through this turn — ready for `IngestStore.replaceSession`. */
   readonly rows: ExtractedRows
 }
 
 export interface CodexAppServerDriver {
   readonly threadId: string
-  /** Send a user turn and resolve once the turn completes, with its rows + status. */
+  /** Send a user turn and resolve once it completes, with the session's cumulative rows + status. */
   readonly runTurn: (text: string) => Effect.Effect<TurnResult, CodexDriverError>
   /** The current outstanding approvals; subscribe via `.changes` for the live signal. */
   readonly pendingApprovals: SubscriptionRef.SubscriptionRef<ReadonlyArray<PendingApproval>>
@@ -110,21 +111,18 @@ export const makeCodexAppServerDriver = (
     const pendingApprovals = yield* SubscriptionRef.make<ReadonlyArray<PendingApproval>>([])
     const turnOutcomes = yield* Queue.make<TurnOutcome>()
 
-    // One sequential fiber folds the notification stream. `turn/started` opens a
-    // fresh accumulator; each `item/completed` and token-usage snapshot appends;
-    // `turn/completed` hands the accumulated turn off to `runTurn` via the queue.
+    // One sequential fiber folds the notification stream. Accumulation is
+    // thread-cumulative, not per-turn: the store's `replaceSession` replaces a
+    // session with the whole row set (the file scraper re-parses the entire
+    // rollout each time), so each `turn/completed` hands `runTurn` the session's
+    // rows *so far* — a snapshot copy, since the accumulators keep growing.
     // Single-consumer, so the mutable accumulators need no locking.
-    let items: Array<unknown> = []
-    let usage: Array<unknown> = []
+    const items: Array<unknown> = []
+    const usage: Array<unknown> = []
     yield* transport.notifications.pipe(
       Stream.runForEach((notification) =>
         Effect.gen(function* () {
           switch (notification.method) {
-            case "turn/started": {
-              items = []
-              usage = []
-              break
-            }
             case "item/completed": {
               const item = obj(notification.params)?.["item"]
               if (item !== undefined) items.push(item)
@@ -137,10 +135,7 @@ export const makeCodexAppServerDriver = (
             case "turn/completed": {
               const turn = obj(obj(notification.params)?.["turn"])
               const status = str(turn?.["status"]) ?? "unknown"
-              const outcome: TurnOutcome = { items, usage, status }
-              items = []
-              usage = []
-              yield* Queue.offer(turnOutcomes, outcome)
+              yield* Queue.offer(turnOutcomes, { items: items.slice(), usage: usage.slice(), status })
               break
             }
             case "serverRequest/resolved": {
