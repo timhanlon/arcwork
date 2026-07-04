@@ -7,13 +7,17 @@ import { sqliteLayer } from "../src/main/db/sqlite.js"
 import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { HookSignalServer } from "../src/main/services/HookSignalServer.js"
 import { installProviderHooks } from "../src/main/hooks/install.js"
-import { restorePersistedSessions } from "../src/main/services/target-session/boot-restore.js"
+import type { TargetSessionRow } from "../src/main/db/schema.js"
+import {
+  rearmPersistedSessionHooks,
+  restoredSessionFromRow,
+} from "../src/main/services/target-session/boot-restore.js"
 
-// boot-restore rebuilds the live session map from persisted rows on startup and
-// re-arms hook sockets for still-running targets. Split out of the manager so
-// the row→session mapping (exited stays exited, everything else → "unknown") and
-// the per-(cwd,provider) hook-arm dedup are testable against a real in-memory
-// store, with the socket/file side effects stubbed.
+// boot-restore re-arms hook sockets for still-running targets on startup and
+// projects a persisted row into a runtime-neutral *detached* session. It does NOT
+// seed the PTY store (detached sessions come from the DB via the router). Split
+// out of the manager so the row→session mapping (exited stays exited, everything
+// else → "unknown") and the per-(cwd,provider) hook-arm dedup are testable.
 
 const installCalls: Array<{ cwd: string; provider: string }> = []
 vi.mock("../src/main/hooks/install.js", () => ({
@@ -68,7 +72,34 @@ const seed = Effect.gen(function* () {
   yield* row("target_b", "/repoB", "codex", "exited")
 })
 
-describe("restorePersistedSessions", () => {
+const rowFixture = (state: string): TargetSessionRow => ({
+  id: arcId("target", "target_x"),
+  chatId: CHAT,
+  provider: "claude",
+  origin: "manual",
+  spawnedBy: null,
+  preset: null,
+  cwd: "/repoA",
+  channelId: null,
+  workspaceId: null,
+  nativeSessionId: "sess_1",
+  nativeTranscriptPath: null,
+  state,
+  startedAt: "2026-01-01T00:00:00.000Z",
+})
+
+describe("restoredSessionFromRow", () => {
+  it("projects a persisted row into a detached session, forcing non-exited → unknown", () => {
+    const running = restoredSessionFromRow(rowFixture("running"))
+    expect(running.state).toBe("unknown")
+    expect(running.attached).toBe(false)
+    expect(running.nativeSessionId).toBe("sess_1") // carried for resume
+    // An already-exited row keeps exited.
+    expect(restoredSessionFromRow(rowFixture("exited")).state).toBe("exited")
+  })
+})
+
+describe("rearmPersistedSessionHooks", () => {
   let runtime: ManagedRuntime.ManagedRuntime<ArcStore | HookSignalServer, SqlError>
 
   beforeAll(async () => {
@@ -79,21 +110,11 @@ describe("restorePersistedSessions", () => {
     await runtime.dispose()
   })
 
-  it("maps every persisted row, forcing non-exited state to unknown", async () => {
-    const map = await runtime.runPromise(restorePersistedSessions)
-
-    expect(map.size).toBe(3)
-    expect(map.get(arcId("target", "target_a1"))?.state).toBe("unknown")
-    expect(map.get(arcId("target", "target_a2"))?.state).toBe("unknown")
-    expect(map.get(arcId("target", "target_b"))?.state).toBe("exited")
-    expect(map.get(arcId("target", "target_a1"))?.attached).toBe(false)
-  })
-
   it("re-arms hooks once per (cwd, provider) for non-exited targets only", async () => {
     ensureListeningCalls.length = 0
     installCalls.length = 0
 
-    await runtime.runPromise(restorePersistedSessions)
+    await runtime.runPromise(rearmPersistedSessionHooks)
 
     // /repoA armed once despite two running sessions; /repoB skipped (exited).
     expect(ensureListeningCalls).toEqual(["/repoA"])

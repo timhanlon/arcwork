@@ -9,6 +9,7 @@ import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { ChatService } from "./ChatService.js"
 import { ProviderRegistry } from "./ProviderRegistry.js"
 import { RpcSessionManager } from "./RpcSessionManager.js"
+import { restoredSessionFromRow } from "./target-session/boot-restore.js"
 import {
   type LaunchRequest,
   type ResumeRequest,
@@ -164,11 +165,10 @@ export const SessionRuntimeRouterLive = Layer.effect(
           approvalPolicy: "on-request",
           resumeThreadId: row.nativeSessionId,
         })
-        // Ownership transfer: every persisted row is boot-restored into the PTY
-        // manager as a detached shell (it can't tell rpc from pty). Now that rpc
-        // owns this identity, release the PTY shell so a single id isn't held by
-        // both managers — otherwise the unified list carries it twice.
-        yield* pty.release(row.id)
+        // No cross-manager handoff: a detached session isn't held by the PTY
+        // manager (the store is live-only) — it was surfaced from the DB. Launching
+        // it into rpc makes it live here; the unified list's detached set (DB rows
+        // minus live ids) drops it automatically because it's now a live id.
         // Flip the durable row back to running (stop/quit may have left it exited).
         yield* db
           .setTargetSessionState(row.id, "running")
@@ -192,32 +192,48 @@ export const SessionRuntimeRouterLive = Layer.effect(
     const stop = (req: StopRequest) =>
       Effect.gen(function* () {
         if (yield* ownsRpc(req.sessionId)) {
-          const result = yield* rpc.stop(req.sessionId)
-          // Mark the persisted row exited so a restart's `restorePersistedSessions`
-          // doesn't resurrect the stopped rpc session as a stale (non-attached) PTY
-          // target — the durable counterpart of the PTY manager's exit handler.
-          // Best-effort + logged: a DB hiccup shouldn't fail an otherwise-good stop.
-          if (result.stopped) {
-            yield* db
-              .setTargetSessionState(req.sessionId, "exited")
-              .pipe(
-                Effect.tapError((e) => Effect.logWarning(`rpc stop persist failed (${req.sessionId}): ${e}`)),
-                Effect.ignore,
-              )
-          }
-          return result
+          // Mark the row exited *before* `rpc.stop` removes the session from the
+          // rpc store: that removal ticks the unified `changes`, which re-reads the
+          // DB for the detached set — if the row still read "running" it would
+          // resurrect the just-stopped session as a detached row. Best-effort +
+          // logged: a DB hiccup shouldn't fail an otherwise-good stop.
+          yield* db
+            .setTargetSessionState(req.sessionId, "exited")
+            .pipe(
+              Effect.tapError((e) => Effect.logWarning(`rpc stop persist failed (${req.sessionId}): ${e}`)),
+              Effect.ignore,
+            )
+          return yield* rpc.stop(req.sessionId)
         }
         return yield* pty.stop(req)
       })
 
-    // The unified view over both runtimes. `rechunk(1)` per side so `zipLatestWith`
-    // tracks each list emission individually (it zips per-element within a chunk),
-    // and both sides emit their current value on subscribe, so the union is live
-    // from the first pull.
-    const sessions = Effect.zipWith(pty.list, rpc.sessions, (a, b) => [...a, ...b])
+    // The unified view: the live sessions this process owns (PTY + rpc, disjoint
+    // by id) plus the *detached* set — persisted rows not currently live and not
+    // exited, read from the DB and runtime-neutral. An id is either live in one
+    // manager or detached; never both, so there's no duplicate and no ownership
+    // handoff. Resuming a detached session makes it live → it drops out of the
+    // detached set on the next tick because its id is now in `live`.
+    const unify = (live: ReadonlyArray<TargetSession>) =>
+      Effect.map(
+        db.loadTargetSessions.pipe(Effect.orElseSucceed(() => [])),
+        (rows) => {
+          const liveIds = new Set(live.map((s) => s.id))
+          const detached = rows
+            .filter((r) => r.state !== "exited" && !liveIds.has(r.id))
+            .map(restoredSessionFromRow)
+          return [...live, ...detached]
+        },
+      )
+    // `rechunk(1)` per side so `zipLatestWith` tracks each list emission
+    // individually; both sides replay their current value on subscribe, so the
+    // union is live from the first pull. Each tick re-reads the DB for the
+    // detached set (cheap; only on a session change).
+    const sessions = Effect.zipWith(pty.list, rpc.sessions, (a, b) => [...a, ...b]).pipe(Effect.flatMap(unify))
     const changes = pty.changes.pipe(
       Stream.rechunk(1),
       Stream.zipLatestWith(Stream.rechunk(rpc.changes, 1), (a, b) => [...a, ...b]),
+      Stream.mapEffect(unify),
     )
 
     return { launch, resume, submit, stop, ownsRpc, sessions, changes }

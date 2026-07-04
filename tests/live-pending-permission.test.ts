@@ -44,7 +44,6 @@ const stubSessions = Layer.succeed(
     launch: () => Effect.die("TargetSessionManager.launch is unused in this test"),
     resume: () => Effect.die("TargetSessionManager.resume is unused in this test"),
     stop: () => Effect.succeed({ stopped: false }),
-    release: () => Effect.void,
     bindNative: () => Effect.void,
     submit: () => Effect.succeed({ accepted: false }),
     write: () => Effect.void,

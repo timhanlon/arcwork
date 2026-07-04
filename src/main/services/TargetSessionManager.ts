@@ -15,7 +15,7 @@ import { withSqlOperation } from "../db/sql-operation.js"
 import { resolveArcDb } from "../db/paths.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { arcIdOrNull, type ChatId, newArcId } from "../../shared/ids.js"
-import { restorePersistedSessions } from "./target-session/boot-restore.js"
+import { rearmPersistedSessionHooks, restoredSessionFromRow } from "./target-session/boot-restore.js"
 import { buildProviderArgs, canResume, resumeArgs } from "./target-session/provider-args.js"
 import {
   drivePtySpawn,
@@ -113,11 +113,6 @@ export class TargetSessionManager extends Context.Service<
      * `{ stopped: false }` when no live PTY is held for the session.
      */
     readonly stop: (req: StopRequest) => Effect.Effect<{ readonly stopped: boolean }>
-    /** Relinquish a session id this manager holds only as a boot-restored detached
-     * shell (no live PTY child) — used when another runtime takes over the
-     * identity (e.g. a resume into the app-server runtime), so a single id is
-     * never owned by two managers at once. No-op (logs) if a live child exists. */
-    readonly release: (sessionId: string) => Effect.Effect<void>
     /** Fill a session's `nativeSessionId` once a hook reveals it (Arc-owned
      * session metadata, persisted for resume/debugging/import — not a cross-DB
      * join key). Matches by session `id`; idempotent for the same value. */
@@ -145,9 +140,12 @@ export const TargetSessionManagerLive = Layer.effect(
     const db = yield* ArcStore
     const scope = yield* Effect.scope
 
-    // Restore persisted sessions on boot (and re-arm their hook sockets); see
-    // target-session/boot-restore.ts for the unconfirmed-state reconciliation.
-    const initialMap = yield* restorePersistedSessions
+    // Re-arm the hook sockets of persisted sessions on boot. The store itself
+    // starts empty — a boot-restored session isn't live in any runtime, so it's
+    // surfaced from the DB as *detached* by the router's unified list, not held
+    // here. This store holds only sessions this process has a live PTY for.
+    yield* rearmPersistedSessionHooks
+    const initialMap = new Map<string, TargetSession>()
 
     // SubscriptionRef (not Ref) so the session list is observable: `changes`
     // pushes the current value, then every update. This is the Effect-idiomatic
@@ -466,11 +464,20 @@ export const TargetSessionManagerLive = Layer.effect(
       launchLock.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* SubscriptionRef.get(store)
-        const existing = current.get(req.sessionId)
+        const held = current.get(req.sessionId)
+        if (held && ptys.has(held.id)) return { ...held, attached: true } // already live
+        // A detached session is no longer held here (the store is live-only), so
+        // read the persisted row from the DB — the same runtime-neutral projection
+        // the router's detached set uses.
+        const row = held
+          ? undefined
+          : (yield* db.loadTargetSessions.pipe(Effect.orElseSucceed(() => []))).find(
+              (r) => r.id === req.sessionId,
+            )
+        const existing = held ?? (row ? restoredSessionFromRow(row) : undefined)
         if (!existing) {
           return yield* Effect.fail(arcRequestError(`Unknown target session "${req.sessionId}"`))
         }
-        if (ptys.has(existing.id)) return { ...existing, attached: true }
 
         const spec = yield* registry.get(existing.provider)
         if (!spec?.interactive) {
@@ -562,22 +569,6 @@ export const TargetSessionManagerLive = Layer.effect(
         }),
       )
 
-    // Drop a boot-restored detached shell from the store so another runtime can
-    // own the identity. Refuses if a live PTY child is held — that would orphan a
-    // process; a live PTY session is never the thing being taken over.
-    const release = (sessionId: string) =>
-      Effect.gen(function* () {
-        if (ptys.has(sessionId)) {
-          yield* Effect.logWarning(`release refused: target ${sessionId} has a live PTY child`)
-          return
-        }
-        yield* SubscriptionRef.update(store, (m) => {
-          if (!m.has(sessionId)) return m
-          const next = new Map(m)
-          next.delete(sessionId)
-          return next
-        })
-      })
 
     const bindNative = (
       targetSessionId: string,
@@ -646,6 +637,6 @@ export const TargetSessionManagerLive = Layer.effect(
         ptys.get(sessionId)?.resize(Math.floor(cols), Math.floor(rows))
       })
 
-    return { list, changes, launch, resume, stop, release, bindNative, submit, write, resize, events }
+    return { list, changes, launch, resume, stop, bindNative, submit, write, resize, events }
   }),
 )

@@ -80,7 +80,6 @@ const stubPty = Layer.succeed(
     launch: () => Effect.die("pty launch unused"),
     resume: () => Effect.die("pty resume unused"),
     stop: () => Effect.succeed({ stopped: false }),
-    release: () => Effect.void,
     bindNative: () => Effect.void,
     submit: () => Effect.succeed({ accepted: false }),
     write: () => Effect.void,
@@ -93,37 +92,6 @@ const NOW = "2026-06-11T00:00:00.000Z"
 
 // A PTY manager stub that starts holding one id as a boot-restored *detached*
 // shell and drops it on `release` — the exact state the real manager is in after
-// a restart, so the router's ownership-transfer on rpc-resume is exercised.
-const ptyHolding = (id: string) => {
-  const held = new Set([id])
-  const shell = (sid: string): TargetSession => ({
-    _tag: "TargetSession",
-    id: arcId("target", sid),
-    provider: "codex",
-    chatId: arcId("chat", "chat_res"),
-    cwd: "/tmp/ws",
-    attached: false,
-    state: "unknown",
-    startedAt: NOW,
-  })
-  return Layer.succeed(
-    TargetSessionManager,
-    TargetSessionManager.of({
-      list: Effect.sync(() => [...held].map(shell)),
-      changes: Stream.empty,
-      launch: () => Effect.die("pty launch unused"),
-      resume: () => Effect.die("pty resume unused"),
-      stop: () => Effect.succeed({ stopped: false }),
-      release: (sid) => Effect.sync(() => void held.delete(sid)),
-      bindNative: () => Effect.void,
-      submit: () => Effect.succeed({ accepted: false }),
-      write: () => Effect.void,
-      resize: () => Effect.void,
-      events: new EventEmitter(),
-    }),
-  )
-}
-
 const run = <A, E>(
   program: Effect.Effect<A, E, SessionRuntimeRouter | RpcSessionManager | ArcStore>,
   providers: Layer.Layer<ProviderRegistry> = ProviderRegistryLive,
@@ -293,17 +261,69 @@ describe("SessionRuntimeRouter dispatch", () => {
           expect(rows.find((r) => r.id === "tsR")?.state).toBe("running")
           expect(yield* router.ownsRpc("tsR")).toBe(true)
 
-          // Ownership transferred: the PTY manager released its boot-restored shell,
-          // so the unified list carries the id exactly once (not once per manager).
+          // No ownership handoff, no duplicate: the detached row was surfaced from
+          // the DB; launching it into rpc makes it live, so the unified list's
+          // detached set (DB minus live ids) drops it — the id appears exactly once.
           const unified = yield* router.sessions
           expect(unified.filter((s) => s.id === "tsR")).toHaveLength(1)
           expect(unified.find((s) => s.id === "tsR")?.attached).toBe(true)
         }),
         stubProviders(["-e", RESUME_PEER]),
-        // A PTY manager that holds "tsR" as a boot-restored detached shell (as the
-        // real one does after restart) and honors `release` — so the test proves the
-        // resume evicts it rather than leaving a duplicate.
-        ptyHolding("tsR"),
+      ),
+    15000,
+  )
+
+  it(
+    "surfaces a persisted, not-live, not-exited row as a detached session in the unified list",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const router = yield* SessionRuntimeRouter
+          const db = yield* ArcStore
+          yield* db.upsertWorkspace({
+            id: arcId("workspace", "ws_d"),
+            path: "/tmp/ws",
+            name: "ws",
+            createdAt: NOW,
+            lastOpenedAt: NOW,
+          })
+          yield* db.insertChat({
+            id: arcId("chat", "chat_d"),
+            workspaceId: arcId("workspace", "ws_d"),
+            title: "c",
+            createdAt: NOW,
+          })
+          yield* db.upsertTargetSession({
+            id: arcId("target", "tsD"),
+            chatId: arcId("chat", "chat_d"),
+            provider: "codex",
+            preset: null,
+            cwd: "/tmp/ws",
+            nativeSessionId: "thr_d",
+            nativeTranscriptPath: null,
+            state: "running", // persisted running, but no live runtime this process
+            startedAt: NOW,
+          })
+          yield* db.upsertTargetSession({
+            id: arcId("target", "tsExited"),
+            chatId: arcId("chat", "chat_d"),
+            provider: "codex",
+            preset: null,
+            cwd: "/tmp/ws",
+            nativeSessionId: "thr_e",
+            nativeTranscriptPath: null,
+            state: "exited",
+            startedAt: NOW,
+          })
+
+          const unified = yield* router.sessions
+          const detached = unified.find((s) => s.id === "tsD")
+          // Not live in any manager → surfaced from the DB as detached.
+          expect(detached?.attached).toBe(false)
+          expect(detached?.nativeSessionId).toBe("thr_d")
+          // An exited row is not resumable clutter — excluded from the list.
+          expect(unified.some((s) => s.id === "tsExited")).toBe(false)
+        }),
       ),
     15000,
   )
