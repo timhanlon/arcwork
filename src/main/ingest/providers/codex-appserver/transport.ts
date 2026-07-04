@@ -103,6 +103,11 @@ export const makeAppServerTransport = (
     const serverRequests = yield* Queue.make<JsonRpcServerRequest>()
     const pending = new Map<IdKey, Deferred.Deferred<unknown, AppServerTransportError>>()
     let nextId = 1
+    // Set once the child exits (see the exit branch of `route`). A request made
+    // *after* the exit event would otherwise register a Deferred that no future
+    // exit can fail — so every request/notify/respond checks this first and fails
+    // fast instead of hanging on a dead server.
+    let closed: AppServerTransportError | null = null
 
     // Raw callbacks only offer; `offerUnsafe` is a no-op after scope-close shutdown.
     const lines = createInterface({ input: stdout })
@@ -123,16 +128,18 @@ export const makeAppServerTransport = (
     // A spawn failure (bad command, missing cwd) fires `error`, not `exit`; treat
     // it as an exit so pending requests fail instead of an unhandled throw.
     child.on("error", () => Queue.offerUnsafe(inbound, { kind: "exit" }))
+    // Release the readline interface (and its stdout `line` listener) at scope
+    // close, alongside the child kill the acquireRelease above registers.
+    yield* Effect.addFinalizer(() => Effect.sync(() => lines.close()))
 
     const route = (event: Inbound): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (event.kind === "exit") {
-          // Fail every in-flight request and end both output streams so nobody hangs.
+          // Fail every in-flight request, mark the transport closed so later calls
+          // fail fast, and end both output streams so nobody hangs.
+          closed = new AppServerTransportError({ message: `${options.command} exited` })
           for (const [, deferred] of pending) {
-            yield* Deferred.fail(
-              deferred,
-              new AppServerTransportError({ message: `${options.command} exited` }),
-            )
+            yield* Deferred.fail(deferred, closed)
           }
           pending.clear()
           yield* Queue.shutdown(notifications)
@@ -179,9 +186,16 @@ export const makeAppServerTransport = (
 
     const request = (method: string, params?: unknown): Effect.Effect<unknown, AppServerTransportError> =>
       Effect.gen(function* () {
+        if (closed) return yield* Effect.fail(closed)
         const id = nextId++
         const deferred = yield* Deferred.make<unknown, AppServerTransportError>()
         pending.set(id, deferred)
+        // `Deferred.make` yields, so an exit could have drained `pending` between
+        // the guard above and here — re-check rather than await a dead deferred.
+        if (closed) {
+          pending.delete(id)
+          return yield* Effect.fail(closed)
+        }
         yield* writeLine({ method, id, params: params ?? {} }).pipe(
           Effect.tapError(() => Effect.sync(() => pending.delete(id))),
         )
@@ -189,10 +203,10 @@ export const makeAppServerTransport = (
       })
 
     const notify = (method: string, params?: unknown): Effect.Effect<void, AppServerTransportError> =>
-      writeLine({ method, params: params ?? {} })
+      closed ? Effect.fail(closed) : writeLine({ method, params: params ?? {} })
 
     const respond = (id: IdKey, result: unknown): Effect.Effect<void, AppServerTransportError> =>
-      writeLine({ id, result })
+      closed ? Effect.fail(closed) : writeLine({ id, result })
 
     return {
       request,

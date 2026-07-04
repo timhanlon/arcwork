@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events"
 import { Effect, Layer, ManagedRuntime, Stream } from "effect"
 import { describe, expect, it } from "vitest"
-import { ArcStoreLive } from "../src/main/db/store.js"
+import { ArcStore, ArcStoreLive } from "../src/main/db/store.js"
 import { sqliteLayer } from "../src/main/db/sqlite.js"
 import { IngestStoreLive } from "../src/main/ingest/db/store.js"
 import { CodexDriverRegistryLive } from "../src/main/services/CodexDriverRegistry.js"
@@ -51,7 +51,11 @@ const stubPty = Layer.succeed(
   }),
 )
 
-const run = <A, E>(program: Effect.Effect<A, E, SessionRuntimeRouter | RpcSessionManager>): Promise<A> => {
+const NOW = "2026-06-11T00:00:00.000Z"
+
+const run = <A, E>(
+  program: Effect.Effect<A, E, SessionRuntimeRouter | RpcSessionManager | ArcStore>,
+): Promise<A> => {
   const sql = sqliteLayer(":memory:")
   const arc = ArcStoreLive.pipe(Layer.provide(sql))
   const ingest = IngestStoreLive.pipe(Layer.provide(sql))
@@ -110,6 +114,62 @@ describe("SessionRuntimeRouter dispatch", () => {
           // Stop routes to rpc and the session leaves the aggregate.
           expect(yield* router.stop({ sessionId: "t1" })).toEqual({ stopped: true })
           expect(yield* router.ownsRpc("t1")).toBe(false)
+        }),
+      ),
+    15000,
+  )
+
+  it(
+    "marks the persisted target row exited when an rpc session is stopped",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const router = yield* SessionRuntimeRouter
+          const rpc = yield* RpcSessionManager
+          const db = yield* ArcStore
+
+          // The FK chain + a running target row, as the router's rpc launch persists it.
+          yield* db.upsertWorkspace({
+            id: arcId("workspace", "ws_r"),
+            path: "/tmp/ws",
+            name: "ws",
+            createdAt: NOW,
+            lastOpenedAt: NOW,
+          })
+          yield* db.insertChat({
+            id: arcId("chat", "chat_r"),
+            workspaceId: arcId("workspace", "ws_r"),
+            title: "c",
+            createdAt: NOW,
+          })
+          yield* db.upsertTargetSession({
+            id: arcId("target", "ts1"),
+            chatId: arcId("chat", "chat_r"),
+            provider: "codex",
+            preset: null,
+            cwd: "/tmp/ws",
+            nativeSessionId: "thr_ts1",
+            nativeTranscriptPath: null,
+            state: "running",
+            startedAt: NOW,
+          })
+          // Bring the driver live under the manager so the router owns + can stop it.
+          yield* rpc.launch({
+            chatId: arcId("chat", "chat_r"),
+            targetSessionId: arcId("target", "ts1"),
+            provider: "codex",
+            startedAt: NOW,
+            cwd: process.cwd(),
+            command: process.execPath,
+            args: ["-e", PEER],
+          })
+
+          expect(yield* router.stop({ sessionId: "ts1" })).toEqual({ stopped: true })
+
+          // The durable row is now exited — a restart won't resurrect it as a stale
+          // (non-attached) PTY target.
+          const rows = yield* db.loadTargetSessions
+          expect(rows.find((r) => r.id === "ts1")?.state).toBe("exited")
         }),
       ),
     15000,

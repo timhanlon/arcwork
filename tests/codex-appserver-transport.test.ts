@@ -29,6 +29,20 @@ rl.on('line', (line) => {
 })
 `
 
+// Answers `initialize`, then exits the process on `die` — to prove a request made
+// after the child is gone fails fast instead of hanging on a dead server.
+const EXITING_PEER = `
+const readline = require('node:readline')
+const rl = readline.createInterface({ input: process.stdin })
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+rl.on('line', (line) => {
+  if (!line.trim()) return
+  const m = JSON.parse(line)
+  if (m.method === 'initialize') send({ id: m.id, result: { ok: true } })
+  else if (m.method === 'die') process.exit(0)
+})
+`
+
 const run = <A, E>(program: Effect.Effect<A, E, Scope.Scope>): Promise<A> =>
   Effect.runPromise(Effect.scoped(program))
 
@@ -63,6 +77,27 @@ describe("codex app-server transport", () => {
           const notifs = yield* t.notifications.pipe(Stream.take(2), Stream.runCollect)
           expect(notifs.map((n) => n.method)).toEqual(["turn/started", "approval/echo"])
           expect(notifs[1]?.params).toMatchObject({ decision: "accept" })
+        }),
+      ),
+    15000,
+  )
+
+  it(
+    "fails fast on a request made after the child has exited (no hang)",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const t = yield* makeAppServerTransport({ command: process.execPath, args: ["-e", EXITING_PEER] })
+          yield* t.request("initialize")
+
+          // The in-flight `die` request fails when the process dies...
+          const dieFailure = yield* Effect.flip(t.request("die"))
+          expect(dieFailure).toBeInstanceOf(AppServerTransportError)
+
+          // ...and a *fresh* request after the exit must also fail (closed), not
+          // register a Deferred that no future exit event can ever resolve.
+          const afterExit = yield* Effect.flip(t.request("turn/start"))
+          expect(afterExit).toBeInstanceOf(AppServerTransportError)
         }),
       ),
     15000,

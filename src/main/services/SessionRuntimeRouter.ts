@@ -63,9 +63,9 @@ export const SessionRuntimeRouterLive = Layer.effect(
     const nowIso = Effect.map(Clock.currentTimeMillis, (ms) => new Date(ms).toISOString())
     const ownsRpc = (id: string) => Effect.map(rpc.list, (ids) => ids.includes(id))
 
-    // Create + persist a TargetSession row for an rpc launch, spawn the driver,
-    // and bind the thread id so `ingestArtifactSession` can find the target when
-    // the caller projects a turn's rows.
+    // Spawn the driver for an rpc launch, then persist its TargetSession row (with
+    // the thread id as `nativeSessionId`) so `ingestArtifactSession` can resolve
+    // the target by (provider, native id) when the caller projects a turn's rows.
     const launchRpc = (req: LaunchRequest) =>
       Effect.gen(function* () {
         const spec = yield* providers.get(req.provider)
@@ -98,19 +98,24 @@ export const SessionRuntimeRouterLive = Layer.effect(
           approvalPolicy: "on-request",
         })
 
-        yield* db.upsertTargetSession({
-          id,
-          chatId: req.chatId,
-          provider: req.provider,
-          origin: req.origin ?? "manual",
-          spawnedBy: req.spawnedBy ?? null,
-          preset: req.preset ?? null,
-          cwd,
-          nativeSessionId: session.nativeSessionId ?? null,
-          nativeTranscriptPath: null,
-          state: "running",
-          startedAt,
-        })
+        // If persistence fails the launch fails — but the driver is already live
+        // and published in `rpc.sessions`. Tear it back down so we don't leak a
+        // running session the DB (and thus a restart) knows nothing about.
+        yield* db
+          .upsertTargetSession({
+            id,
+            chatId: req.chatId,
+            provider: req.provider,
+            origin: req.origin ?? "manual",
+            spawnedBy: req.spawnedBy ?? null,
+            preset: req.preset ?? null,
+            cwd,
+            nativeSessionId: session.nativeSessionId ?? null,
+            nativeTranscriptPath: null,
+            state: "running",
+            startedAt,
+          })
+          .pipe(Effect.tapError(() => rpc.stop(id)))
 
         return session
       })
@@ -127,7 +132,22 @@ export const SessionRuntimeRouterLive = Layer.effect(
 
     const stop = (req: StopRequest) =>
       Effect.gen(function* () {
-        if (yield* ownsRpc(req.sessionId)) return yield* rpc.stop(req.sessionId)
+        if (yield* ownsRpc(req.sessionId)) {
+          const result = yield* rpc.stop(req.sessionId)
+          // Mark the persisted row exited so a restart's `restorePersistedSessions`
+          // doesn't resurrect the stopped rpc session as a stale (non-attached) PTY
+          // target — the durable counterpart of the PTY manager's exit handler.
+          // Best-effort + logged: a DB hiccup shouldn't fail an otherwise-good stop.
+          if (result.stopped) {
+            yield* db
+              .setTargetSessionState(req.sessionId, "exited")
+              .pipe(
+                Effect.tapError((e) => Effect.logWarning(`rpc stop persist failed (${req.sessionId}): ${e}`)),
+                Effect.ignore,
+              )
+          }
+          return result
+        }
         return yield* pty.stop(req)
       })
 
