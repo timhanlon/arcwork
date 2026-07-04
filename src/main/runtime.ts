@@ -2,6 +2,7 @@ import { Layer, ManagedRuntime, References } from "effect"
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem"
 import * as NodePath from "@effect/platform-node/NodePath"
 import { ProviderRegistryLive } from "./services/ProviderRegistry.js"
+import { CodexDriverRegistryLive } from "./services/CodexDriverRegistry.js"
 import { PresetRegistryLive } from "./services/PresetRegistry.js"
 import { WorkspaceServiceLive } from "./services/WorkspaceService.js"
 import { WorkspaceFilesServiceLive } from "./services/WorkspaceFilesService.js"
@@ -43,7 +44,14 @@ const WorkLive = WorkServiceLive.pipe(Layer.provide(Layer.mergeAll(WorkStoreLive
 const PersistenceLayers = [StoreLive, IngestStoreLiveLayer, WorkStoreLiveLayer] as const
 
 // Static registries and small local facades that do not depend on durable state.
-const RegistryLayers = [ProviderRegistryLive, PresetRegistryLive, LocalModelServiceLive] as const
+// CodexDriverRegistry holds live app-server drivers keyed by target session and
+// aggregates their approvals for the renderer answer surface.
+const RegistryLayers = [
+  ProviderRegistryLive,
+  CodexDriverRegistryLive,
+  PresetRegistryLive,
+  LocalModelServiceLive,
+] as const
 
 // Core domain services. These are intentionally built from the persistence and
 // registry constants above so shared in-memory projections and the session
