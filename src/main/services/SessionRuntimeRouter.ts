@@ -10,6 +10,7 @@ import { ChatService } from "./ChatService.js"
 import { ProviderRegistry } from "./ProviderRegistry.js"
 import { RpcSessionManager } from "./RpcSessionManager.js"
 import { restoredSessionFromRow } from "./target-session/boot-restore.js"
+import { canResume } from "./target-session/provider-args.js"
 import {
   type LaunchRequest,
   type ResumeRequest,
@@ -221,7 +222,15 @@ export const SessionRuntimeRouterLive = Layer.effect(
         db.loadTargetSessions.pipe(Effect.orElseSucceed(() => [])),
         (rows) => {
           const liveIds = new Set(live.map((s) => s.id))
-          const persisted = rows.filter((r) => !liveIds.has(r.id)).map(restoredSessionFromRow)
+          const persisted = rows
+            .filter((r) => !liveIds.has(r.id))
+            .map((r) => {
+              // Mark whether the session can be re-launched (has a native id, and
+              // for claude a transcript on disk) — the detached-resume affordance
+              // reads `resumable`, which the PTY manager's own `list` also sets.
+              const s = restoredSessionFromRow(r)
+              return { ...s, resumable: canResume(s) }
+            })
           return [...live, ...persisted]
         },
       )

@@ -318,10 +318,12 @@ describe("SessionRuntimeRouter dispatch", () => {
 
           const unified = yield* router.sessions
           const detached = unified.find((s) => s.id === "tsD")
-          // Not live in any manager → surfaced from the DB as detached (unknown).
+          // Not live in any manager → surfaced from the DB as detached (unknown),
+          // and resumable (codex with a native id) so the resume affordance shows.
           expect(detached?.attached).toBe(false)
           expect(detached?.state).toBe("unknown")
           expect(detached?.nativeSessionId).toBe("thr_d")
+          expect(detached?.resumable).toBe(true)
           // A stopped/exited session stays visible (as exited) — not dropped, so
           // its sidebar row and its messages' source label still resolve.
           expect(unified.find((s) => s.id === "tsExited")?.state).toBe("exited")
