@@ -59,6 +59,7 @@ const SessionRuntimeRouterStub = Layer.succeed(
     sessions: Effect.succeed(SNAPSHOT_A),
     changes: Stream.fromIterable(SESSION_SNAPSHOTS),
     launch: () => Effect.die("SessionRuntimeRouter.launch is unused in this test"),
+    resume: () => Effect.die("SessionRuntimeRouter.resume is unused in this test"),
     submit: () => Effect.die("SessionRuntimeRouter.submit is unused in this test"),
     stop: () => Effect.succeed({ stopped: false }),
     ownsRpc: () => Effect.succeed(false),

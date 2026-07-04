@@ -11,6 +11,7 @@ import { ProviderRegistry } from "./ProviderRegistry.js"
 import { RpcSessionManager } from "./RpcSessionManager.js"
 import {
   type LaunchRequest,
+  type ResumeRequest,
   type StopRequest,
   type SubmitRequest,
   TargetSessionManager,
@@ -35,6 +36,11 @@ export class SessionRuntimeRouter extends Context.Service<
   {
     readonly launch: (
       req: LaunchRequest,
+    ) => Effect.Effect<TargetSession, ArcRequestError | SqlError | CodexDriverError>
+    /** Resume a session, into `pty` (default) or `rpc` (rejoin the app-server
+     * thread by its persisted native id) per `req.runtime`. */
+    readonly resume: (
+      req: ResumeRequest,
     ) => Effect.Effect<TargetSession, ArcRequestError | SqlError | CodexDriverError>
     /** Route a submit; `rows` is present for an rpc turn (caller projects it). */
     readonly submit: (
@@ -122,6 +128,54 @@ export const SessionRuntimeRouterLive = Layer.effect(
 
     const launch = (req: LaunchRequest) => (req.runtime === "rpc" ? launchRpc(req) : pty.launch(req))
 
+    // Rejoin an app-server thread by the row's persisted native id (a codex
+    // session id). The session keeps its identity (same target id), so it resumes
+    // where it left off — mirroring the PTY `codex resume <id>` path, just into the
+    // rpc runtime instead of a terminal.
+    const resumeRpc = (req: ResumeRequest) =>
+      Effect.gen(function* () {
+        const rows = yield* db.loadTargetSessions
+        const row = rows.find((r) => r.id === req.sessionId)
+        if (!row) {
+          return yield* Effect.fail(arcRequestError(`No target session "${req.sessionId}" to resume`))
+        }
+        if (!row.nativeSessionId) {
+          return yield* Effect.fail(
+            arcRequestError(`Target session "${req.sessionId}" has no native session id to resume`),
+          )
+        }
+        const spec = yield* providers.get(row.provider)
+        if (!spec?.appServer) {
+          return yield* Effect.fail(
+            arcRequestError(`Provider "${row.provider}" has no app-server capability`),
+          )
+        }
+
+        const session = yield* rpc.launch({
+          chatId: row.chatId,
+          targetSessionId: row.id,
+          provider: row.provider,
+          origin: row.origin === "orchestrated" ? "orchestrated" : "manual",
+          startedAt: row.startedAt,
+          cwd: row.cwd,
+          command: spec.appServer.launchCmd,
+          args: spec.appServer.args,
+          sandbox: "workspace-write",
+          approvalPolicy: "on-request",
+          resumeThreadId: row.nativeSessionId,
+        })
+        // Flip the durable row back to running (stop/quit may have left it exited).
+        yield* db
+          .setTargetSessionState(row.id, "running")
+          .pipe(
+            Effect.tapError((e) => Effect.logWarning(`rpc resume persist failed (${row.id}): ${e}`)),
+            Effect.ignore,
+          )
+        return session
+      })
+
+    const resume = (req: ResumeRequest) => (req.runtime === "rpc" ? resumeRpc(req) : pty.resume(req))
+
     const submit = (req: SubmitRequest) =>
       Effect.gen(function* () {
         if (yield* ownsRpc(req.instanceId)) {
@@ -161,6 +215,6 @@ export const SessionRuntimeRouterLive = Layer.effect(
       Stream.zipLatestWith(Stream.rechunk(rpc.changes, 1), (a, b) => [...a, ...b]),
     )
 
-    return { launch, submit, stop, ownsRpc, sessions, changes }
+    return { launch, resume, submit, stop, ownsRpc, sessions, changes }
   }),
 )

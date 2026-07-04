@@ -27,6 +27,7 @@ const stubRouter = Layer.succeed(
   SessionRuntimeRouter,
   SessionRuntimeRouter.of({
     launch: () => Effect.die("SessionRuntimeRouter.launch is unused in this test"),
+    resume: () => Effect.die("SessionRuntimeRouter.resume is unused in this test"),
     submit: () => Effect.die("SessionRuntimeRouter.submit is unused in this test"),
     stop: () => Effect.succeed({ stopped: false }),
     ownsRpc: () => Effect.succeed(false),

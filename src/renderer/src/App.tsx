@@ -296,6 +296,19 @@ export function App(): JSX.Element {
     shell.actions.resumeDetached()
   }
 
+  // Whether the detached session can resume into the rpc (app-server) runtime —
+  // its provider must declare an appServer capability. Resuming that way fires
+  // `ResumeTarget` directly (no pane): the session comes back attached, which
+  // clears the detached overlay (it keys on `!attached`) and surfaces it in the
+  // chat pane — the resume mirror of the rpc launch entry.
+  const detachedProvider = providers.find((p) => p.kind === vm.detachedSession?.provider)
+  const canResumeDetachedRpc = Boolean(vm.detachedSession && detachedProvider?.appServer)
+  const onResumeDetachedRpc = (): void => {
+    if (vm.detachedSession) {
+      void runResumeTarget({ payload: { sessionId: vm.detachedSession.id, runtime: "rpc" } })
+    }
+  }
+
   const selectGitPath = (filePath: string): void => {
     shell.actions.open({ kind: "git", path: filePath }, "right")
   }
@@ -415,6 +428,8 @@ export function App(): JSX.Element {
                 panes={panes}
                 activePaneId={shell.state.selection.terminalPaneId}
                 detachedSession={vm.detachedSession}
+                canResumeRpc={canResumeDetachedRpc}
+                onResumeDetachedRpc={onResumeDetachedRpc}
                 hasWorkspaces={workspaces.length > 0}
                 onResumeDetached={onResumeDetached}
               />

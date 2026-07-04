@@ -20,6 +20,10 @@ export interface TargetSessionPaneProps {
   readonly detachedSession?: TargetSession
   readonly hasWorkspaces: boolean
   readonly onResumeDetached: () => void
+  /** Whether the detached session's provider can resume into the app-server (rpc)
+   * runtime — offers a second, terminal-less resume that lands in the chat pane. */
+  readonly canResumeRpc?: boolean
+  readonly onResumeDetachedRpc?: () => void
 }
 
 export function TargetSessionPane(props: TargetSessionPaneProps): JSX.Element {
@@ -38,6 +42,17 @@ export function TargetSessionPane(props: TargetSessionPaneProps): JSX.Element {
             resume {detachedSession.provider}
           </Button>
           {RESUME_BINDING && <KbdShortcut combo={RESUME_BINDING.combo} />}
+          {props.canResumeRpc && (
+            <Button
+              variant="ghost"
+              className="inline-flex items-center gap-1.5"
+              onClick={props.onResumeDetachedRpc}
+              aria-label={`Resume ${detachedSession.provider} in the app-server runtime`}
+              title={`Resume ${detachedSession.provider} in the app-server runtime (no terminal)`}
+            >
+              resume {detachedSession.provider} · app-server
+            </Button>
+          )}
         </div>
       ) : (
         <div className="dim">{detachedSession.provider} session is not resumable</div>

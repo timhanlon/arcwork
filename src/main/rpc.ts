@@ -170,7 +170,7 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
       _.reingestAndReprojectChat(req.chatId, req.provider),
     ),
     LaunchTarget: svc("LaunchTarget", SessionRuntimeRouter, (_, req) => _.launch(req)),
-    ResumeTarget: svc("ResumeTarget", TargetSessionManager, (_, req) => _.resume(req)),
+    ResumeTarget: svc("ResumeTarget", SessionRuntimeRouter, (_, req) => _.resume(req)),
     StopTarget: svc("StopTarget", SessionRuntimeRouter, (_, req) => _.stop(req)),
     SubmitPrompt: svc("SubmitPrompt", TargetSessionManager, (_, req) => _.submit(req)),
     SendChatPrompt: svc("SendChatPrompt", ChatMessageService, (_, req) => _.sendPrompt(req)),

@@ -15,6 +15,8 @@ export interface CodexLaunchParams {
   readonly approvalPolicy?: CodexDriverOptions["approvalPolicy"]
   readonly env?: Record<string, string>
   readonly clientName?: string
+  /** Rejoin an existing thread by id (`thread/resume`) instead of starting fresh. */
+  readonly resumeThreadId?: string
 }
 
 /**
@@ -43,6 +45,7 @@ export const launchCodexAppServerSession = (
       approvalPolicy: params.approvalPolicy,
       env: params.env,
       clientName: params.clientName,
+      resumeThreadId: params.resumeThreadId,
     })
 
     const runTurn = (text: string) =>

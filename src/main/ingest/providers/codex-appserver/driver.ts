@@ -64,6 +64,10 @@ export interface CodexDriverOptions {
   readonly args?: ReadonlyArray<string>
   readonly env?: Record<string, string>
   readonly clientName?: string
+  /** Resume an existing thread by id (`thread/resume`) instead of starting a
+   * fresh one (`thread/start`). The id is a codex session id — the same one the
+   * PTY path resumes with — so a session started here rejoins under its old id. */
+  readonly resumeThreadId?: string
 }
 
 interface TurnOutcome {
@@ -88,25 +92,29 @@ export const makeCodexAppServerDriver = (
       env: options.env,
     }).pipe(wrap("failed to spawn codex app-server"))
 
-    // Handshake: initialize → initialized → thread/start.
+    // Handshake: initialize → initialized → thread/start (fresh) or thread/resume
+    // (rejoin an existing thread by id). Both answer with `{ thread: { id } }`, so
+    // the same decoder extracts the thread id either way.
     yield* transport
       .request("initialize", {
         clientInfo: { name: options.clientName ?? "arc", title: "Arc", version: "0.0.1" },
       })
       .pipe(wrap("initialize failed"))
     yield* transport.notify("initialized", {}).pipe(wrap("initialized notify failed"))
-    const started = yield* transport
-      .request("thread/start", {
-        cwd: options.cwd,
-        model: options.model,
-        sandbox: options.sandbox,
-        approvalPolicy: options.approvalPolicy,
-      })
-      .pipe(wrap("thread/start failed"))
+    const threadConfig = {
+      cwd: options.cwd,
+      model: options.model,
+      sandbox: options.sandbox,
+      approvalPolicy: options.approvalPolicy,
+    }
+    const [method, params] = options.resumeThreadId
+      ? (["thread/resume", { threadId: options.resumeThreadId, ...threadConfig }] as const)
+      : (["thread/start", threadConfig] as const)
+    const started = yield* transport.request(method, params).pipe(wrap(`${method} failed`))
     const thread = decodeThreadStart(started)
     if (Option.isNone(thread)) {
       return yield* Effect.fail(
-        new CodexDriverError({ message: "thread/start returned no thread id", cause: started }),
+        new CodexDriverError({ message: `${method} returned no thread id`, cause: started }),
       )
     }
     const threadId = thread.value.thread.id

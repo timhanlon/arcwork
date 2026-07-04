@@ -80,6 +80,10 @@ export interface ResumeRequest {
   readonly sessionId: string
   readonly cols?: number
   readonly rows?: number
+  /** Which runtime to resume into — `pty` (terminal, default) or `rpc`
+   * (app-server). A resume-time intent, not a session property: the same codex
+   * session resumes in either transport. Only the router reads it. */
+  readonly runtime?: "pty" | "rpc"
 }
 export interface StopRequest {
   readonly sessionId: string

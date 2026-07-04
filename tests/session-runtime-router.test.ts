@@ -6,7 +6,7 @@ import { sqliteLayer } from "../src/main/db/sqlite.js"
 import { IngestStoreLive } from "../src/main/ingest/db/store.js"
 import { CodexDriverRegistryLive } from "../src/main/services/CodexDriverRegistry.js"
 import { ChatServiceLive } from "../src/main/services/ChatService.js"
-import { ProviderRegistryLive } from "../src/main/services/ProviderRegistry.js"
+import { ProviderRegistry, ProviderRegistryLive } from "../src/main/services/ProviderRegistry.js"
 import { RpcSessionManager, RpcSessionManagerLive } from "../src/main/services/RpcSessionManager.js"
 import {
   SessionRuntimeRouter,
@@ -33,6 +33,42 @@ rl.on('line', (line) => {
 })
 `
 
+// A peer that handshakes and rejoins by id: thread/resume echoes its threadId
+// back, so the resumed session comes up under the same native id.
+const RESUME_PEER = `
+const readline = require('node:readline')
+const rl = readline.createInterface({ input: process.stdin })
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+rl.on('line', (line) => {
+  if (!line.trim()) return
+  const m = JSON.parse(line)
+  if (m.method === 'initialize') send({ id: m.id, result: {} })
+  else if (m.method === 'thread/resume') send({ id: m.id, result: { thread: { id: m.params.threadId } } })
+})
+`
+
+// A ProviderRegistry whose codex app-server capability points at a scripted peer
+// (not the real `codex` binary), so the router's rpc launch/resume is drivable.
+const stubProviders = (args: ReadonlyArray<string>) =>
+  Layer.succeed(
+    ProviderRegistry,
+    ProviderRegistry.of({
+      list: Effect.succeed([]),
+      get: (kind) =>
+        Effect.succeed(
+          kind === "codex"
+            ? {
+                kind: "codex",
+                displayName: "Codex",
+                detectCmd: "codex",
+                concurrency: "per-worktree",
+                appServer: { launchCmd: process.execPath, args },
+              }
+            : undefined,
+        ),
+    }),
+  )
+
 // PTY manager isn't launched here — only its submit is exercised (the non-rpc
 // dispatch branch), which reports the session isn't attached.
 const stubPty = Layer.succeed(
@@ -55,6 +91,7 @@ const NOW = "2026-06-11T00:00:00.000Z"
 
 const run = <A, E>(
   program: Effect.Effect<A, E, SessionRuntimeRouter | RpcSessionManager | ArcStore>,
+  providers: Layer.Layer<ProviderRegistry> = ProviderRegistryLive,
 ): Promise<A> => {
   const sql = sqliteLayer(":memory:")
   const arc = ArcStoreLive.pipe(Layer.provide(sql))
@@ -63,7 +100,7 @@ const run = <A, E>(
   const base = Layer.mergeAll(
     arc,
     rpc,
-    ProviderRegistryLive,
+    providers,
     WorkspaceServiceLive.pipe(Layer.provide(arc)),
     ChatServiceLive.pipe(Layer.provide(arc)),
     stubPty,
@@ -171,6 +208,56 @@ describe("SessionRuntimeRouter dispatch", () => {
           const rows = yield* db.loadTargetSessions
           expect(rows.find((r) => r.id === "ts1")?.state).toBe("exited")
         }),
+      ),
+    15000,
+  )
+
+  it(
+    "resumes into the rpc runtime by rejoining the thread by its native id",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const router = yield* SessionRuntimeRouter
+          const db = yield* ArcStore
+
+          // A previously-launched (now exited) app-server codex session on disk.
+          yield* db.upsertWorkspace({
+            id: arcId("workspace", "ws_res"),
+            path: "/tmp/ws",
+            name: "ws",
+            createdAt: NOW,
+            lastOpenedAt: NOW,
+          })
+          yield* db.insertChat({
+            id: arcId("chat", "chat_res"),
+            workspaceId: arcId("workspace", "ws_res"),
+            title: "c",
+            createdAt: NOW,
+          })
+          yield* db.upsertTargetSession({
+            id: arcId("target", "tsR"),
+            chatId: arcId("chat", "chat_res"),
+            provider: "codex",
+            preset: null,
+            // Real cwd: the driver spawns the peer here (the row's cwd).
+            cwd: process.cwd(),
+            nativeSessionId: "thr_old",
+            nativeTranscriptPath: null,
+            state: "exited",
+            startedAt: NOW,
+          })
+
+          const session = yield* router.resume({ sessionId: "tsR", runtime: "rpc" })
+
+          // Rejoined under the same thread id (thread/resume, not a fresh start)...
+          expect(session.nativeSessionId).toBe("thr_old")
+          expect(session.id).toBe("tsR")
+          // ...and the durable row is running again + owned by the rpc manager.
+          const rows = yield* db.loadTargetSessions
+          expect(rows.find((r) => r.id === "tsR")?.state).toBe("running")
+          expect(yield* router.ownsRpc("tsR")).toBe(true)
+        }),
+        stubProviders(["-e", RESUME_PEER]),
       ),
     15000,
   )

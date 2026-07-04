@@ -30,6 +30,8 @@ export interface RpcLaunchRequest {
   readonly model?: string
   readonly sandbox?: CodexDriverOptions["sandbox"]
   readonly approvalPolicy?: CodexDriverOptions["approvalPolicy"]
+  /** Rejoin an existing thread by id (`thread/resume`) instead of starting fresh. */
+  readonly resumeThreadId?: string
 }
 
 /**
@@ -108,6 +110,7 @@ export const RpcSessionManagerLive = Layer.effect(
               model: req.model,
               sandbox: req.sandbox,
               approvalPolicy: req.approvalPolicy,
+              resumeThreadId: req.resumeThreadId,
             },
           )
           yield* registry.register({

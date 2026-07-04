@@ -380,6 +380,10 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("ResumeTarget", {
     payload: {
       sessionId: TargetId,
+      /** Which runtime to resume into — `pty` (terminal, default) or `rpc`
+       * (rejoin the app-server thread). A resume-time intent, not a session
+       * property: the same codex session resumes in either transport. */
+      runtime: Schema.optional(Schema.Literals(["pty", "rpc"])),
       cols: Schema.optional(Schema.Number),
       rows: Schema.optional(Schema.Number),
     },

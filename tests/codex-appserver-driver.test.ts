@@ -31,6 +31,22 @@ rl.on('line', (line) => {
 })
 `
 
+// Echoes the resumed threadId back from thread/resume (and a distinct id from
+// thread/start), so the test can prove the driver rejoined by id rather than
+// starting a fresh thread.
+const RESUME_PEER = `
+const readline = require('node:readline')
+const rl = readline.createInterface({ input: process.stdin })
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+rl.on('line', (line) => {
+  if (!line.trim()) return
+  const m = JSON.parse(line)
+  if (m.method === 'initialize') send({ id: m.id, result: {} })
+  else if (m.method === 'thread/start') send({ id: m.id, result: { thread: { id: 'thr_fresh' } } })
+  else if (m.method === 'thread/resume') send({ id: m.id, result: { thread: { id: m.params.threadId } } })
+})
+`
+
 const run = <A, E>(program: Effect.Effect<A, E, Scope.Scope>): Promise<A> =>
   Effect.runPromise(Effect.scoped(program))
 
@@ -77,6 +93,25 @@ describe("codex app-server driver", () => {
           // serverRequest/resolved cleared the pending signal.
           const remaining = yield* SubscriptionRef.get(driver.pendingApprovals)
           expect(remaining).toHaveLength(0)
+        }),
+      ),
+    15000,
+  )
+
+  it(
+    "rejoins an existing thread by id via thread/resume",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const driver = yield* makeCodexAppServerDriver({
+            cwd: process.cwd(),
+            command: process.execPath,
+            args: ["-e", RESUME_PEER],
+            resumeThreadId: "thr_resumed",
+          })
+          // The peer echoes thread/resume's threadId (and would answer thread/start
+          // with 'thr_fresh'), so this proves the resume branch fired.
+          expect(driver.threadId).toBe("thr_resumed")
         }),
       ),
     15000,
