@@ -274,7 +274,7 @@ describe("SessionRuntimeRouter dispatch", () => {
   )
 
   it(
-    "surfaces a persisted, not-live, not-exited row as a detached session in the unified list",
+    "surfaces persisted, not-live rows in the unified list (detached, and stopped sessions stay visible)",
     () =>
       run(
         Effect.gen(function* () {
@@ -318,11 +318,13 @@ describe("SessionRuntimeRouter dispatch", () => {
 
           const unified = yield* router.sessions
           const detached = unified.find((s) => s.id === "tsD")
-          // Not live in any manager → surfaced from the DB as detached.
+          // Not live in any manager → surfaced from the DB as detached (unknown).
           expect(detached?.attached).toBe(false)
+          expect(detached?.state).toBe("unknown")
           expect(detached?.nativeSessionId).toBe("thr_d")
-          // An exited row is not resumable clutter — excluded from the list.
-          expect(unified.some((s) => s.id === "tsExited")).toBe(false)
+          // A stopped/exited session stays visible (as exited) — not dropped, so
+          // its sidebar row and its messages' source label still resolve.
+          expect(unified.find((s) => s.id === "tsExited")?.state).toBe("exited")
         }),
       ),
     15000,

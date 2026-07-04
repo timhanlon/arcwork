@@ -209,20 +209,20 @@ export const SessionRuntimeRouterLive = Layer.effect(
       })
 
     // The unified view: the live sessions this process owns (PTY + rpc, disjoint
-    // by id) plus the *detached* set — persisted rows not currently live and not
-    // exited, read from the DB and runtime-neutral. An id is either live in one
-    // manager or detached; never both, so there's no duplicate and no ownership
-    // handoff. Resuming a detached session makes it live → it drops out of the
-    // detached set on the next tick because its id is now in `live`.
+    // by id) plus every persisted row not currently live, read from the DB and
+    // runtime-neutral. The non-live set carries its persisted state — `exited`
+    // rows show as exited (a stopped rpc session stays visible, the way a PTY exit
+    // stays in its store), everything else as `unknown`/detached. An id is either
+    // live in one manager or non-live here; never both, so there's no duplicate
+    // and no ownership handoff. Resuming a non-live session makes it live → it
+    // drops out on the next tick because its id is now in `live`.
     const unify = (live: ReadonlyArray<TargetSession>) =>
       Effect.map(
         db.loadTargetSessions.pipe(Effect.orElseSucceed(() => [])),
         (rows) => {
           const liveIds = new Set(live.map((s) => s.id))
-          const detached = rows
-            .filter((r) => r.state !== "exited" && !liveIds.has(r.id))
-            .map(restoredSessionFromRow)
-          return [...live, ...detached]
+          const persisted = rows.filter((r) => !liveIds.has(r.id)).map(restoredSessionFromRow)
+          return [...live, ...persisted]
         },
       )
     // `rechunk(1)` per side so `zipLatestWith` tracks each list emission
