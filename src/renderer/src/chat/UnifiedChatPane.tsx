@@ -9,6 +9,7 @@ import { useChatMessages } from "./useChatMessages.js"
 import { useStreamingMessages } from "./useStreamingMessages.js"
 import { useChatWork } from "./useChatWork.js"
 import { ChatWork } from "./ChatWork.js"
+import { ChatApprovals } from "./ChatApprovals.js"
 import { ChatComposer, type ComposerHandle } from "./composer/ChatComposer.js"
 import { ComposerTargetIndicators, formatAddressee } from "./composer/ComposerTargetIndicators.js"
 import { useReferenceTargets } from "./composer/useReferenceTargets.js"
@@ -21,10 +22,17 @@ import { type TranscriptFilter, TranscriptFilterMenu, showsMessage } from "./Tra
 import { rpc } from "../rpc-client.js"
 import type { LiveStateById } from "../sidebar/grouping.js"
 
-/** A provider the composer can launch a new target session against. */
+/** A provider+runtime the composer can launch a new target session against. A
+ * provider that declares both `interactive` and `appServer` appears twice — once
+ * per runtime — so the two are distinct, individually-labelled launch options. */
 export interface LaunchableProvider {
   readonly kind: string
   readonly displayName: string
+  /** Which live runtime this option launches — `pty` (terminal TUI) or `rpc`
+   * (codex app-server, no terminal; answered via the inline approval cards). */
+  readonly runtime: "pty" | "rpc"
+  /** Button text; distinguishes the app-server option from the pty one. */
+  readonly label: string
 }
 
 export interface UnifiedChatPaneProps {
@@ -36,7 +44,7 @@ export interface UnifiedChatPaneProps {
   readonly activeSessionId?: TargetId
   readonly sessionCount: number
   readonly providers: ReadonlyArray<LaunchableProvider>
-  readonly onLaunch: (provider: string, chatId: ChatId) => void
+  readonly onLaunch: (provider: string, chatId: ChatId, runtime: "pty" | "rpc") => void
   /** focus the live target session waiting on a pending question */
   readonly onFocusSession: (sessionId: TargetId) => void
   readonly onRenameChat: (chatId: ChatId, title: string) => Promise<void>
@@ -315,13 +323,13 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
                 <div className="ml-auto flex flex-wrap items-center gap-1">
                   {launchableProviders.map((provider) => (
                     <Button
-                      key={provider.kind}
+                      key={`${provider.kind}:${provider.runtime}`}
                       variant="ghost"
                       size="sm"
-                      aria-label={`launch ${provider.kind}`}
-                      onClick={() => onLaunch(provider.kind, chat.id)}
+                      aria-label={`launch ${provider.label}`}
+                      onClick={() => onLaunch(provider.kind, chat.id, provider.runtime)}
                     >
-                      + {provider.kind}
+                      + {provider.label}
                     </Button>
                   ))}
                 </div>
@@ -340,8 +348,11 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
               {providers.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5">
                   {providers.map((provider) => (
-                    <Button key={provider.kind} onClick={() => onLaunch(provider.kind, chat.id)}>
-                      launch {provider.kind}
+                    <Button
+                      key={`${provider.kind}:${provider.runtime}`}
+                      onClick={() => onLaunch(provider.kind, chat.id, provider.runtime)}
+                    >
+                      launch {provider.label}
                     </Button>
                   ))}
                 </div>
@@ -402,6 +413,8 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
           ))}
         </div>
       )}
+
+      <ChatApprovals chatId={chat.id} />
 
       <footer className="grid flex-none gap-2 border-t border-border bg-elev px-4 pb-[14px] pt-3">
         <div className="grid gap-2" aria-live="polite">

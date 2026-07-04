@@ -17,7 +17,7 @@ import type { ChatId, PaneId, TargetId, WorkspaceId } from "../../shared/ids.js"
 import { ArcSidebarTree } from "./sidebar/ArcSidebarTree.js"
 import { TargetSessionPane } from "./chat/TargetSessionPane.js"
 import { sync as syncTerminals } from "./terminal/terminalRegistry.js"
-import { UnifiedChatPane, type ChatPaneHandle } from "./chat/UnifiedChatPane.js"
+import { UnifiedChatPane, type ChatPaneHandle, type LaunchableProvider } from "./chat/UnifiedChatPane.js"
 import { WorkPane, type WorkPaneHandle } from "./work/WorkPane.js"
 import { GitPane } from "./git/GitPane.js"
 import { GitPrefetch } from "./git/GitPrefetch.js"
@@ -89,7 +89,16 @@ export function App(): JSX.Element {
     () => deriveShellViewModel(shell.state, { workspaces, chats, sessions }),
     [shell.state, workspaces, chats, sessions],
   )
-  const interactiveProviders = providers.filter((p) => p.interactive)
+  // One launch option per (provider, runtime): a provider that declares both an
+  // `interactive` (PTY TUI) and an `appServer` (codex app-server) capability
+  // surfaces both, individually labelled, so the user picks the runtime at launch.
+  const launchableProviders: ReadonlyArray<LaunchableProvider> = providers.flatMap((p) => {
+    const options: Array<LaunchableProvider> = []
+    if (p.interactive) options.push({ kind: p.kind, displayName: p.displayName, runtime: "pty", label: p.kind })
+    if (p.appServer)
+      options.push({ kind: p.kind, displayName: p.displayName, runtime: "rpc", label: `${p.kind} · app-server` })
+    return options
+  })
 
   const centerView = center.surface.kind === "work" ? "work" : "chat"
   const rightView = right.surface.kind === "git" ? "git" : "terminal"
@@ -224,7 +233,16 @@ export function App(): JSX.Element {
     shell.actions.selectChat(workspaceId, chatId)
   }
 
-  const onLaunch = (provider: string, chatId: ChatId): void => {
+  const onLaunch = (provider: string, chatId: ChatId, runtime: "pty" | "rpc"): void => {
+    // An rpc (app-server) session has no terminal, so it skips the pane/measure
+    // machinery entirely: fire `LaunchTarget` directly and let the session appear
+    // through `WatchSessions`. Its transcript, composer, and approval cards render
+    // from that projection — no xterm to bind. PTY launches still go through the
+    // shell machine, which creates a pane and defers the RPC until xterm measures.
+    if (runtime === "rpc") {
+      void runLaunchTarget({ payload: { provider, chatId, runtime: "rpc" } })
+      return
+    }
     shell.actions.launchTarget(provider, chatId)
   }
 
@@ -355,7 +373,7 @@ export function App(): JSX.Element {
                 liveStateById={liveStateById}
                 activeSessionId={vm.activeSessionId}
                 sessionCount={vm.sessionCount}
-                providers={interactiveProviders}
+                providers={launchableProviders}
                 onLaunch={onLaunch}
                 onFocusSession={focusSession}
                 onRenameChat={renameChat}
