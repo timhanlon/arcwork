@@ -30,6 +30,8 @@ const stubRouter = Layer.succeed(
     submit: () => Effect.die("SessionRuntimeRouter.submit is unused in this test"),
     stop: () => Effect.succeed({ stopped: false }),
     ownsRpc: () => Effect.succeed(false),
+    sessions: Effect.succeed([]),
+    changes: Stream.empty,
   }),
 )
 

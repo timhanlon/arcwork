@@ -1,5 +1,6 @@
 import { Effect, Layer, ManagedRuntime, type Scope, Stream } from "effect"
 import { describe, expect, it } from "vitest"
+import { arcId } from "../src/shared/ids.js"
 import { IngestStore, IngestStoreLive } from "../src/main/ingest/db/store.js"
 import { sqliteLayer } from "../src/main/ingest/db/sqlite.js"
 import { CodexDriverRegistry, CodexDriverRegistryLive } from "../src/main/services/CodexDriverRegistry.js"
@@ -50,14 +51,19 @@ describe("RpcSessionManager", () => {
           const registry = yield* CodexDriverRegistry
           const store = yield* IngestStore
 
-          yield* manager.launch({
-            chatId: "chat_1",
-            targetSessionId: "target_1",
+          const launched = yield* manager.launch({
+            chatId: arcId("chat", "chat_1"),
+            targetSessionId: arcId("target", "target_1"),
+            provider: "codex",
+            startedAt: "2026-06-11T00:00:00.000Z",
             cwd: process.cwd(),
             command: process.execPath,
             args: ["-e", PEER],
           })
+          expect(launched.nativeSessionId).toBe("thr_mgr") // thread id bound onto the session
           expect(yield* manager.list).toContain("target_1")
+          // The live session surfaces for the unified WatchSessions view.
+          expect((yield* manager.sessions).map((s) => s.id)).toContain("target_1")
 
           // Answer the approval through the registry — proves launch registered the driver.
           yield* registry.changes.pipe(
@@ -81,6 +87,7 @@ describe("RpcSessionManager", () => {
           // Stop tears the session down: manager forgets it, registry deregisters.
           expect(yield* manager.stop("target_1")).toEqual({ stopped: true })
           expect(yield* manager.list).toHaveLength(0)
+          expect(yield* manager.sessions).toHaveLength(0)
           expect(yield* registry.pending).toHaveLength(0)
         }),
       ),

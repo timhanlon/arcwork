@@ -124,13 +124,13 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     ),
     ListPresets: svc("ListPresets", PresetRegistry, (_) => _.list),
     ListInstances: svc("ListInstances", TargetSessionManager, (_) => _.list),
-    ListSessions: svc("ListSessions", TargetSessionManager, (_) => _.list),
+    ListSessions: svc("ListSessions", SessionRuntimeRouter, (_) => _.sessions),
     // Streaming handlers: return each service's reactive `changes` stream
     // directly. The streams replay (or derive) their current value on subscribe,
     // so a fresh client gets the snapshot then live updates — no separate boot
     // push. Their error channel is `never`, so the `rpcEffect` request/error
     // wrapper (Effect-shaped) doesn't apply here.
-    WatchSessions: () => Stream.unwrap(Effect.map(TargetSessionManager, (_) => _.changes)),
+    WatchSessions: () => Stream.unwrap(Effect.map(SessionRuntimeRouter, (_) => _.changes)),
     WatchChats: () => Stream.unwrap(Effect.map(ChatService, (_) => _.changes)),
     WatchWorkspaces: () => Stream.unwrap(Effect.map(WorkspaceService, (_) => _.changes)),
     WatchLiveTargetStates: () =>

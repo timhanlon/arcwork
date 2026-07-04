@@ -14,6 +14,7 @@ import {
 } from "../src/main/services/SessionRuntimeRouter.js"
 import { TargetSessionManager } from "../src/main/services/TargetSessionManager.js"
 import { WorkspaceServiceLive } from "../src/main/services/WorkspaceService.js"
+import { arcId } from "../src/shared/ids.js"
 
 const PEER = `
 const readline = require('node:readline')
@@ -78,8 +79,10 @@ describe("SessionRuntimeRouter dispatch", () => {
 
           // Launch an rpc session directly, then drive it through the router.
           yield* rpc.launch({
-            chatId: "chat_1",
-            targetSessionId: "t1",
+            chatId: arcId("chat", "chat_1"),
+            targetSessionId: arcId("target", "t1"),
+            provider: "codex",
+            startedAt: "2026-06-11T00:00:00.000Z",
             cwd: process.cwd(),
             command: process.execPath,
             args: ["-e", PEER],
@@ -87,6 +90,12 @@ describe("SessionRuntimeRouter dispatch", () => {
 
           expect(yield* router.ownsRpc("t1")).toBe(true)
           expect(yield* router.ownsRpc("unknown")).toBe(false)
+
+          // The rpc session surfaces in the unified list (what `ListSessions`
+          // returns) — the PTY manager never knew about it. Its thread id is bound.
+          const listed = yield* router.sessions
+          const t1 = listed.find((s) => s.id === "t1")
+          expect(t1?.nativeSessionId).toBe("thr_router")
 
           // Owned by rpc → routes there, and carries the turn rows for projection.
           const rpcTurn = yield* router.submit({ instanceId: "t1", text: "hi" })

@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer } from "effect"
+import { Clock, Context, Effect, Layer, Stream } from "effect"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import { newArcId } from "../../shared/ids.js"
 import type { TargetSession } from "../../shared/instance.js"
@@ -43,6 +43,10 @@ export class SessionRuntimeRouter extends Context.Service<
     readonly stop: (req: StopRequest) => Effect.Effect<{ readonly stopped: boolean }>
     /** Whether an rpc runtime owns this session id (used to skip PTY-only checks). */
     readonly ownsRpc: (targetSessionId: string) => Effect.Effect<boolean>
+    /** The unified session list — PTY + rpc — backing `ListSessions`. */
+    readonly sessions: Effect.Effect<ReadonlyArray<TargetSession>>
+    /** Reactive union of both managers' change streams, backing `WatchSessions`. */
+    readonly changes: Stream.Stream<ReadonlyArray<TargetSession>>
   }
 >()("arcwork/SessionRuntimeRouter") {}
 
@@ -76,6 +80,24 @@ export const SessionRuntimeRouterLive = Layer.effect(
         const id = newArcId("target")
         const startedAt = yield* nowIso
 
+        // The manager owns the live TargetSession (with the thread id bound), so it
+        // surfaces in the unified `sessions`/`changes` below. We persist that row —
+        // `nativeSessionId` = the thread id — so `ingestArtifactSession` can resolve
+        // the target by (provider, native id) when a turn projects. (No `bindNative`:
+        // that's the PTY store's op and no-ops for an rpc target.)
+        const session = yield* rpc.launch({
+          chatId: req.chatId,
+          targetSessionId: id,
+          provider: req.provider,
+          origin: req.origin ?? "manual",
+          startedAt,
+          cwd,
+          command: spec.appServer.launchCmd,
+          args: spec.appServer.args,
+          sandbox: "workspace-write",
+          approvalPolicy: "on-request",
+        })
+
         yield* db.upsertTargetSession({
           id,
           chatId: req.chatId,
@@ -84,35 +106,13 @@ export const SessionRuntimeRouterLive = Layer.effect(
           spawnedBy: req.spawnedBy ?? null,
           preset: req.preset ?? null,
           cwd,
-          nativeSessionId: null,
+          nativeSessionId: session.nativeSessionId ?? null,
           nativeTranscriptPath: null,
           state: "running",
           startedAt,
         })
 
-        const { threadId } = yield* rpc.launch({
-          chatId: req.chatId,
-          targetSessionId: id,
-          cwd,
-          command: spec.appServer.launchCmd,
-          args: spec.appServer.args,
-          sandbox: "workspace-write",
-          approvalPolicy: "on-request",
-        })
-        yield* pty.bindNative(id, threadId)
-
-        return {
-          _tag: "TargetSession",
-          id,
-          provider: req.provider,
-          origin: req.origin ?? "manual",
-          chatId: req.chatId,
-          cwd,
-          nativeSessionId: threadId,
-          attached: true,
-          state: "running",
-          startedAt,
-        } satisfies TargetSession
+        return session
       })
 
     const launch = (req: LaunchRequest) => (req.runtime === "rpc" ? launchRpc(req) : pty.launch(req))
@@ -131,6 +131,16 @@ export const SessionRuntimeRouterLive = Layer.effect(
         return yield* pty.stop(req)
       })
 
-    return { launch, submit, stop, ownsRpc }
+    // The unified view over both runtimes. `rechunk(1)` per side so `zipLatestWith`
+    // tracks each list emission individually (it zips per-element within a chunk),
+    // and both sides emit their current value on subscribe, so the union is live
+    // from the first pull.
+    const sessions = Effect.zipWith(pty.list, rpc.sessions, (a, b) => [...a, ...b])
+    const changes = pty.changes.pipe(
+      Stream.rechunk(1),
+      Stream.zipLatestWith(Stream.rechunk(rpc.changes, 1), (a, b) => [...a, ...b]),
+    )
+
+    return { launch, submit, stop, ownsRpc, sessions, changes }
   }),
 )

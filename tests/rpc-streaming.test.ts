@@ -1,11 +1,10 @@
 import { Effect, Layer, ManagedRuntime, Queue, Schema, Stream } from "effect"
-import { EventEmitter } from "node:events"
 import { RpcClient, RpcServer } from "effect/unstable/rpc"
 import { describe, expect, it } from "vitest"
 import { ArcRpcs } from "../src/shared/rpc.js"
 import { ArcRpcHandlersLive } from "../src/main/rpc.js"
 import { TargetSession } from "../src/shared/instance.js"
-import { TargetSessionManager } from "../src/main/services/TargetSessionManager.js"
+import { SessionRuntimeRouter } from "../src/main/services/SessionRuntimeRouter.js"
 import { newArcId } from "../src/shared/ids.js"
 
 /**
@@ -25,9 +24,10 @@ import { newArcId } from "../src/shared/ids.js"
  * vitest isolates files, and a streaming collect that shares module state with a
  * prior one-shot test in the same file deadlocks on residue between them.
  *
- * Only the `WatchSessions` handler is forced, so only `TargetSessionManager` is
- * provided; the rest of `ArcRpcHandlersLive`'s requirements are never run and are
- * erased with the same `as never` cast the one-shot transport test uses.
+ * Only the `WatchSessions` handler is forced, so only `SessionRuntimeRouter` (which
+ * backs it — the unified PTY+rpc session view) is provided; the rest of
+ * `ArcRpcHandlersLive`'s requirements are never run and are erased with the same
+ * `as never` cast the one-shot transport test uses.
  */
 
 // Two session-list snapshots the streaming handler emits, to prove each chunk
@@ -53,19 +53,15 @@ const SNAPSHOT_A = sessionSnapshot([SESS_A])
 const SNAPSHOT_AB = sessionSnapshot([SESS_A, SESS_B])
 const SESSION_SNAPSHOTS = [SNAPSHOT_A, SNAPSHOT_AB]
 
-const TargetSessionManagerStub = Layer.succeed(
-  TargetSessionManager,
-  TargetSessionManager.of({
-    list: Effect.succeed(SNAPSHOT_A),
+const SessionRuntimeRouterStub = Layer.succeed(
+  SessionRuntimeRouter,
+  SessionRuntimeRouter.of({
+    sessions: Effect.succeed(SNAPSHOT_A),
     changes: Stream.fromIterable(SESSION_SNAPSHOTS),
-    launch: () => Effect.die("TargetSessionManager.launch is unused in this test"),
-    resume: () => Effect.die("TargetSessionManager.resume is unused in this test"),
+    launch: () => Effect.die("SessionRuntimeRouter.launch is unused in this test"),
+    submit: () => Effect.die("SessionRuntimeRouter.submit is unused in this test"),
     stop: () => Effect.succeed({ stopped: false }),
-    bindNative: () => Effect.void,
-    submit: () => Effect.succeed({ accepted: false }),
-    write: () => Effect.void,
-    resize: () => Effect.void,
-    events: new EventEmitter(),
+    ownsRpc: () => Effect.succeed(false),
   }),
 )
 
@@ -123,7 +119,7 @@ const ClientProtocol = Layer.effect(
 const ServerLive = RpcServer.layer(ArcRpcs).pipe(
   Layer.provide(ArcRpcHandlersLive),
   Layer.provide(ServerProtocol),
-  Layer.provide(TargetSessionManagerStub),
+  Layer.provide(SessionRuntimeRouterStub),
 ) as unknown as Layer.Layer<never>
 
 describe("arc rpc streaming transport (structured-clone IPC)", () => {
