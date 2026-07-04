@@ -1,0 +1,87 @@
+import { Effect, Layer, ManagedRuntime, type Scope, Stream } from "effect"
+import { describe, expect, it } from "vitest"
+import { IngestStore, IngestStoreLive } from "../src/main/ingest/db/store.js"
+import { sqliteLayer } from "../src/main/ingest/db/sqlite.js"
+import { CodexDriverRegistry, CodexDriverRegistryLive } from "../src/main/services/CodexDriverRegistry.js"
+import { RpcSessionManager, RpcSessionManagerLive } from "../src/main/services/RpcSessionManager.js"
+
+// A thread/turn peer that asks for approval (request id 501) then completes.
+const PEER = `
+const readline = require('node:readline')
+const rl = readline.createInterface({ input: process.stdin })
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+rl.on('line', (line) => {
+  if (!line.trim()) return
+  const m = JSON.parse(line)
+  if (m.method === 'initialize') send({ id: m.id, result: {} })
+  else if (m.method === 'thread/start') send({ id: m.id, result: { thread: { id: 'thr_mgr' } } })
+  else if (m.method === 'turn/start') {
+    send({ id: m.id, result: { turn: { id: 't1', status: 'inProgress' } } })
+    send({ method: 'item/completed', params: { item: { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'hi' }] } } })
+    send({ id: 501, method: 'item/commandExecution/requestApproval', params: { itemId: 'call_1', command: 'echo hi', availableDecisions: ['accept', 'cancel'] } })
+  } else if (m.method == null && m.id === 501) {
+    send({ method: 'item/completed', params: { item: { type: 'agentMessage', id: 'a1', text: 'done', phase: 'final_answer' } } })
+    send({ method: 'turn/completed', params: { turn: { status: 'completed' } } })
+    send({ method: 'serverRequest/resolved', params: { requestId: 501 } })
+  }
+})
+`
+
+const run = <A, E>(
+  program: Effect.Effect<A, E, RpcSessionManager | CodexDriverRegistry | IngestStore | Scope.Scope>,
+): Promise<A> => {
+  const stores = IngestStoreLive.pipe(Layer.provide(sqliteLayer(":memory:")))
+  const layer = Layer.mergeAll(
+    RpcSessionManagerLive.pipe(Layer.provide(Layer.mergeAll(CodexDriverRegistryLive, stores))),
+    CodexDriverRegistryLive,
+    stores,
+  )
+  const runtime = ManagedRuntime.make(layer)
+  return runtime.runPromise(Effect.scoped(program)).finally(() => runtime.dispose())
+}
+
+describe("RpcSessionManager", () => {
+  it(
+    "launches, registers approvals, submits a turn, persists, and stops",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const manager = yield* RpcSessionManager
+          const registry = yield* CodexDriverRegistry
+          const store = yield* IngestStore
+
+          yield* manager.launch({
+            chatId: "chat_1",
+            targetSessionId: "target_1",
+            cwd: process.cwd(),
+            command: process.execPath,
+            args: ["-e", PEER],
+          })
+          expect(yield* manager.list).toContain("target_1")
+
+          // Answer the approval through the registry — proves launch registered the driver.
+          yield* registry.changes.pipe(
+            Stream.filter((list) => list.length > 0),
+            Stream.take(1),
+            Stream.runForEach((list) =>
+              registry.answerApproval(list[0]!.targetSessionId, list[0]!.approvals[0]!.id, "accept"),
+            ),
+            Effect.forkScoped,
+          )
+
+          const res = yield* manager.submit({ targetSessionId: "target_1", text: "hi" })
+          expect(res).toEqual({ accepted: true, status: "completed" })
+
+          // The turn landed in the shared store (indistinguishable from a scraped session).
+          const stored = yield* store.listSessions()
+          expect(stored.some((s) => s.provider === "codex" && s.nativeSessionId === "thr_mgr")).toBe(true)
+
+          // Stop tears the session down: manager forgets it, registry deregisters.
+          expect(yield* manager.stop("target_1")).toEqual({ stopped: true })
+          expect(yield* manager.list).toHaveLength(0)
+          expect(yield* registry.pending).toHaveLength(0)
+        }),
+      ),
+    15000,
+  )
+})
