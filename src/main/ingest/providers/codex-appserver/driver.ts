@@ -76,6 +76,12 @@ interface TurnOutcome {
   readonly status: string
 }
 
+// What `runTurn` awaits: a completed turn, or an `aborted` signal offered when
+// the notification stream ends (the process died mid-turn) so the awaiting
+// `Queue.take` fails fast instead of blocking forever on a completion that will
+// never arrive.
+type TurnSignal = { readonly kind: "completed"; readonly outcome: TurnOutcome } | { readonly kind: "aborted" }
+
 const wrap =
   (message: string) =>
   <A, R>(effect: Effect.Effect<A, AppServerTransportError, R>): Effect.Effect<A, CodexDriverError, R> =>
@@ -120,7 +126,7 @@ export const makeCodexAppServerDriver = (
     const threadId = thread.value.thread.id
 
     const pendingApprovals = yield* SubscriptionRef.make<ReadonlyArray<PendingApproval>>([])
-    const turnOutcomes = yield* Queue.make<TurnOutcome>()
+    const turnOutcomes = yield* Queue.make<TurnSignal>()
 
     // One sequential fiber folds the notification stream. Accumulation is
     // thread-cumulative, not per-turn: the store's `replaceSession` replaces a
@@ -146,7 +152,10 @@ export const makeCodexAppServerDriver = (
             case "turn/completed": {
               const turn = obj(obj(notification.params)?.["turn"])
               const status = str(turn?.["status"]) ?? "unknown"
-              yield* Queue.offer(turnOutcomes, { items: items.slice(), usage: usage.slice(), status })
+              yield* Queue.offer(turnOutcomes, {
+                kind: "completed",
+                outcome: { items: items.slice(), usage: usage.slice(), status },
+              })
               break
             }
             case "serverRequest/resolved": {
@@ -164,6 +173,12 @@ export const makeCodexAppServerDriver = (
           }
         }),
       ),
+      // The transport shuts its queues on process exit, which *interrupts* this
+      // fold (a blocked `Queue.take` on a shut-down queue is interrupted, not a
+      // graceful end) — so use `ensuring`, not `andThen`, to signal an in-flight
+      // turn. Its `turn/completed` will never arrive; the waiting `runTurn` must
+      // fail instead of blocking on the outcome queue forever.
+      Effect.ensuring(Queue.offer(turnOutcomes, { kind: "aborted" as const })),
       Effect.forkScoped,
     )
 
@@ -198,7 +213,13 @@ export const makeCodexAppServerDriver = (
         yield* transport
           .request("turn/start", { threadId, input: [{ type: "text", text }] })
           .pipe(wrap("turn/start failed"))
-        const outcome = yield* Queue.take(turnOutcomes)
+        const signal = yield* Queue.take(turnOutcomes)
+        if (signal.kind === "aborted") {
+          return yield* Effect.fail(
+            new CodexDriverError({ message: "codex app-server exited before the turn completed" }),
+          )
+        }
+        const outcome = signal.outcome
         const rows = normalizeAppServerThread(outcome.items, outcome.usage, {
           nativeSessionId: threadId,
           workspaceRoot: options.cwd,

@@ -1,6 +1,9 @@
 import { Effect, type Scope, Stream, SubscriptionRef } from "effect"
 import { describe, expect, it } from "vitest"
-import { makeCodexAppServerDriver } from "../src/main/ingest/providers/codex-appserver/driver.js"
+import {
+  CodexDriverError,
+  makeCodexAppServerDriver,
+} from "../src/main/ingest/providers/codex-appserver/driver.js"
 
 // A scripted thread/turn peer (stands in for `codex app-server`). It completes
 // the handshake, then on `turn/start` streams a user item and asks for approval
@@ -44,6 +47,25 @@ rl.on('line', (line) => {
   if (m.method === 'initialize') send({ id: m.id, result: {} })
   else if (m.method === 'thread/start') send({ id: m.id, result: { thread: { id: 'thr_fresh' } } })
   else if (m.method === 'thread/resume') send({ id: m.id, result: { thread: { id: m.params.threadId } } })
+})
+`
+
+// Acks turn/start (so runTurn gets past the request and blocks on the outcome
+// queue), then exits before turn/completed — the mid-turn crash that must fail
+// runTurn fast rather than hang it on a completion that never arrives.
+const MIDTURN_EXIT_PEER = `
+const readline = require('node:readline')
+const rl = readline.createInterface({ input: process.stdin })
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+rl.on('line', (line) => {
+  if (!line.trim()) return
+  const m = JSON.parse(line)
+  if (m.method === 'initialize') send({ id: m.id, result: {} })
+  else if (m.method === 'thread/start') send({ id: m.id, result: { thread: { id: 'thr_x' } } })
+  else if (m.method === 'turn/start') {
+    send({ id: m.id, result: { turn: { id: 't1', status: 'inProgress' } } })
+    process.exit(0)
+  }
 })
 `
 
@@ -112,6 +134,25 @@ describe("codex app-server driver", () => {
           // The peer echoes thread/resume's threadId (and would answer thread/start
           // with 'thr_fresh'), so this proves the resume branch fired.
           expect(driver.threadId).toBe("thr_resumed")
+        }),
+      ),
+    15000,
+  )
+
+  it(
+    "fails the turn (does not hang) when the process exits mid-turn",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const driver = yield* makeCodexAppServerDriver({
+            cwd: process.cwd(),
+            command: process.execPath,
+            args: ["-e", MIDTURN_EXIT_PEER],
+          })
+          // The peer acks turn/start then exits before turn/completed. runTurn must
+          // resolve to a failure (via the aborted signal), not block on the queue.
+          const failure = yield* Effect.flip(driver.runTurn("hi"))
+          expect(failure).toBeInstanceOf(CodexDriverError)
         }),
       ),
     15000,
