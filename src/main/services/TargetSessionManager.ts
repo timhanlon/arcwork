@@ -16,7 +16,7 @@ import { resolveArcDb } from "../db/paths.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { arcIdOrNull, type ChatId, newArcId } from "../../shared/ids.js"
 import { rearmPersistedSessionHooks, restoredSessionFromRow } from "./target-session/boot-restore.js"
-import { buildProviderArgs, canResume, resumeArgs } from "./target-session/provider-args.js"
+import { buildProviderArgs, canResume, presentTargetSession, resumeArgs } from "./target-session/provider-args.js"
 import {
   drivePtySpawn,
   type FirstOutput,
@@ -285,11 +285,7 @@ export const TargetSessionManagerLive = Layer.effect(
         )
 
     const asList = (m: ReadonlyMap<string, TargetSession>): ReadonlyArray<TargetSession> =>
-      Array.from(m.values()).map((s) => ({
-        ...s,
-        attached: ptys.has(s.id),
-        resumable: canResume(s),
-      }))
+      Array.from(m.values()).map((s) => presentTargetSession(s, ptys.has(s.id)))
     const list = SubscriptionRef.get(store).pipe(Effect.map(asList))
     const changes = Stream.map(SubscriptionRef.changes(store), asList)
 
