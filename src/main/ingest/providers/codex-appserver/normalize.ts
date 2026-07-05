@@ -77,7 +77,7 @@ export const normalizeAppServerThread = (
       }
       case "agentMessage": {
         const text = item.text?.trim()
-        if (text) b.message({ role: "assistant", text: item.text, model, nativeMessageId: item.id ?? null })
+        if (text) b.message({ role: "assistant", text, model, nativeMessageId: item.id ?? null })
         break
       }
       case "reasoning": {

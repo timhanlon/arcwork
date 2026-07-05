@@ -150,7 +150,12 @@ export const makeCodexAppServerDriver = (
               break
             }
             case "serverRequest/resolved": {
+              // Guard the id: an absent/malformed field would leave `requestId`
+              // undefined, and `approval.id !== undefined` matches every pending
+              // approval — so the filter would clear nothing and the card would
+              // stick until scope close. Only act on a real id.
               const requestId = obj(notification.params)?.["requestId"]
+              if (typeof requestId !== "number" && typeof requestId !== "string") break
               yield* SubscriptionRef.update(pendingApprovals, (list) =>
                 list.filter((approval) => approval.id !== requestId),
               )
