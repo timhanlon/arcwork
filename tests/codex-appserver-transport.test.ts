@@ -1,9 +1,22 @@
-import { Effect, type Scope, Stream } from "effect"
+import { Effect, Exit, Fiber, Scope, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   AppServerTransportError,
   makeAppServerTransport,
 } from "../src/main/ingest/providers/codex-appserver/transport.js"
+
+// Answers `initialize`, then goes silent — a subsequent request never gets a
+// response, so it stays pending until the scope is closed.
+const SILENT_PEER = `
+const readline = require('node:readline')
+const rl = readline.createInterface({ input: process.stdin })
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+rl.on('line', (line) => {
+  if (!line.trim()) return
+  const m = JSON.parse(line)
+  if (m.method === 'initialize') send({ id: m.id, result: {} })
+})
+`
 
 // A scripted NDJSON JSON-RPC peer (stands in for `codex app-server`, no auth /
 // network). On `initialize` it answers, then emits one notification and one
@@ -98,6 +111,35 @@ describe("codex app-server transport", () => {
           // register a Deferred that no future exit event can ever resolve.
           const afterExit = yield* Effect.flip(t.request("turn/start"))
           expect(afterExit).toBeInstanceOf(AppServerTransportError)
+        }),
+      ),
+    15000,
+  )
+
+  it(
+    "fails an in-flight request when the scope is closed (intentional stop)",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          // Own scope so we can close it while a request is pending — modelling a
+          // `stop` that closes the session scope. Closing interrupts the internal
+          // drain fiber before the child dies, so only the scope finalizer can fail
+          // the pending request.
+          const scope = yield* Scope.make()
+          const t = yield* makeAppServerTransport({
+            command: process.execPath,
+            args: ["-e", SILENT_PEER],
+          }).pipe(Scope.provide(scope))
+          yield* t.request("initialize")
+
+          // A request the peer never answers, awaited in a fiber independent of the
+          // transport scope (as `runTurn` is of the driver scope).
+          const fiber = yield* Effect.forkDetach(Effect.flip(t.request("turn/start")))
+          yield* Effect.sleep("50 millis") // let the pending Deferred register
+          yield* Scope.close(scope, Exit.void)
+
+          const failure = yield* Fiber.join(fiber)
+          expect(failure).toBeInstanceOf(AppServerTransportError)
         }),
       ),
     15000,

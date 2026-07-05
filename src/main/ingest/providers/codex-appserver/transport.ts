@@ -128,20 +128,32 @@ export const makeAppServerTransport = (
     // A spawn failure (bad command, missing cwd) fires `error`, not `exit`; treat
     // it as an exit so pending requests fail instead of an unhandled throw.
     child.on("error", () => Queue.offerUnsafe(inbound, { kind: "exit" }))
-    // Release the readline interface (and its stdout `line` listener) at scope
-    // close, alongside the child kill the acquireRelease above registers.
+    // Mark the transport closed and fail every in-flight request. Called both
+    // when the child's exit is *routed* (process crash while alive) and as a scope
+    // finalizer (intentional `stop`): on scope close the drain fiber is
+    // interrupted before the child is killed, so the exit event is never routed —
+    // without the finalizer a request blocked on `Deferred.await` would hang.
+    // Idempotent: whichever runs first clears `pending`, the other finds it empty.
+    const failAllPending = () =>
+      Effect.gen(function* () {
+        closed ??= new AppServerTransportError({ message: `${options.command} exited` })
+        for (const [, deferred] of pending) {
+          yield* Deferred.fail(deferred, closed)
+        }
+        pending.clear()
+      })
+
+    // Release the readline interface + fail pending requests at scope close,
+    // alongside the child kill the acquireRelease above registers.
     yield* Effect.addFinalizer(() => Effect.sync(() => lines.close()))
+    yield* Effect.addFinalizer(() => failAllPending())
 
     const route = (event: Inbound): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (event.kind === "exit") {
-          // Fail every in-flight request, mark the transport closed so later calls
-          // fail fast, and end both output streams so nobody hangs.
-          closed = new AppServerTransportError({ message: `${options.command} exited` })
-          for (const [, deferred] of pending) {
-            yield* Deferred.fail(deferred, closed)
-          }
-          pending.clear()
+          // Fail every in-flight request, mark closed so later calls fail fast, and
+          // end both output streams so nobody hangs.
+          yield* failAllPending()
           yield* Queue.shutdown(notifications)
           yield* Queue.shutdown(serverRequests)
           return
