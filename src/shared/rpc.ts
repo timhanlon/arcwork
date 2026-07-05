@@ -8,6 +8,7 @@ import { ActivityEvent } from "./activity-event.js"
 import { ChatMessage } from "./chat-message.js"
 import { GitCommit, GitFileDiff, GitStatus, PullRequest, Worktree, WorkspaceGitContext } from "./git.js"
 import { PendingRequest } from "./chat-request.js"
+import { AppServerApproval } from "./codex-approval.js"
 import { Instance, TargetSession } from "./instance.js"
 import { LiveTargetState } from "./live-target-state.js"
 import { ArcGetParams, ArcGetResult, ArcSearchParams, ArcSearchResult } from "./read.js"
@@ -278,6 +279,24 @@ export const ArcRpcs = RpcGroup.make(
     error: RpcError,
     stream: true,
   }),
+  /** Outstanding codex app-server approvals — the one-shot floor under `WatchAppServerApprovals`. */
+  Rpc.make("ListAppServerApprovals", { success: Schema.Array(AppServerApproval), error: RpcError }),
+  /** Live codex app-server approvals as a server stream (the inline-card answer surface). */
+  Rpc.make("WatchAppServerApprovals", {
+    success: Schema.Array(AppServerApproval),
+    error: RpcError,
+    stream: true,
+  }),
+  /** Answer a codex app-server approval by echoing a decision's `payload` back verbatim. */
+  Rpc.make("AnswerAppServerApproval", {
+    payload: {
+      targetSessionId: Schema.String,
+      requestId: Schema.Union([Schema.String, Schema.Number]),
+      decisionPayload: Schema.String,
+    },
+    success: Schema.Void,
+    error: RpcError,
+  }),
   /** Renderer door onto the same unified read surface as MCP `arc.search`. */
   Rpc.make("SearchArc", {
     payload: { params: ArcSearchParams },
@@ -342,6 +361,9 @@ export const ArcRpcs = RpcGroup.make(
     payload: {
       provider: Schema.String,
       chatId: ChatId,
+      /** Which live runtime backs the session — `pty` (terminal TUI, default) or
+       * `rpc` (app-server). A launch-time intent, not a provider property. */
+      runtime: Schema.optional(Schema.Literals(["pty", "rpc"])),
       /** Diff endpoint to run in — the worker writes here and hooks/file refs
        * resolve against it. Omit to use the chat's own workspace. */
       workspaceId: Schema.optional(WorkspaceId),
@@ -358,6 +380,10 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("ResumeTarget", {
     payload: {
       sessionId: TargetId,
+      /** Which runtime to resume into — `pty` (terminal, default) or `rpc`
+       * (rejoin the app-server thread). A resume-time intent, not a session
+       * property: the same codex session resumes in either transport. */
+      runtime: Schema.optional(Schema.Literals(["pty", "rpc"])),
       cols: Schema.optional(Schema.Number),
       rows: Schema.optional(Schema.Number),
     },

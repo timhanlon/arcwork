@@ -9,6 +9,7 @@ import { useChatMessages } from "./useChatMessages.js"
 import { useStreamingMessages } from "./useStreamingMessages.js"
 import { useChatWork } from "./useChatWork.js"
 import { ChatWork } from "./ChatWork.js"
+import { ChatApprovals } from "./ChatApprovals.js"
 import { ChatComposer, type ComposerHandle } from "./composer/ChatComposer.js"
 import { ComposerTargetIndicators, formatAddressee } from "./composer/ComposerTargetIndicators.js"
 import { useReferenceTargets } from "./composer/useReferenceTargets.js"
@@ -21,10 +22,17 @@ import { type TranscriptFilter, TranscriptFilterMenu, showsMessage } from "./Tra
 import { rpc } from "../rpc-client.js"
 import type { LiveStateById } from "../sidebar/grouping.js"
 
-/** A provider the composer can launch a new target session against. */
+/** A provider+runtime the composer can launch a new target session against. A
+ * provider that declares both `interactive` and `appServer` appears twice — once
+ * per runtime — so the two are distinct, individually-labelled launch options. */
 export interface LaunchableProvider {
   readonly kind: string
   readonly displayName: string
+  /** Which live runtime this option launches — `pty` (terminal TUI) or `rpc`
+   * (codex app-server, no terminal; answered via the inline approval cards). */
+  readonly runtime: "pty" | "rpc"
+  /** Button text; distinguishes the app-server option from the pty one. */
+  readonly label: string
 }
 
 export interface UnifiedChatPaneProps {
@@ -33,10 +41,11 @@ export interface UnifiedChatPaneProps {
   readonly sessions: ReadonlyArray<TargetSession>
   /** session id → live activity, from the `arc:live-target-states` projection */
   readonly liveStateById?: LiveStateById
-  readonly activeSessionId?: TargetId
+  /** the current composer target (any runtime) — the addressee, when attached */
+  readonly activeTargetId?: TargetId
   readonly sessionCount: number
   readonly providers: ReadonlyArray<LaunchableProvider>
-  readonly onLaunch: (provider: string, chatId: ChatId) => void
+  readonly onLaunch: (provider: string, chatId: ChatId, runtime: "pty" | "rpc") => void
   /** focus the live target session waiting on a pending question */
   readonly onFocusSession: (sessionId: TargetId) => void
   readonly onRenameChat: (chatId: ChatId, title: string) => Promise<void>
@@ -45,12 +54,15 @@ export interface UnifiedChatPaneProps {
 const addressableTarget = (
   chatId: ChatId,
   sessions: ReadonlyArray<TargetSession>,
-  activeSessionId?: TargetId,
+  activeTargetId?: TargetId,
 ): TargetSession | undefined => {
   const inChat = sessions.filter((session) => session.chatId === chatId)
+  // The focused target is the addressee when it's attached and in this chat; the
+  // first-attached fallback is only a cold-start default (no/invalid active
+  // target) — never the primary path, which would be arbitrary with 2+ targets.
   const active =
-    activeSessionId !== undefined
-      ? inChat.find((session) => session.id === activeSessionId && session.attached)
+    activeTargetId !== undefined
+      ? inChat.find((session) => session.id === activeTargetId && session.attached)
       : undefined
   if (active) return active
   return inChat.find((session) => session.attached)
@@ -73,7 +85,7 @@ export interface ChatPaneHandle {
 
 export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
   function UnifiedChatPane(props, ref): JSX.Element {
-  const { chat, workspace, sessions, activeSessionId, sessionCount, providers, onLaunch, onFocusSession } =
+  const { chat, workspace, sessions, activeTargetId, sessionCount, providers, onLaunch, onFocusSession } =
     props
   const liveStateById = props.liveStateById ?? EMPTY_LIVE_STATES
   const messages = useChatMessages(chat?.id)
@@ -89,7 +101,6 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
   // the auto-picked addressee. Reset when the chat changes (it's chat-scoped).
   const [targetOverride, setTargetOverride] = useState<string | undefined>(undefined)
   const [composerError, setComposerError] = useState<string | undefined>(undefined)
-  const [sending, setSending] = useState(false)
   const [titleEditing, setTitleEditing] = useState(false)
   const [titleDraft, setTitleDraft] = useState(chat?.title ?? "")
   const [titleError, setTitleError] = useState<string | undefined>(undefined)
@@ -150,7 +161,7 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
     ? sessionsInChat.find((session) => session.id === targetOverride)
     : undefined
   const addressee =
-    overrideSession ?? (chat ? addressableTarget(chat.id, sessions, activeSessionId) : undefined)
+    overrideSession ?? (chat ? addressableTarget(chat.id, sessions, activeTargetId) : undefined)
 
   // Targets the composer's `@` picker can reference: this chat's work + sessions
   // (in memory) and the workspace's files (lazily fetched on first mention).
@@ -180,7 +191,12 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
       return
     }
 
-    setSending(true)
+    // Optimistic: clear the composer immediately and let the turn run in the
+    // background. An rpc (app-server) turn runs to completion server-side, so
+    // awaiting it would hold the composer disabled for the whole turn; the reply
+    // lands via the chat-changes stream and "generating" shows live activity
+    // meanwhile — matching how a PTY submit returns instantly.
+    setDraft("")
     setComposerError(undefined)
     try {
       await rpc("SendChatPrompt", {
@@ -188,12 +204,11 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
         targetSessionId: addressee.id,
         text,
       })
-      setDraft("")
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
       setComposerError(message)
-    } finally {
-      setSending(false)
+      // Restore the prompt so it isn't lost — unless the user already typed a new one.
+      setDraft((current) => (current === "" ? text : current))
     }
   }, [addressee, attachedInChat.length, chat, draft])
 
@@ -315,13 +330,13 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
                 <div className="ml-auto flex flex-wrap items-center gap-1">
                   {launchableProviders.map((provider) => (
                     <Button
-                      key={provider.kind}
+                      key={`${provider.kind}:${provider.runtime}`}
                       variant="ghost"
                       size="sm"
-                      aria-label={`launch ${provider.kind}`}
-                      onClick={() => onLaunch(provider.kind, chat.id)}
+                      aria-label={`launch ${provider.label}`}
+                      onClick={() => onLaunch(provider.kind, chat.id, provider.runtime)}
                     >
-                      + {provider.kind}
+                      + {provider.label}
                     </Button>
                   ))}
                 </div>
@@ -340,8 +355,11 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
               {providers.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5">
                   {providers.map((provider) => (
-                    <Button key={provider.kind} onClick={() => onLaunch(provider.kind, chat.id)}>
-                      launch {provider.kind}
+                    <Button
+                      key={`${provider.kind}:${provider.runtime}`}
+                      onClick={() => onLaunch(provider.kind, chat.id, provider.runtime)}
+                    >
+                      launch {provider.label}
                     </Button>
                   ))}
                 </div>
@@ -403,6 +421,8 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
         </div>
       )}
 
+      <ChatApprovals chatId={chat.id} />
+
       <footer className="grid flex-none gap-2 border-t border-border bg-elev px-4 pb-[14px] pt-3">
         <div className="grid gap-2" aria-live="polite">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px]">
@@ -423,7 +443,6 @@ export const UnifiedChatPane = forwardRef<ChatPaneHandle, UnifiedChatPaneProps>(
         <ChatComposer
           ref={composerHandleRef}
           value={draft}
-          disabled={sending}
           candidates={candidates}
           onSelectTarget={setTargetOverride}
           onMention={ensureFilesLoaded}

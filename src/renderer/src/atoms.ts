@@ -50,6 +50,8 @@ export const launchTargetAtom = ArcRpcAtomClient.mutation("LaunchTarget")
 export const resumeTargetAtom = ArcRpcAtomClient.mutation("ResumeTarget")
 export const stopTargetAtom = ArcRpcAtomClient.mutation("StopTarget")
 export const listWorkspaceFilesAtom = ArcRpcAtomClient.mutation("ListWorkspaceFiles")
+/** Answer a codex app-server approval by echoing a decision's `payload` back. */
+export const answerAppServerApprovalAtom = ArcRpcAtomClient.mutation("AnswerAppServerApproval")
 
 /**
  * One subscription per chat change feed (`WatchChatMessageChanges` /
@@ -118,6 +120,11 @@ export const chatsAtom = ArcRpcAtomClient.runtime.atom(
 )
 export const liveTargetStatesAtom = ArcRpcAtomClient.runtime.atom(
   Stream.unwrap(ArcRpcAtomClient.use((client) => Effect.succeed(client("WatchLiveTargetStates", undefined)))),
+)
+/** Outstanding codex app-server approvals, live — the inline-card answer surface.
+ * Ephemeral (never persisted); the driver mirrors its in-memory state here. */
+export const appServerApprovalsAtom = ArcRpcAtomClient.runtime.atom(
+  Stream.unwrap(ArcRpcAtomClient.use((client) => Effect.succeed(client("WatchAppServerApprovals", undefined)))),
 )
 
 /** Per-chat message-change signal, derived from the shared {@link chatMessageCountsAtom}

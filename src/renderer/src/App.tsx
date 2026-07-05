@@ -14,10 +14,11 @@ import {
   workspacesAtom,
 } from "./atoms.js"
 import type { ChatId, PaneId, TargetId, WorkspaceId } from "../../shared/ids.js"
+import type { TargetSession } from "../../shared/instance.js"
 import { ArcSidebarTree } from "./sidebar/ArcSidebarTree.js"
 import { TargetSessionPane } from "./chat/TargetSessionPane.js"
 import { sync as syncTerminals } from "./terminal/terminalRegistry.js"
-import { UnifiedChatPane, type ChatPaneHandle } from "./chat/UnifiedChatPane.js"
+import { UnifiedChatPane, type ChatPaneHandle, type LaunchableProvider } from "./chat/UnifiedChatPane.js"
 import { WorkPane, type WorkPaneHandle } from "./work/WorkPane.js"
 import { GitPane } from "./git/GitPane.js"
 import { GitPrefetch } from "./git/GitPrefetch.js"
@@ -89,7 +90,16 @@ export function App(): JSX.Element {
     () => deriveShellViewModel(shell.state, { workspaces, chats, sessions }),
     [shell.state, workspaces, chats, sessions],
   )
-  const interactiveProviders = providers.filter((p) => p.interactive)
+  // One launch option per (provider, runtime): a provider that declares both an
+  // `interactive` (PTY TUI) and an `appServer` (codex app-server) capability
+  // surfaces both, individually labelled, so the user picks the runtime at launch.
+  const launchableProviders: ReadonlyArray<LaunchableProvider> = providers.flatMap((p) => {
+    const options: Array<LaunchableProvider> = []
+    if (p.interactive) options.push({ kind: p.kind, displayName: p.displayName, runtime: "pty", label: p.kind })
+    if (p.appServer)
+      options.push({ kind: p.kind, displayName: p.displayName, runtime: "rpc", label: `${p.kind} · app-server` })
+    return options
+  })
 
   const centerView = center.surface.kind === "work" ? "work" : "chat"
   const rightView = right.surface.kind === "git" ? "git" : "terminal"
@@ -114,11 +124,15 @@ export function App(): JSX.Element {
   // launch mid-bind), so this stays idempotent across every `arc:sessions` push.
   useEffect(() => {
     for (const session of unadoptedSessions(sessions, panes)) {
+      // rpc (app-server) sessions have no terminal — adopting one would mount an
+      // empty xterm (a stray cursor when focused). They live in the chat pane only.
+      if (session.runtime === "rpc") continue
       shell.actions.adoptSession({
         id: session.id,
         provider: session.provider,
         chatId: session.chatId,
         attached: session.attached ?? false,
+        runtime: session.runtime,
       })
     }
   }, [sessions, panes, shell.actions])
@@ -224,7 +238,32 @@ export function App(): JSX.Element {
     shell.actions.selectChat(workspaceId, chatId)
   }
 
-  const onLaunch = (provider: string, chatId: ChatId): void => {
+  // rpc launch/resume bypass the shell's pane/measure machinery (no `TARGET_BOUND`
+  // to make the session current), so once the RPC returns the session we focus it
+  // by ref — making it the composer target without waiting for it to land in the
+  // live list (a `focusSession(id)` lookup would race and miss).
+  const focusRpcTarget = (session: TargetSession): void => {
+    shell.actions.focusTarget({
+      id: session.id,
+      provider: session.provider,
+      chatId: session.chatId,
+      attached: session.attached ?? false,
+      runtime: session.runtime,
+    })
+  }
+
+  const onLaunch = (provider: string, chatId: ChatId, runtime: "pty" | "rpc"): void => {
+    // An rpc (app-server) session has no terminal, so it skips the pane/measure
+    // machinery entirely: fire `LaunchTarget` directly and let the session appear
+    // through `WatchSessions`. Its transcript, composer, and approval cards render
+    // from that projection — no xterm to bind. PTY launches still go through the
+    // shell machine, which creates a pane and defers the RPC until xterm measures.
+    if (runtime === "rpc") {
+      void runLaunchTarget({ payload: { provider, chatId, runtime: "rpc" } }).then((exit) => {
+        if (Exit.isSuccess(exit)) focusRpcTarget(exit.value)
+      })
+      return
+    }
     shell.actions.launchTarget(provider, chatId)
   }
 
@@ -276,6 +315,23 @@ export function App(): JSX.Element {
 
   const onResumeDetached = (): void => {
     shell.actions.resumeDetached()
+  }
+
+  // Whether the detached session can resume into the rpc (app-server) runtime —
+  // its provider must declare an appServer capability. Resuming that way fires
+  // `ResumeTarget` directly (no pane): the session comes back attached, which
+  // clears the detached overlay (it keys on `!attached`) and surfaces it in the
+  // chat pane — the resume mirror of the rpc launch entry.
+  const detachedProvider = providers.find((p) => p.kind === vm.detachedSession?.provider)
+  const canResumeDetachedRpc = Boolean(vm.detachedSession && detachedProvider?.appServer)
+  const onResumeDetachedRpc = (): void => {
+    if (vm.detachedSession) {
+      void runResumeTarget({ payload: { sessionId: vm.detachedSession.id, runtime: "rpc" } }).then(
+        (exit) => {
+          if (Exit.isSuccess(exit)) focusRpcTarget(exit.value)
+        },
+      )
+    }
   }
 
   const selectGitPath = (filePath: string): void => {
@@ -353,9 +409,9 @@ export function App(): JSX.Element {
                 workspace={vm.chatWorkspace}
                 sessions={sessions}
                 liveStateById={liveStateById}
-                activeSessionId={vm.activeSessionId}
+                activeTargetId={vm.activeTargetId}
                 sessionCount={vm.sessionCount}
-                providers={interactiveProviders}
+                providers={launchableProviders}
                 onLaunch={onLaunch}
                 onFocusSession={focusSession}
                 onRenameChat={renameChat}
@@ -397,6 +453,8 @@ export function App(): JSX.Element {
                 panes={panes}
                 activePaneId={shell.state.selection.terminalPaneId}
                 detachedSession={vm.detachedSession}
+                canResumeRpc={canResumeDetachedRpc}
+                onResumeDetachedRpc={onResumeDetachedRpc}
                 hasWorkspaces={workspaces.length > 0}
                 onResumeDetached={onResumeDetached}
               />

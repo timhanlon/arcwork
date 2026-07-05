@@ -14,6 +14,9 @@ import { ChatMessageService } from "./services/ChatMessageService.js"
 import { LocalModelService } from "./services/LocalModelService.js"
 import { TargetSessionManager } from "./services/TargetSessionManager.js"
 import { LiveTargetStateService } from "./services/LiveTargetStateService.js"
+import { CodexDriverRegistry } from "./services/CodexDriverRegistry.js"
+import { SessionRuntimeRouter } from "./services/SessionRuntimeRouter.js"
+import { projectApprovals, parseDecisionPayload } from "./services/codex-approval-view.js"
 import { ArtifactIngestService } from "./services/ArtifactIngestService.js"
 import { WorkService } from "./work/service.js"
 import { ReadService } from "./read/service.js"
@@ -121,17 +124,19 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     ),
     ListPresets: svc("ListPresets", PresetRegistry, (_) => _.list),
     ListInstances: svc("ListInstances", TargetSessionManager, (_) => _.list),
-    ListSessions: svc("ListSessions", TargetSessionManager, (_) => _.list),
+    ListSessions: svc("ListSessions", SessionRuntimeRouter, (_) => _.sessions),
     // Streaming handlers: return each service's reactive `changes` stream
     // directly. The streams replay (or derive) their current value on subscribe,
     // so a fresh client gets the snapshot then live updates — no separate boot
     // push. Their error channel is `never`, so the `rpcEffect` request/error
     // wrapper (Effect-shaped) doesn't apply here.
-    WatchSessions: () => Stream.unwrap(Effect.map(TargetSessionManager, (_) => _.changes)),
+    WatchSessions: () => Stream.unwrap(Effect.map(SessionRuntimeRouter, (_) => _.changes)),
     WatchChats: () => Stream.unwrap(Effect.map(ChatService, (_) => _.changes)),
     WatchWorkspaces: () => Stream.unwrap(Effect.map(WorkspaceService, (_) => _.changes)),
     WatchLiveTargetStates: () =>
       Stream.unwrap(Effect.map(LiveTargetStateService, (_) => _.changes)),
+    WatchAppServerApprovals: () =>
+      Stream.unwrap(Effect.map(CodexDriverRegistry, (_) => Stream.map(_.changes, projectApprovals))),
     // Invalidation-signal streams: forward each service's change PubSub as a
     // stream of tiny descriptors (the renderer re-pulls the affected list). Unlike
     // the SubscriptionRef lists above these PubSubs don't replay, so a fresh
@@ -145,6 +150,12 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     TestLocalModel: svc("TestLocalModel", LocalModelService, (_) => _.status),
     ListPendingRequests: svc("ListPendingRequests", ChatMessageService, (_) => _.listPending),
     ListLiveTargetStates: svc("ListLiveTargetStates", LiveTargetStateService, (_) => _.list),
+    ListAppServerApprovals: svc("ListAppServerApprovals", CodexDriverRegistry, (_) =>
+      Effect.map(_.pending, projectApprovals),
+    ),
+    AnswerAppServerApproval: svc("AnswerAppServerApproval", CodexDriverRegistry, (_, req) =>
+      _.answerApproval(req.targetSessionId, req.requestId, parseDecisionPayload(req.decisionPayload)),
+    ),
     SearchArc: svc("SearchArc", ReadService, (_, req) => _.search(req.params)),
     GetArc: svc("GetArc", ReadService, (_, req) => _.get(req.params)),
     CreateChat: svc("CreateChat", ChatService, (_, req) => _.create(req.workspaceId, req.title)),
@@ -158,9 +169,9 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     ReingestAndReprojectChatMessages: svc("ReingestAndReprojectChatMessages", ArtifactIngestService, (_, req) =>
       _.reingestAndReprojectChat(req.chatId, req.provider),
     ),
-    LaunchTarget: svc("LaunchTarget", TargetSessionManager, (_, req) => _.launch(req)),
-    ResumeTarget: svc("ResumeTarget", TargetSessionManager, (_, req) => _.resume(req)),
-    StopTarget: svc("StopTarget", TargetSessionManager, (_, req) => _.stop(req)),
+    LaunchTarget: svc("LaunchTarget", SessionRuntimeRouter, (_, req) => _.launch(req)),
+    ResumeTarget: svc("ResumeTarget", SessionRuntimeRouter, (_, req) => _.resume(req)),
+    StopTarget: svc("StopTarget", SessionRuntimeRouter, (_, req) => _.stop(req)),
     SubmitPrompt: svc("SubmitPrompt", TargetSessionManager, (_, req) => _.submit(req)),
     SendChatPrompt: svc("SendChatPrompt", ChatMessageService, (_, req) => _.sendPrompt(req)),
     ListWork: svc("ListWork", WorkService, (_) => _.listOpen),

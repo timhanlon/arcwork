@@ -2,7 +2,8 @@ import { Context, Effect, Layer, Stream, SubscriptionRef } from "effect"
 import type { TargetSession } from "../../shared/instance.js"
 import type { LiveTargetActivity, LiveTargetState } from "../../shared/live-target-state.js"
 import type { PendingRequest } from "../../shared/chat-request.js"
-import { TargetSessionManager } from "./TargetSessionManager.js"
+import { SessionRuntimeRouter } from "./SessionRuntimeRouter.js"
+import { RpcSessionManager } from "./RpcSessionManager.js"
 import { ChatMessageService } from "./ChatMessageService.js"
 
 /**
@@ -13,14 +14,15 @@ import { ChatMessageService } from "./ChatMessageService.js"
  * {@link TargetSession.state} (which is lifecycle, not activity — see
  * shared/live-target-state.ts):
  *
- *   1. PTY ownership + lifecycle — `TargetSessionManager.changes` carries
- *      `attached` (this process holds the live PTY) and the persisted `state`
- *      (only `exited` is read here).
+ *   1. Ownership + lifecycle — the unified `SessionRuntimeRouter.changes` (PTY +
+ *      rpc) carries `attached` (a live PTY, or a running app-server session) and
+ *      the persisted `state` (only `exited` is read here).
  *   2. Pending questions/permissions — `ChatMessageService.listPending`, the
  *      attention signal (a persisted question row or an in-memory permission).
- *   3. The hook turn lifecycle — `noteTurn`, fed by the controller from the hook
- *      signal stream (UserPromptSubmit opens a turn, Stop closes it). This is the
- *      only input that distinguishes "actively generating" from "attached idle".
+ *   3. Turn lifecycle — for PTY, `noteTurn` fed by the controller from the hook
+ *      stream (UserPromptSubmit opens, Stop closes); for rpc, the
+ *      `RpcSessionManager.generating` marker set around each turn. Either
+ *      distinguishes "actively generating" from "attached idle".
  *
  * The open-turn set is ephemeral (a SubscriptionRef, never persisted): it is
  * rebuilt from the live hook stream each process, the same way the PTY map is.
@@ -63,18 +65,26 @@ export const deriveActivity = (
 export const LiveTargetStateServiceLive = Layer.effect(
   LiveTargetStateService,
   Effect.gen(function* () {
-    const sessions = yield* TargetSessionManager
+    // Read the *unified* session list (PTY + rpc) via the router, not just the PTY
+    // manager — an rpc app-server session lives under RpcSessionManager and would
+    // otherwise be invisible here (no live state at all).
+    const router = yield* SessionRuntimeRouter
+    const rpc = yield* RpcSessionManager
     const chatMessages = yield* ChatMessageService
     const openTurns = yield* SubscriptionRef.make(new Set<string>())
 
     const derive = Effect.gen(function* () {
-      const sessionList = yield* sessions.list
+      const sessionList = yield* router.sessions
       // A pending-list read failure must not blank every session's status, so it
       // degrades to "no pending" rather than failing the projection.
       const pending = yield* chatMessages.listPending.pipe(
         Effect.orElseSucceed(() => [] as ReadonlyArray<PendingRequest>),
       )
-      const turns = yield* SubscriptionRef.get(openTurns)
+      // Both turn signals mean "generating": hook-driven (PTY) and the rpc turn
+      // marker (app-server sessions have no hook stream).
+      const hookTurns = yield* SubscriptionRef.get(openTurns)
+      const rpcTurns = yield* rpc.generating
+      const turns = new Set([...hookTurns, ...rpcTurns])
       const pendingByTarget = new Map(pending.map((p) => [p.targetSessionId, p.kind]))
       return sessionList.map(
         (session): LiveTargetState => ({
@@ -92,7 +102,12 @@ export const LiveTargetStateServiceLive = Layer.effect(
     const tick = <A>(stream: Stream.Stream<A>): Stream.Stream<void> =>
       Stream.map(stream, () => undefined)
     const changes = Stream.mergeAll(
-      [tick(sessions.changes), tick(chatMessages.changes), tick(SubscriptionRef.changes(openTurns))],
+      [
+        tick(router.changes),
+        tick(chatMessages.changes),
+        tick(SubscriptionRef.changes(openTurns)),
+        tick(rpc.generatingChanges),
+      ],
       { concurrency: "unbounded" },
     ).pipe(Stream.mapEffect(() => derive))
 

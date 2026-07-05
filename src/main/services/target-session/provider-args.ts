@@ -99,3 +99,16 @@ export const canResume = (s: TargetSession): boolean => {
   if (s.provider === "claude") return Boolean(transcriptPath && fs.existsSync(transcriptPath))
   return true
 }
+
+/**
+ * Stamp the renderer-facing *derived* fields onto a session — `attached` (is a
+ * live handle held for it this process) and `resumable` (can it be re-launched).
+ * The single place these are computed, so the PTY manager's live list and the
+ * router's DB-derived detached set can't drift on which fields they set (a
+ * divergence that shipped as three separate bugs before this existed).
+ */
+export const presentTargetSession = (s: TargetSession, attached: boolean): TargetSession => ({
+  ...s,
+  attached,
+  resumable: canResume(s),
+})

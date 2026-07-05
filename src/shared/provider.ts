@@ -77,6 +77,21 @@ export const InteractiveCapability = Schema.Struct({
 })
 export type InteractiveCapability = typeof InteractiveCapability.Type
 
+/**
+ * App-server launch capability: a long-lived JSON-RPC 2.0 process on stdio
+ * (`codex app-server`) that arc drives directly — a third acquisition transport
+ * beside `batch` (non-interactive runs) and `interactive` (PTY TUI). The driver
+ * (`ingest/providers/codex-appserver/driver.ts`) spawns `launchCmd` with `args`,
+ * speaks the thread/turn/item protocol, and folds each turn into the same
+ * `ExtractedRows` the rollout-file provider produces. Additive: a provider that
+ * declares this can still be scraped post-hoc and launched as a TUI.
+ */
+export const AppServerCapability = Schema.Struct({
+  launchCmd: Schema.String,
+  args: Schema.Array(Schema.String),
+})
+export type AppServerCapability = typeof AppServerCapability.Type
+
 export const ProviderSpec = Schema.Struct({
   kind: Provider,
   displayName: Schema.String,
@@ -84,5 +99,6 @@ export const ProviderSpec = Schema.Struct({
   concurrency: Concurrency,
   batch: Schema.optional(BatchCapability),
   interactive: Schema.optional(InteractiveCapability),
+  appServer: Schema.optional(AppServerCapability),
 })
 export type ProviderSpec = typeof ProviderSpec.Type

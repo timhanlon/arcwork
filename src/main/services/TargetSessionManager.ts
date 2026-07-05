@@ -15,8 +15,8 @@ import { withSqlOperation } from "../db/sql-operation.js"
 import { resolveArcDb } from "../db/paths.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { arcIdOrNull, type ChatId, newArcId } from "../../shared/ids.js"
-import { restorePersistedSessions } from "./target-session/boot-restore.js"
-import { buildProviderArgs, canResume, resumeArgs } from "./target-session/provider-args.js"
+import { rearmPersistedSessionHooks, restoredSessionFromRow } from "./target-session/boot-restore.js"
+import { buildProviderArgs, canResume, presentTargetSession, resumeArgs } from "./target-session/provider-args.js"
 import {
   drivePtySpawn,
   type FirstOutput,
@@ -39,6 +39,14 @@ import {
 export interface LaunchRequest {
   readonly provider: string
   readonly chatId: ChatId
+  /**
+   * Which live runtime backs this session. A launch-time *intent*, not a
+   * provider property — codex declares both `interactive` (PTY TUI) and
+   * `appServer` (rpc), so the same provider can be launched either way. Defaults
+   * to `pty` (unchanged behaviour); `rpc` routes to `RpcSessionManager` via
+   * `SessionRuntimeRouter`.
+   */
+  readonly runtime?: "pty" | "rpc"
   readonly origin?: "manual" | "orchestrated"
   /** the orchestrator spawning this session (its target id), for an orchestrated
    * launch — persisted as the durable parent→child back-channel link. */
@@ -72,6 +80,10 @@ export interface ResumeRequest {
   readonly sessionId: string
   readonly cols?: number
   readonly rows?: number
+  /** Which runtime to resume into — `pty` (terminal, default) or `rpc`
+   * (app-server). A resume-time intent, not a session property: the same codex
+   * session resumes in either transport. Only the router reads it. */
+  readonly runtime?: "pty" | "rpc"
 }
 export interface StopRequest {
   readonly sessionId: string
@@ -128,9 +140,12 @@ export const TargetSessionManagerLive = Layer.effect(
     const db = yield* ArcStore
     const scope = yield* Effect.scope
 
-    // Restore persisted sessions on boot (and re-arm their hook sockets); see
-    // target-session/boot-restore.ts for the unconfirmed-state reconciliation.
-    const initialMap = yield* restorePersistedSessions
+    // Re-arm the hook sockets of persisted sessions on boot. The store itself
+    // starts empty — a boot-restored session isn't live in any runtime, so it's
+    // surfaced from the DB as *detached* by the router's unified list, not held
+    // here. This store holds only sessions this process has a live PTY for.
+    yield* rearmPersistedSessionHooks
+    const initialMap = new Map<string, TargetSession>()
 
     // SubscriptionRef (not Ref) so the session list is observable: `changes`
     // pushes the current value, then every update. This is the Effect-idiomatic
@@ -270,11 +285,7 @@ export const TargetSessionManagerLive = Layer.effect(
         )
 
     const asList = (m: ReadonlyMap<string, TargetSession>): ReadonlyArray<TargetSession> =>
-      Array.from(m.values()).map((s) => ({
-        ...s,
-        attached: ptys.has(s.id),
-        resumable: canResume(s),
-      }))
+      Array.from(m.values()).map((s) => presentTargetSession(s, ptys.has(s.id)))
     const list = SubscriptionRef.get(store).pipe(Effect.map(asList))
     const changes = Stream.map(SubscriptionRef.changes(store), asList)
 
@@ -449,11 +460,20 @@ export const TargetSessionManagerLive = Layer.effect(
       launchLock.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* SubscriptionRef.get(store)
-        const existing = current.get(req.sessionId)
+        const held = current.get(req.sessionId)
+        if (held && ptys.has(held.id)) return { ...held, attached: true } // already live
+        // A detached session is no longer held here (the store is live-only), so
+        // read the persisted row from the DB — the same runtime-neutral projection
+        // the router's detached set uses.
+        const row = held
+          ? undefined
+          : (yield* db.loadTargetSessions.pipe(Effect.orElseSucceed(() => []))).find(
+              (r) => r.id === req.sessionId,
+            )
+        const existing = held ?? (row ? restoredSessionFromRow(row) : undefined)
         if (!existing) {
           return yield* Effect.fail(arcRequestError(`Unknown target session "${req.sessionId}"`))
         }
-        if (ptys.has(existing.id)) return { ...existing, attached: true }
 
         const spec = yield* registry.get(existing.provider)
         if (!spec?.interactive) {
@@ -544,6 +564,7 @@ export const TargetSessionManagerLive = Layer.effect(
           attributes: { "arc.target_session_id": req.sessionId },
         }),
       )
+
 
     const bindNative = (
       targetSessionId: string,

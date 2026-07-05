@@ -35,6 +35,10 @@ const providers: ReadonlyArray<ProviderSpec> = [
       promptInjectionMode: "stdin-after-start",
       readyPromptGlyph: "›",
     },
+    // Drive codex directly over the app-server JSON-RPC protocol (see
+    // ingest/providers/codex-appserver/driver.ts) — additive to the scraper +
+    // TUI paths above.
+    appServer: { launchCmd: "codex", args: ["app-server"] },
   },
   {
     kind: "cursor",

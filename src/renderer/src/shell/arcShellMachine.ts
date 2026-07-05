@@ -28,6 +28,9 @@ export interface ShellSessionRef {
   readonly provider: string
   readonly chatId: ChatId
   readonly attached: boolean
+  /** `rpc` (app-server, no terminal) or `pty`/absent (terminal). Focus skips the
+   * terminal pane for an rpc session so it doesn't mount an empty xterm. */
+  readonly runtime?: "pty" | "rpc"
 }
 
 // Layout is *where* things render — three named regions, each holding a product
@@ -112,6 +115,12 @@ export interface ArcShellContext {
   readonly selection: ShellSelection
   readonly panes: ReadonlyArray<ShellPane>
   readonly detachedSessionId?: TargetId
+  /** The current composer target — which target the user is talking to — set on
+   * every focus/bind regardless of runtime, and followed on pane lifecycle. The
+   * PTY-pane-focus half lives in `selection.terminalPaneId`; this is the other
+   * half, so a paneless (rpc/SDK) target can be current too. Live runtime state,
+   * not persisted; resolved against the live session list in the selector. */
+  readonly activeTargetId?: TargetId
 }
 
 // One-shot imperative signals the shell fires alongside its state transitions.
@@ -272,6 +281,9 @@ const selectChat = (
     sessionId: undefined,
     chatByWorkspace: { ...context.selection.chatByWorkspace, [workspaceId]: chatId },
   },
+  // Switching chats drops the composer target; focus handlers re-set it, and a
+  // bare chat switch falls back to the first attached in-chat target.
+  activeTargetId: undefined,
   layout: showCenter(context.layout, { kind: "chat" }),
 })
 
@@ -308,6 +320,7 @@ const attachSessionPane = (
       layout: { ...base.layout, right },
       selection: { ...base.selection, terminalPaneId: existing.id },
       detachedSessionId: undefined,
+      activeTargetId: session.id,
     }
   }
   const pane: ShellPane = {
@@ -323,6 +336,7 @@ const attachSessionPane = (
     panes: [...base.panes, pane],
     selection: { ...base.selection, terminalPaneId: pane.id },
     detachedSessionId: undefined,
+    activeTargetId: session.id,
   }
 }
 
@@ -432,6 +446,7 @@ export const arcShellMachine = createMachine({
               return {
                 panes: context.panes.filter((pane) => pane.id !== event.paneId),
                 selection: { ...context.selection, terminalPaneId: duplicate.id },
+                activeTargetId: event.sessionId,
               }
             }
             return {
@@ -440,6 +455,7 @@ export const arcShellMachine = createMachine({
                   ? { ...pane, sessionId: event.sessionId, resumeSessionId: undefined }
                   : pane,
               ),
+              activeTargetId: event.sessionId,
             }
           }),
         },
@@ -479,6 +495,20 @@ export const arcShellMachine = createMachine({
           // bare action list.
           actions: enqueueActions(({ enqueue, event }) => {
             enqueue.assign(({ context, event }) => {
+              // rpc (app-server): no terminal — mounting a pane shows an empty
+              // xterm (a stray cursor). Focus makes it the composer target and
+              // surfaces the chat; the right terminal region is left untouched
+              // (it's a passive view, not a mirror of the addressee).
+              if (event.session.runtime === "rpc") {
+                const base = event.workspaceId
+                  ? selectChat(context, event.workspaceId, event.session.chatId)
+                  : { ...context, layout: showCenter(context.layout, { kind: "chat" as const }) }
+                return {
+                  ...base,
+                  detachedSessionId: undefined,
+                  activeTargetId: event.session.id,
+                }
+              }
               // Detached: show the resume prompt instead of mounting a pane — keep
               // the session selected but don't grab the terminal (the emit below
               // is gated on `attached`). Live: find-or-create the pane.
@@ -507,7 +537,11 @@ export const arcShellMachine = createMachine({
                 paneId: event.paneId,
               })
             })
-            if (event.type === "SESSION_FOCUSED" && event.session.attached) {
+            if (
+              event.type === "SESSION_FOCUSED" &&
+              event.session.attached &&
+              event.session.runtime !== "rpc"
+            ) {
               enqueue.emit({ type: "focusTerminal" })
             }
           }),
@@ -536,6 +570,13 @@ export const arcShellMachine = createMachine({
                 context.detachedSessionId === event.sessionId
                   ? undefined
                   : context.detachedSessionId,
+              // Follow the composer target to the newly-active pane's session only
+              // if the exiting target *was* current — never clobber an active rpc
+              // target just because a background PTY pane closed.
+              activeTargetId:
+                context.activeTargetId === event.sessionId
+                  ? panes.find((pane) => pane.id === terminalPaneId)?.sessionId
+                  : context.activeTargetId,
             }
           }),
         },
