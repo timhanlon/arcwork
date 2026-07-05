@@ -470,6 +470,9 @@ export const ChatMessageServiceLive = Layer.effect(
             ),
             Effect.ignore,
           )
+          // The optimistic echo already published to show the bubble; publish the
+          // rollback too, or the renderer keeps showing a message whose row is gone.
+          yield* PubSub.publish(updates, { chatId: req.chatId })
           return yield* Effect.fail(
             arcRequestError(
               `Target session "${stored.provider}" is not attached — prompt was not delivered`,
