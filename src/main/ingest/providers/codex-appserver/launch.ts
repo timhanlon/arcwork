@@ -2,22 +2,11 @@ import { Effect, type Scope } from "effect"
 import type { AppServerCapability } from "../../../../shared/provider.js"
 import { IngestStore } from "../../db/store.js"
 import {
-  type CodexAppServerDriver,
-  CodexDriverError,
-  type CodexDriverOptions,
-  makeCodexAppServerDriver,
-} from "./driver.js"
-
-export interface CodexLaunchParams {
-  readonly cwd: string
-  readonly model?: string
-  readonly sandbox?: CodexDriverOptions["sandbox"]
-  readonly approvalPolicy?: CodexDriverOptions["approvalPolicy"]
-  readonly env?: Record<string, string>
-  readonly clientName?: string
-  /** Rejoin an existing thread by id (`thread/resume`) instead of starting fresh. */
-  readonly resumeThreadId?: string
-}
+  type AppServerDriver,
+  AppServerDriverError,
+  type AppServerLaunchParams,
+} from "../app-server-driver.js"
+import { makeCodexAppServerDriver } from "./driver.js"
 
 /**
  * Launch a codex app-server driver from a provider's {@link AppServerCapability}
@@ -32,8 +21,8 @@ export interface CodexLaunchParams {
  */
 export const launchCodexAppServerSession = (
   capability: AppServerCapability,
-  params: CodexLaunchParams,
-): Effect.Effect<CodexAppServerDriver, CodexDriverError, Scope.Scope | IngestStore> =>
+  params: AppServerLaunchParams,
+): Effect.Effect<AppServerDriver, AppServerDriverError, Scope.Scope | IngestStore> =>
   Effect.gen(function* () {
     const store = yield* IngestStore
     const driver = yield* makeCodexAppServerDriver({
@@ -53,7 +42,7 @@ export const launchCodexAppServerSession = (
         Effect.tap((result) =>
           store
             .replaceSession(result.rows)
-            .pipe(Effect.mapError((cause) => new CodexDriverError({ message: "persist turn failed", cause }))),
+            .pipe(Effect.mapError((cause) => new AppServerDriverError({ message: "persist turn failed", cause }))),
         ),
       )
 

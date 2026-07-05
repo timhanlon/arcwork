@@ -1,13 +1,18 @@
-import { Data, Effect, Option, Queue, type Scope, Stream, SubscriptionRef } from "effect"
-import type { ExtractedRows } from "../../db/schema.js"
+import { Effect, Option, Queue, type Scope, Stream, SubscriptionRef } from "effect"
+import {
+  type AppServerDriver,
+  AppServerDriverError,
+  type PendingApproval,
+  type TurnResult,
+} from "../app-server-driver.js"
 import { obj, str } from "../../extract/json.js"
 import { normalizeAppServerThread } from "./normalize.js"
 import { type ApprovalRequestParams, decodeApprovalParams, decodeThreadStart } from "./protocol.js"
 import { type AppServerTransport, type AppServerTransportError, makeAppServerTransport } from "./transport.js"
 
 /**
- * The codex app-server driver: the one place that knows the protocol. It owns a
- * live `codex app-server` process (via the generic transport), runs the
+ * The codex app-server driver: the one place that knows the codex dialect. It
+ * owns a live `codex app-server` process (via the generic transport), runs the
  * `initialize → thread/start → turn/start` handshake, folds each turn's
  * `item/completed` + `thread/tokenUsage/updated` stream into the shared
  * `ExtractedRows` (via {@link normalizeAppServerThread}), and runs the approval
@@ -16,43 +21,9 @@ import { type AppServerTransport, type AppServerTransportError, makeAppServerTra
  *
  * It is a *service* that owns process + thread state, not an `AgentProvider`
  * (whose `collect` is a stateless parse pass). Wire types never escape this file:
- * callers see `ExtractedRows`, a `PendingApproval` list, and a turn status.
+ * callers see the dialect-neutral {@link AppServerDriver} — `ExtractedRows`, a
+ * `PendingApproval` list, and a turn status.
  */
-export class CodexDriverError extends Data.TaggedError("CodexDriverError")<{
-  readonly message: string
-  readonly cause?: unknown
-}> {}
-
-/** An outstanding approval request — the pending-input signal for the app-server path. */
-export interface PendingApproval {
-  /** The JSON-RPC request id — the reliable routing key for `answerApproval`. */
-  readonly id: number | string
-  /** Codex's approval handle when present (commandExecution only) — display/correlation detail. */
-  readonly approvalId: string | null
-  /** Links to the exact tool-call item already in the projection. */
-  readonly itemId: string | null
-  readonly command: string | null
-  /** Server-supplied allowable answers; the UI offers these verbatim. */
-  readonly availableDecisions: ReadonlyArray<unknown>
-}
-
-export interface TurnResult {
-  /** `completed` | `interrupted` | `failed` | `unknown`. */
-  readonly status: string
-  /** The session's cumulative rows through this turn — ready for `IngestStore.replaceSession`. */
-  readonly rows: ExtractedRows
-}
-
-export interface CodexAppServerDriver {
-  readonly threadId: string
-  /** Send a user turn and resolve once it completes, with the session's cumulative rows + status. */
-  readonly runTurn: (text: string) => Effect.Effect<TurnResult, CodexDriverError>
-  /** The current outstanding approvals; subscribe via `.changes` for the live signal. */
-  readonly pendingApprovals: SubscriptionRef.SubscriptionRef<ReadonlyArray<PendingApproval>>
-  /** Answer an approval with a server-offered decision (pass it through verbatim). */
-  readonly answerApproval: (id: number | string, decision: unknown) => Effect.Effect<void, CodexDriverError>
-}
-
 export interface CodexDriverOptions {
   readonly cwd: string
   readonly model?: string
@@ -84,12 +55,12 @@ type TurnSignal = { readonly kind: "completed"; readonly outcome: TurnOutcome } 
 
 const wrap =
   (message: string) =>
-  <A, R>(effect: Effect.Effect<A, AppServerTransportError, R>): Effect.Effect<A, CodexDriverError, R> =>
-    effect.pipe(Effect.mapError((cause) => new CodexDriverError({ message, cause })))
+  <A, R>(effect: Effect.Effect<A, AppServerTransportError, R>): Effect.Effect<A, AppServerDriverError, R> =>
+    effect.pipe(Effect.mapError((cause) => new AppServerDriverError({ message, cause })))
 
 export const makeCodexAppServerDriver = (
   options: CodexDriverOptions,
-): Effect.Effect<CodexAppServerDriver, CodexDriverError, Scope.Scope> =>
+): Effect.Effect<AppServerDriver, AppServerDriverError, Scope.Scope> =>
   Effect.gen(function* () {
     const transport: AppServerTransport = yield* makeAppServerTransport({
       command: options.command ?? "codex",
@@ -120,7 +91,7 @@ export const makeCodexAppServerDriver = (
     const thread = decodeThreadStart(started)
     if (Option.isNone(thread)) {
       return yield* Effect.fail(
-        new CodexDriverError({ message: `${method} returned no thread id`, cause: started }),
+        new AppServerDriverError({ message: `${method} returned no thread id`, cause: started }),
       )
     }
     const threadId = thread.value.thread.id
@@ -136,7 +107,7 @@ export const makeCodexAppServerDriver = (
     // Single-consumer, so the mutable accumulators need no locking.
     const items: Array<unknown> = []
     const usage: Array<unknown> = []
-    yield* transport.notifications.pipe(
+    yield* Stream.fromQueue(transport.notifications).pipe(
       Stream.runForEach((notification) =>
         Effect.gen(function* () {
           switch (notification.method) {
@@ -185,7 +156,7 @@ export const makeCodexAppServerDriver = (
     // Approvals: record each `requestApproval` as a pending-input signal. We do
     // not auto-answer — the UI (or a headless policy) calls `answerApproval`.
     // Any other server request is answered emptily so the server never blocks.
-    yield* transport.serverRequests.pipe(
+    yield* Stream.fromQueue(transport.serverRequests).pipe(
       Stream.runForEach((request) =>
         Effect.gen(function* () {
           if (!request.method.endsWith("requestApproval")) {
@@ -208,7 +179,7 @@ export const makeCodexAppServerDriver = (
       Effect.forkScoped,
     )
 
-    const runTurn = (text: string): Effect.Effect<TurnResult, CodexDriverError> =>
+    const runTurn = (text: string): Effect.Effect<TurnResult, AppServerDriverError> =>
       Effect.gen(function* () {
         yield* transport
           .request("turn/start", { threadId, input: [{ type: "text", text }] })
@@ -216,7 +187,7 @@ export const makeCodexAppServerDriver = (
         const signal = yield* Queue.take(turnOutcomes)
         if (signal.kind === "aborted") {
           return yield* Effect.fail(
-            new CodexDriverError({ message: "codex app-server exited before the turn completed" }),
+            new AppServerDriverError({ message: "codex app-server exited before the turn completed" }),
           )
         }
         const outcome = signal.outcome
@@ -229,7 +200,7 @@ export const makeCodexAppServerDriver = (
         return { status: outcome.status, rows }
       })
 
-    const answerApproval = (id: number | string, decision: unknown): Effect.Effect<void, CodexDriverError> =>
+    const answerApproval = (id: number | string, decision: unknown): Effect.Effect<void, AppServerDriverError> =>
       transport
         .respond(id, { decision })
         .pipe(

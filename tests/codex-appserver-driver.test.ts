@@ -1,9 +1,7 @@
 import { Effect, type Scope, Stream, SubscriptionRef } from "effect"
 import { describe, expect, it } from "vitest"
-import {
-  CodexDriverError,
-  makeCodexAppServerDriver,
-} from "../src/main/ingest/providers/codex-appserver/driver.js"
+import { AppServerDriverError } from "../src/main/ingest/providers/app-server-driver.js"
+import { makeCodexAppServerDriver } from "../src/main/ingest/providers/codex-appserver/driver.js"
 
 // A scripted thread/turn peer (stands in for `codex app-server`). It completes
 // the handshake, then on `turn/start` streams a user item and asks for approval
@@ -152,7 +150,7 @@ describe("codex app-server driver", () => {
           // The peer acks turn/start then exits before turn/completed. runTurn must
           // resolve to a failure (via the aborted signal), not block on the queue.
           const failure = yield* Effect.flip(driver.runTurn("hi"))
-          expect(failure).toBeInstanceOf(CodexDriverError)
+          expect(failure).toBeInstanceOf(AppServerDriverError)
         }),
       ),
     15000,

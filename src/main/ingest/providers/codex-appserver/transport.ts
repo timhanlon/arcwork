@@ -4,10 +4,12 @@ import { Data, Deferred, Effect, Queue, type Scope, Stream } from "effect"
 
 /**
  * A generic newline-delimited JSON-RPC 2.0 client over a child process's stdio —
- * the transport `codex app-server` speaks (`--listen stdio://`, the default).
- * Deliberately Codex-agnostic: it knows only the three JSON-RPC message shapes,
- * so the codex-specific method names and payload schemas live one layer up in
- * the adapter. Framing omits the `"jsonrpc":"2.0"` header, matching the server.
+ * the transport both `codex app-server` and Cursor's ACP (`cursor-agent acp`)
+ * speak. Deliberately dialect-agnostic: it knows only the three JSON-RPC message
+ * shapes, so the per-dialect method names and payload schemas live one layer up
+ * in the adapter (codex-appserver / cursor-acp). Every outbound frame carries the
+ * `"jsonrpc":"2.0"` header — ACP requires it and codex app-server tolerates it
+ * (verified against codex-cli 0.142.x), so there is no framing asymmetry.
  *
  * Three inbound shapes are routed:
  *   - **response** — has `id` + (`result`|`error`), no `method` → resolves the
@@ -43,6 +45,12 @@ export interface JsonRpcServerRequest {
   readonly params: unknown
 }
 
+export interface JsonRpcErrorObject {
+  readonly code: number
+  readonly message: string
+  readonly data?: unknown
+}
+
 export interface AppServerTransport {
   /** Send a request and await its response `result` (decode with Schema). Fails on a JSON-RPC error or process death. */
   readonly request: (method: string, params?: unknown) => Effect.Effect<unknown, AppServerTransportError>
@@ -50,10 +58,22 @@ export interface AppServerTransport {
   readonly notify: (method: string, params?: unknown) => Effect.Effect<void, AppServerTransportError>
   /** Answer a server→client request (e.g. an approval decision). */
   readonly respond: (id: IdKey, result: unknown) => Effect.Effect<void, AppServerTransportError>
-  /** Server notifications, in arrival order. Ends when the process exits. */
-  readonly notifications: Stream.Stream<JsonRpcNotification>
-  /** Server→client requests, in arrival order. Ends when the process exits. */
-  readonly serverRequests: Stream.Stream<JsonRpcServerRequest>
+  /**
+   * Reject a server→client request with a JSON-RPC error — for a blocking request
+   * the client cannot fulfil (e.g. ACP's `cursor/ask_question`), where answering
+   * with an empty `{}` result would corrupt it.
+   */
+  readonly respondError: (id: IdKey, error: JsonRpcErrorObject) => Effect.Effect<void, AppServerTransportError>
+  /**
+   * Server notifications, in arrival order. Exposed as the raw queue (not a
+   * Stream) so a caller can `Queue.takeAll` the currently-buffered set without
+   * blocking — the ACP driver drains `session/load` replay this way. Shut down
+   * on process exit, so a `Stream.fromQueue` fold ends (and a blocked `take` is
+   * interrupted) when the server dies.
+   */
+  readonly notifications: Queue.Dequeue<JsonRpcNotification>
+  /** Server→client requests, in arrival order. Shut down on process exit. */
+  readonly serverRequests: Queue.Dequeue<JsonRpcServerRequest>
 }
 
 export interface AppServerTransportOptions {
@@ -191,7 +211,9 @@ export const makeAppServerTransport = (
     const writeLine = (payload: Rec): Effect.Effect<void, AppServerTransportError> =>
       Effect.try({
         try: () => {
-          stdin.write(`${JSON.stringify(payload)}\n`)
+          // The `"jsonrpc":"2.0"` header on every outbound frame — required by ACP,
+          // tolerated by codex app-server (see the module doc), so always emitted.
+          stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...payload })}\n`)
         },
         catch: (cause) => new AppServerTransportError({ message: "write to app-server failed", cause }),
       })
@@ -220,11 +242,18 @@ export const makeAppServerTransport = (
     const respond = (id: IdKey, result: unknown): Effect.Effect<void, AppServerTransportError> =>
       closed ? Effect.fail(closed) : writeLine({ id, result })
 
+    const respondError = (
+      id: IdKey,
+      error: JsonRpcErrorObject,
+    ): Effect.Effect<void, AppServerTransportError> =>
+      closed ? Effect.fail(closed) : writeLine({ id, error: { ...error } })
+
     return {
       request,
       notify,
       respond,
-      notifications: Stream.fromQueue(notifications),
-      serverRequests: Stream.fromQueue(serverRequests),
+      respondError,
+      notifications,
+      serverRequests,
     } satisfies AppServerTransport
   })

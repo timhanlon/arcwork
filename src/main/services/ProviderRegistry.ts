@@ -66,6 +66,10 @@ const providers: ReadonlyArray<ProviderSpec> = [
         { match: "Press any key to log in", key: "\r" },
       ],
     },
+    // Drive cursor-agent directly over its ACP (Agent Client Protocol) JSON-RPC
+    // dialect (see ingest/providers/cursor-acp/driver.ts) — additive to the
+    // scraper + TUI paths above, the cursor sibling of codex's appServer.
+    appServer: { launchCmd: "cursor-agent", args: ["acp"], protocol: "acp" },
   },
   {
     kind: "pi",

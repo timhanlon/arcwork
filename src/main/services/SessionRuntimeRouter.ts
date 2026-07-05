@@ -4,7 +4,7 @@ import { newArcId } from "../../shared/ids.js"
 import type { TargetSession } from "../../shared/instance.js"
 import { ArcStore } from "../db/store.js"
 import type { ExtractedRows } from "../ingest/db/schema.js"
-import type { CodexDriverError } from "../ingest/providers/codex-appserver/driver.js"
+import type { AppServerDriverError } from "../ingest/providers/app-server-driver.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { ChatService } from "./ChatService.js"
 import { ProviderRegistry } from "./ProviderRegistry.js"
@@ -38,16 +38,16 @@ export class SessionRuntimeRouter extends Context.Service<
   {
     readonly launch: (
       req: LaunchRequest,
-    ) => Effect.Effect<TargetSession, ArcRequestError | SqlError | CodexDriverError>
+    ) => Effect.Effect<TargetSession, ArcRequestError | SqlError | AppServerDriverError>
     /** Resume a session, into `pty` (default) or `rpc` (rejoin the app-server
      * thread by its persisted native id) per `req.runtime`. */
     readonly resume: (
       req: ResumeRequest,
-    ) => Effect.Effect<TargetSession, ArcRequestError | SqlError | CodexDriverError>
+    ) => Effect.Effect<TargetSession, ArcRequestError | SqlError | AppServerDriverError>
     /** Route a submit; `rows` is present for an rpc turn (caller projects it). */
     readonly submit: (
       req: SubmitRequest,
-    ) => Effect.Effect<{ readonly accepted: boolean; readonly rows?: ExtractedRows }, CodexDriverError>
+    ) => Effect.Effect<{ readonly accepted: boolean; readonly rows?: ExtractedRows }, AppServerDriverError>
     readonly stop: (req: StopRequest) => Effect.Effect<{ readonly stopped: boolean }>
     /** Whether an rpc runtime owns this session id (used to skip PTY-only checks). */
     readonly ownsRpc: (targetSessionId: string) => Effect.Effect<boolean>
@@ -102,6 +102,7 @@ export const SessionRuntimeRouterLive = Layer.effect(
           cwd,
           command: spec.appServer.launchCmd,
           args: spec.appServer.args,
+          protocol: spec.appServer.protocol,
           sandbox: "workspace-write",
           approvalPolicy: "on-request",
         })
@@ -162,6 +163,7 @@ export const SessionRuntimeRouterLive = Layer.effect(
           cwd: row.cwd,
           command: spec.appServer.launchCmd,
           args: spec.appServer.args,
+          protocol: spec.appServer.protocol,
           sandbox: "workspace-write",
           approvalPolicy: "on-request",
           resumeThreadId: row.nativeSessionId,

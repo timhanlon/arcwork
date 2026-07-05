@@ -3,12 +3,11 @@ import * as Semaphore from "effect/Semaphore"
 import type { ChatId, TargetId } from "../../shared/ids.js"
 import type { TargetOrigin, TargetSession } from "../../shared/instance.js"
 import type { ExtractedRows } from "../ingest/db/schema.js"
-import type {
-  CodexAppServerDriver,
-  CodexDriverError,
-  CodexDriverOptions,
-} from "../ingest/providers/codex-appserver/driver.js"
+import type { AppServerCapability } from "../../shared/provider.js"
+import type { AppServerDriver, AppServerDriverError } from "../ingest/providers/app-server-driver.js"
+import type { CodexDriverOptions } from "../ingest/providers/codex-appserver/driver.js"
 import { launchCodexAppServerSession } from "../ingest/providers/codex-appserver/launch.js"
+import { launchCursorAcpSession } from "../ingest/providers/cursor-acp/launch.js"
 import { IngestStore } from "../ingest/db/store.js"
 import { CodexDriverRegistry } from "./CodexDriverRegistry.js"
 
@@ -28,6 +27,8 @@ export interface RpcLaunchRequest {
   readonly cwd: string
   readonly command: string
   readonly args: ReadonlyArray<string>
+  /** Which dialect the launch command speaks — picks the driver factory. Defaults to codex. */
+  readonly protocol?: AppServerCapability["protocol"]
   readonly model?: string
   readonly sandbox?: CodexDriverOptions["sandbox"]
   readonly approvalPolicy?: CodexDriverOptions["approvalPolicy"]
@@ -56,7 +57,7 @@ export class RpcSessionManager extends Context.Service<
      * turns, register its approvals. Returns the `TargetSession` with its
      * `nativeSessionId` bound to the driver's thread id — the caller persists that
      * so the timeline projection can resolve the target by (provider, native id). */
-    readonly launch: (req: RpcLaunchRequest) => Effect.Effect<TargetSession, CodexDriverError>
+    readonly launch: (req: RpcLaunchRequest) => Effect.Effect<TargetSession, AppServerDriverError>
     /** Run a user turn against a launched session. `accepted:false` if unknown;
      * `rows` is the session's cumulative rows for the caller to project. */
     readonly submit: (req: {
@@ -64,7 +65,7 @@ export class RpcSessionManager extends Context.Service<
       readonly text: string
     }) => Effect.Effect<
       { readonly accepted: boolean; readonly status?: string; readonly rows?: ExtractedRows },
-      CodexDriverError
+      AppServerDriverError
     >
     /** Tear a session down: closes its scope (kills driver, deregisters approvals). */
     readonly stop: (targetSessionId: string) => Effect.Effect<{ readonly stopped: boolean }>
@@ -84,7 +85,7 @@ export class RpcSessionManager extends Context.Service<
 >()("arcwork/RpcSessionManager") {}
 
 interface LiveRpcSession {
-  readonly driver: CodexAppServerDriver
+  readonly driver: AppServerDriver
   readonly scope: Scope.Closeable
   /** Serializes turns for this session: the driver folds one turn at a time
    * (unkeyed turn outcomes), so concurrent submits would misattribute completions. */
@@ -120,7 +121,7 @@ export const RpcSessionManagerLive = Layer.effect(
         return next
       })
 
-    const launch = (req: RpcLaunchRequest): Effect.Effect<TargetSession, CodexDriverError> =>
+    const launch = (req: RpcLaunchRequest): Effect.Effect<TargetSession, AppServerDriverError> =>
       launchLock.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* SubscriptionRef.get(store)
@@ -129,9 +130,14 @@ export const RpcSessionManagerLive = Layer.effect(
 
         // Child of the layer scope: closes on `stop` or on app quit.
         const scope = yield* Scope.fork(parentScope)
+        // Pick the driver factory by dialect. Both speak the newline-delimited
+        // JSON-RPC transport and return the same {@link AppServerDriver}, so only
+        // the handshake/fold differs — the manager below is dialect-agnostic.
+        const launchSession =
+          req.protocol === "acp" ? launchCursorAcpSession : launchCodexAppServerSession
         const build = Effect.gen(function* () {
-          const driver = yield* launchCodexAppServerSession(
-            { launchCmd: req.command, args: req.args },
+          const driver = yield* launchSession(
+            { launchCmd: req.command, args: req.args, protocol: req.protocol },
             {
               cwd: req.cwd,
               model: req.model,

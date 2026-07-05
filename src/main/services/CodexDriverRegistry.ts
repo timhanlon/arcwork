@@ -1,9 +1,9 @@
 import { Context, Effect, Layer, type Scope, Stream, SubscriptionRef } from "effect"
 import type {
-  CodexAppServerDriver,
-  CodexDriverError,
+  AppServerDriver,
+  AppServerDriverError,
   PendingApproval,
-} from "../ingest/providers/codex-appserver/driver.js"
+} from "../ingest/providers/app-server-driver.js"
 
 /** The live approvals awaiting an answer for one session. */
 export interface SessionApprovals {
@@ -30,14 +30,14 @@ export class CodexDriverRegistry extends Context.Service<
     readonly register: (params: {
       readonly chatId: string
       readonly targetSessionId: string
-      readonly driver: CodexAppServerDriver
+      readonly driver: AppServerDriver
     }) => Effect.Effect<void, never, Scope.Scope>
     /** Route an approval answer (by JSON-RPC request id) to the session's driver. */
     readonly answerApproval: (
       targetSessionId: string,
       requestId: number | string,
       decision: unknown,
-    ) => Effect.Effect<void, CodexDriverError>
+    ) => Effect.Effect<void, AppServerDriverError>
     /** Sessions with outstanding approvals (empty sessions omitted). */
     readonly pending: Effect.Effect<ReadonlyArray<SessionApprovals>>
     /** Reactive view of `pending`: the current aggregate, then every change. */
@@ -48,7 +48,7 @@ export class CodexDriverRegistry extends Context.Service<
 export const CodexDriverRegistryLive = Layer.effect(
   CodexDriverRegistry,
   Effect.gen(function* () {
-    const drivers = new Map<string, { readonly chatId: string; readonly driver: CodexAppServerDriver }>()
+    const drivers = new Map<string, { readonly chatId: string; readonly driver: AppServerDriver }>()
     const current = new Map<string, SessionApprovals>()
     const state = yield* SubscriptionRef.make<ReadonlyArray<SessionApprovals>>([])
 
@@ -63,7 +63,7 @@ export const CodexDriverRegistryLive = Layer.effect(
     const register = (params: {
       readonly chatId: string
       readonly targetSessionId: string
-      readonly driver: CodexAppServerDriver
+      readonly driver: AppServerDriver
     }) =>
       Effect.gen(function* () {
         const { chatId, targetSessionId, driver } = params
