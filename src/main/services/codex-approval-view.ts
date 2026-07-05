@@ -1,16 +1,24 @@
 import type { AppServerApproval, AppServerApprovalDecision } from "../../shared/codex-approval.js"
-import { obj } from "../ingest/extract/json.js"
+import { obj, str } from "../ingest/extract/json.js"
 import type { SessionApprovals } from "./CodexDriverRegistry.js"
 
 /**
- * Normalize one raw server decision into a renderer button. A string decision
- * (`"accept"`) labels itself; an object decision
- * (`{ acceptWithExecpolicyAmendment: {…} }`) labels by its key. `payload` is the
- * decision re-encoded as JSON so it round-trips to the driver unchanged.
+ * Normalize one raw server decision into a renderer button, spanning both
+ * dialects' answer models:
+ *   - **ACP** — a `{ optionId, name, kind }` option: label by `name`, and encode
+ *     `payload` as just the `optionId` string, so answering sends that id back
+ *     (the ACP driver wraps it as `{ outcome: { outcome: "selected", optionId } }`).
+ *   - **codex** — an opaque decision: a string (`"accept"`) labels itself; a
+ *     rule-carrying object (`{ acceptWithExecpolicyAmendment: {…} }`) labels by
+ *     its key. `payload` is the whole decision JSON, echoed back verbatim.
  */
 const decisionView = (decision: unknown): AppServerApprovalDecision => {
-  const label =
-    typeof decision === "string" ? decision : (Object.keys(obj(decision) ?? {})[0] ?? "decision")
+  const record = obj(decision)
+  const optionId = str(record?.["optionId"])
+  if (optionId) {
+    return { label: str(record?.["name"]) ?? optionId, payload: JSON.stringify(optionId) }
+  }
+  const label = typeof decision === "string" ? decision : (Object.keys(record ?? {})[0] ?? "decision")
   return { label, payload: JSON.stringify(decision) }
 }
 

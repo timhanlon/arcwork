@@ -457,7 +457,7 @@ export const ChatMessageServiceLive = Layer.effect(
         const delivery = yield* router
           .submit({ instanceId: req.targetSessionId, text })
           .pipe(
-            Effect.catchTag("CodexDriverError", (e) =>
+            Effect.catchTag("AppServerDriverError", (e) =>
               Effect.logWarning(`rpc turn failed (${req.targetSessionId}): ${e.message}`).pipe(
                 Effect.as({ accepted: false as const }),
               ),

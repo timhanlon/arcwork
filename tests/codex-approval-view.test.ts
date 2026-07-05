@@ -45,6 +45,33 @@ describe("codex approval projection", () => {
     expect(second.command).toBeNull()
   })
 
+  it("labels ACP option decisions by name and answers with the optionId", () => {
+    const acp: ReadonlyArray<SessionApprovals> = [
+      {
+        chatId: "chat_a",
+        targetSessionId: "target_a",
+        approvals: [
+          {
+            id: 0,
+            approvalId: null,
+            itemId: "tool_1",
+            command: "echo hi",
+            availableDecisions: [
+              { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+              { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+            ],
+          },
+        ],
+      },
+    ]
+    const view = projectApprovals(acp)
+    const decisions = view[0]!.decisions
+    expect(decisions.map((d) => d.label)).toEqual(["Allow once", "Reject"])
+    // The payload is just the optionId, so answering sends the id (not the whole
+    // option object) — what the ACP driver's `{ outcome: { optionId } }` needs.
+    expect(parseDecisionPayload(decisions[0]!.payload)).toBe("allow-once")
+  })
+
   it("round-trips a decision payload back to its raw value", () => {
     const view = projectApprovals(sessions)
     const amend = view[0]!.decisions[1]!

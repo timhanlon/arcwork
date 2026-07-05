@@ -76,7 +76,7 @@ describe("codex app-server transport", () => {
           expect(failure).toBeInstanceOf(AppServerTransportError)
 
           // the peer's server→client request (buffered during initialize) → answer it
-          yield* t.serverRequests.pipe(
+          yield* Stream.fromQueue(t.serverRequests).pipe(
             Stream.take(1),
             Stream.runForEach((req) => {
               expect(req.id).toBe(777)
@@ -87,7 +87,7 @@ describe("codex app-server transport", () => {
           )
 
           // turn/started (from initialize) then approval/echo (proof respond landed)
-          const notifs = yield* t.notifications.pipe(Stream.take(2), Stream.runCollect)
+          const notifs = yield* Stream.fromQueue(t.notifications).pipe(Stream.take(2), Stream.runCollect)
           expect(notifs.map((n) => n.method)).toEqual(["turn/started", "approval/echo"])
           expect(notifs[1]?.params).toMatchObject({ decision: "accept" })
         }),

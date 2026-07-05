@@ -89,6 +89,13 @@ export type InteractiveCapability = typeof InteractiveCapability.Type
 export const AppServerCapability = Schema.Struct({
   launchCmd: Schema.String,
   args: Schema.Array(Schema.String),
+  /**
+   * Which JSON-RPC dialect `launchCmd` speaks — the driver factory the
+   * `RpcSessionManager` picks. `codex-app-server` (default when absent) is
+   * codex's thread/turn/item protocol; `acp` is Cursor's Agent Client Protocol
+   * (session/prompt/update). Both ride the same newline-delimited transport.
+   */
+  protocol: Schema.optional(Schema.Literals(["codex-app-server", "acp"])),
 })
 export type AppServerCapability = typeof AppServerCapability.Type
 
