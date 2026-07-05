@@ -25,6 +25,19 @@ rl.on('line', (line) => {
     send({ method: 'turn/completed', params: { turn: { status: 'completed' } } })
     send({ method: 'serverRequest/resolved', params: { requestId: 501 } })
   }
+})`
+
+// Reports a per-process thread id, so two spawns are distinguishable — used to
+// prove concurrent launches of the same target id spawn exactly one driver.
+const PID_PEER = `
+const readline = require('node:readline')
+const rl = readline.createInterface({ input: process.stdin })
+const send = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+rl.on('line', (line) => {
+  if (!line.trim()) return
+  const m = JSON.parse(line)
+  if (m.method === 'initialize') send({ id: m.id, result: {} })
+  else if (m.method === 'thread/start') send({ id: m.id, result: { thread: { id: 'thr_' + process.pid } } })
 })
 `
 
@@ -130,6 +143,35 @@ describe("RpcSessionManager", () => {
           const res = yield* Fiber.join(turn)
           expect(res.accepted).toBe(true)
           expect(yield* manager.generating).toHaveLength(0)
+        }),
+      ),
+    15000,
+  )
+
+  it(
+    "serializes concurrent launches of the same id — one driver, idempotent",
+    () =>
+      run(
+        Effect.gen(function* () {
+          const manager = yield* RpcSessionManager
+          const req = {
+            chatId: arcId("chat", "chat_dup"),
+            targetSessionId: arcId("target", "dup"),
+            provider: "codex",
+            startedAt: "2026-06-11T00:00:00.000Z",
+            cwd: process.cwd(),
+            command: process.execPath,
+            args: ["-e", PID_PEER],
+          }
+          // Two concurrent launches of the same id (a double-clicked resume). The
+          // launch lock makes the idempotency check atomic, so the second returns
+          // the first's session — one process spawned, no orphaned driver. The peer
+          // reports its pid as the thread id, so a second spawn would differ.
+          const [a, b] = yield* Effect.all([manager.launch(req), manager.launch(req)], {
+            concurrency: 2,
+          })
+          expect(a.nativeSessionId).toBe(b.nativeSessionId)
+          expect(yield* manager.list).toHaveLength(1)
         }),
       ),
     15000,

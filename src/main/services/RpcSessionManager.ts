@@ -98,6 +98,12 @@ export const RpcSessionManagerLive = Layer.effect(
     const ingest = yield* IngestStore
     const parentScope = yield* Effect.scope
     const sessions = new Map<string, LiveRpcSession>()
+    // Serialize launches so the idempotency check + spawn + `sessions.set` are
+    // atomic: two concurrent resumes of the same id (a double-clicked "resume")
+    // would otherwise both pass the guard, both spawn a driver, and the second
+    // set would orphan the first scope (a leaked process). Mirrors the PTY
+    // manager's `launchLock`.
+    const launchLock = yield* Semaphore.make(1)
     // Observable `TargetSession` state, so the router can fold these into the
     // unified `WatchSessions` stream — an rpc session has no PTY registry to
     // appear in, so it lives here.
@@ -115,6 +121,7 @@ export const RpcSessionManagerLive = Layer.effect(
       })
 
     const launch = (req: RpcLaunchRequest): Effect.Effect<TargetSession, CodexDriverError> =>
+      launchLock.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* SubscriptionRef.get(store)
         const already = current.get(req.targetSessionId)
@@ -162,7 +169,8 @@ export const RpcSessionManagerLive = Layer.effect(
         }
         yield* SubscriptionRef.update(store, (m) => new Map(m).set(session.id, session))
         return session
-      })
+      }),
+      )
 
     const submit = (req: { readonly targetSessionId: string; readonly text: string }) =>
       Effect.gen(function* () {
