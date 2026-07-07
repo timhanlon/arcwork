@@ -6,6 +6,7 @@ import { Preset } from "./preset.js"
 import { Chat } from "./chat.js"
 import { ActivityEvent } from "./activity-event.js"
 import { ChatMessage } from "./chat-message.js"
+import { ChatSummary } from "./chat-summary.js"
 import { GitCommit, GitFileDiff, GitStatus, PullRequest, Worktree, WorkspaceGitContext } from "./git.js"
 import { PendingRequest } from "./chat-request.js"
 import { AppServerApproval } from "./codex-approval.js"
@@ -327,6 +328,21 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("ListChatMessages", {
     payload: { chatId: ChatId },
     success: Schema.Array(ChatMessage),
+    error: RpcError,
+  }),
+  /** Distill a chat's message timeline into a structured summary via the local
+   * LM Studio model and persist it as a `summary` graph node. Manual trigger; a
+   * re-distill with identical inputs returns the existing summary. Minutes-long
+   * when it calls the model. */
+  Rpc.make("DistillChatSummary", {
+    payload: { chatId: ChatId },
+    success: ChatSummary,
+    error: RpcError,
+  }),
+  /** The chat's most recently persisted summary, or null when none exists. */
+  Rpc.make("GetChatSummary", {
+    payload: { chatId: ChatId },
+    success: Schema.NullOr(ChatSummary),
     error: RpcError,
   }),
   /**

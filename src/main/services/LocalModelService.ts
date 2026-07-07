@@ -1,4 +1,11 @@
 import { Config, Context, Effect, Layer } from "effect"
+import {
+  chooseModel,
+  loadLmStudioConfig,
+  lmStudioTimeoutConfig,
+  withTimeout,
+  type LmStudioConfig,
+} from "./lmstudio.js"
 
 export type LocalModelStatus =
   | {
@@ -28,60 +35,21 @@ export class LocalModelService extends Context.Service<
   }
 >()("LocalModelService") {}
 
-const DEFAULT_BASE_URL = "http://localhost:1234/v1"
 const DEFAULT_TIMEOUT_MS = 10000
 const MAX_PROMPT_CHARS = 4000
 
-interface LmStudioConfig {
-  readonly enabled: boolean
-  readonly baseUrl: string
-  readonly model: string | null
+// The shared endpoint config plus this feature's own (short) completion timeout.
+interface TitleConfig extends LmStudioConfig {
   readonly timeoutMs: number
 }
 
-// Local-model support is an optional nicety, so a missing OR malformed env var
-// degrades to the safe default (orElse) rather than failing layer construction —
-// a typo in ARC_LMSTUDIO_* must never crash startup. Read once when the layer
-// builds; the values are process env, which doesn't change at runtime.
-const loadConfig = Config.all({
-  enabled: Config.boolean("ARC_LMSTUDIO_ENABLED").pipe(Config.orElse(() => Config.succeed(false))),
-  baseUrl: Config.string("ARC_LMSTUDIO_BASE_URL").pipe(Config.withDefault(DEFAULT_BASE_URL)),
-  model: Config.string("ARC_LMSTUDIO_MODEL").pipe(Config.withDefault("")),
-  timeoutMs: Config.int("ARC_LMSTUDIO_TIMEOUT_MS").pipe(Config.orElse(() => Config.succeed(DEFAULT_TIMEOUT_MS))),
-}).pipe(
-  Config.map((raw): LmStudioConfig => {
-    const model = raw.model.trim()
-    return {
-      enabled: raw.enabled,
-      baseUrl: raw.baseUrl.replace(/\/+$/, ""),
-      model: model.length > 0 ? model : null,
-      timeoutMs: raw.timeoutMs > 0 ? raw.timeoutMs : DEFAULT_TIMEOUT_MS,
-    }
-  }),
-)
-
-const withTimeout = async <A>(ms: number, f: (signal: AbortSignal) => Promise<A>): Promise<A> => {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), ms)
-  try {
-    return await f(controller.signal)
-  } finally {
-    clearTimeout(timer)
-  }
-}
+const loadConfig: Config.Config<TitleConfig> = Config.all({
+  base: loadLmStudioConfig,
+  timeoutMs: lmStudioTimeoutConfig("ARC_LMSTUDIO_TIMEOUT_MS", DEFAULT_TIMEOUT_MS),
+}).pipe(Config.map(({ base, timeoutMs }) => ({ ...base, timeoutMs })))
 
 const jsonRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
-
-const firstModelId = (payload: unknown): string | null => {
-  const data = jsonRecord(payload)?.["data"]
-  if (!Array.isArray(data)) return null
-  for (const item of data) {
-    const id = jsonRecord(item)?.["id"]
-    if (typeof id === "string" && id.trim().length > 0) return id
-  }
-  return null
-}
 
 const extractTitle = (payload: unknown): string | null => {
   const choices = jsonRecord(payload)?.["choices"]
@@ -97,9 +65,6 @@ const extractTitle = (payload: unknown): string | null => {
   if (title.length < 3) return null
   return title.length > 80 ? `${title.slice(0, 77).trimEnd()}...` : title
 }
-
-const chooseModel = (configuredModel: string | null, payload: unknown): string | null =>
-  configuredModel ?? firstModelId(payload)
 
 export const LocalModelServiceLive = Layer.effect(
   LocalModelService,

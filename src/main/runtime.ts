@@ -25,6 +25,7 @@ import { arcDbPath } from "./db/paths.js"
 import { IngestStoreLive } from "./ingest/db/store.js"
 import { WorkStoreLive } from "./work/store.js"
 import { WorkServiceLive } from "./work/service.js"
+import { ChatSummaryDistillerLive } from "./summary/distiller.js"
 import { ReadServiceLive } from "./read/service.js"
 import { ArcMcpServerLive } from "./mcp/server.js"
 import { ArcRpcServerLive } from "./rpc.js"
@@ -42,6 +43,11 @@ const StoreLive = ArcStoreLive.pipe(Layer.provide(SqliteLive))
 const IngestStoreLiveLayer = IngestStoreLive.pipe(Layer.provide(SqliteLive))
 const WorkStoreLiveLayer = WorkStoreLive.pipe(Layer.provide(SqliteLive))
 const WorkLive = WorkServiceLive.pipe(Layer.provide(Layer.mergeAll(WorkStoreLiveLayer, StoreLive)))
+// The chat-summary distiller reads chat messages from ArcStore and persists the
+// summary node/edge via WorkStore — both over the one shared SqliteClient.
+const ChatSummaryDistillerLiveLayer = ChatSummaryDistillerLive.pipe(
+  Layer.provide(Layer.mergeAll(WorkStoreLiveLayer, StoreLive)),
+)
 
 const PersistenceLayers = [StoreLive, IngestStoreLiveLayer, WorkStoreLiveLayer] as const
 
@@ -118,6 +124,7 @@ const TargetInboxLive = TargetInboxServiceLive.pipe(
 
 const DomainServiceLayers = [
   WorkLive,
+  ChatSummaryDistillerLiveLayer,
   WorkspacesLive,
   WorkspaceFilesLive,
   GitLive,

@@ -85,6 +85,8 @@ exports[`versioned migrations (ledger over node:sqlite) > pins the fresh end-sta
 [
   "index graph_edge_from: CREATE INDEX graph_edge_from ON graph_edge(from_id, type)",
   "index graph_edge_to: CREATE INDEX graph_edge_to ON graph_edge(to_id, type)",
+  "index graph_node_summary: CREATE INDEX graph_node_summary ON graph_node(kind, chat_id, created_at, id)",
+  "index graph_node_summary_idem: CREATE UNIQUE INDEX graph_node_summary_idem ON graph_node( chat_id, content_hash, json_extract(summary_json, '$.model'), json_extract(summary_json, '$.promptVersion') ) WHERE kind = 'summary'",
   "index graph_ref_kind: CREATE INDEX graph_ref_kind ON graph_ref(kind, updated_at, id)",
   "index graph_ref_update_ref: CREATE INDEX graph_ref_update_ref ON graph_ref_update(ref_id, created_at, id)",
   "index search_document_chat: CREATE INDEX search_document_chat ON search_document(chat_id, kind, updated_at, id)",
@@ -93,7 +95,7 @@ exports[`versioned migrations (ledger over node:sqlite) > pins the fresh end-sta
   "index search_document_workspace: CREATE INDEX search_document_workspace ON search_document(workspace_id, kind, updated_at, id)",
   "index work_comment_ref: CREATE INDEX work_comment_ref ON work_comment(work_ref_id, created_at, id)",
   "table graph_edge: CREATE TABLE graph_edge ( id TEXT PRIMARY KEY, type TEXT NOT NULL, from_kind TEXT NOT NULL, from_id TEXT NOT NULL, to_kind TEXT NOT NULL, to_id TEXT NOT NULL, family TEXT NOT NULL, source TEXT NOT NULL, confidence TEXT NOT NULL, note TEXT, actor TEXT, session_id TEXT, workspace_id TEXT, observed_source TEXT NOT NULL, created_at TEXT NOT NULL, schema_version INTEGER NOT NULL )",
-  "table graph_node: CREATE TABLE graph_node ( id TEXT PRIMARY KEY, kind TEXT NOT NULL, content_hash TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, labels_json TEXT NOT NULL, status TEXT NOT NULL, actor TEXT, session_id TEXT, chat_id TEXT, workspace_id TEXT, device_id TEXT, observed_source TEXT NOT NULL, created_at TEXT NOT NULL, schema_version INTEGER NOT NULL , execution_json TEXT)",
+  "table graph_node: CREATE TABLE graph_node ( id TEXT PRIMARY KEY, kind TEXT NOT NULL, content_hash TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, labels_json TEXT NOT NULL, status TEXT NOT NULL, actor TEXT, session_id TEXT, chat_id TEXT, workspace_id TEXT, device_id TEXT, observed_source TEXT NOT NULL, created_at TEXT NOT NULL, schema_version INTEGER NOT NULL , execution_json TEXT, summary_json TEXT)",
   "table graph_ref: CREATE TABLE graph_ref ( id TEXT PRIMARY KEY, kind TEXT NOT NULL, current_node_id TEXT REFERENCES graph_node(id), display_name TEXT, location TEXT, actor TEXT, workspace_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, schema_version INTEGER NOT NULL )",
   "table graph_ref_update: CREATE TABLE graph_ref_update ( id TEXT PRIMARY KEY, ref_id TEXT NOT NULL REFERENCES graph_ref(id), old_node_id TEXT, new_node_id TEXT NOT NULL REFERENCES graph_node(id), actor TEXT, session_id TEXT, workspace_id TEXT, device_id TEXT, observed_source TEXT NOT NULL, created_at TEXT NOT NULL, schema_version INTEGER NOT NULL )",
   "table search_document: CREATE TABLE search_document ( id TEXT PRIMARY KEY, ref TEXT NOT NULL, kind TEXT NOT NULL, source_kind TEXT NOT NULL, parent_ref TEXT, chat_id TEXT, workspace_id TEXT, title TEXT NOT NULL, body TEXT NOT NULL, metadata_text TEXT NOT NULL, labels_json TEXT NOT NULL DEFAULT '[]', status TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL )",

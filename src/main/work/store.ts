@@ -1,8 +1,10 @@
-import { Context, Data, Effect, Layer } from "effect"
+import { Context, Data, Effect, Layer, Schema } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import {
+  WORK_SCHEMA_VERSION,
   workMigrations,
+  type SummaryNodeRow,
   type WorkCommentRow,
   type WorkEdgeRow,
   type WorkNodeRow,
@@ -10,9 +12,58 @@ import {
   type WorkRefRow,
   type WorkRefUpdateRow,
 } from "./schema.js"
-import type { TargetId } from "../../shared/ids.js"
+import { newArcId, type ChatId, type SummaryId, type TargetId, type WorkspaceId } from "../../shared/ids.js"
 import { runMigrations } from "../db/migrator.js"
 import { latestStatus } from "./work-sql.js"
+
+/** The idempotency key for a distilled summary — a re-distill with an identical
+ * key returns the existing node instead of writing a duplicate. */
+export interface SummaryKey {
+  readonly chatId: string
+  readonly model: string
+  readonly promptVersion: number
+  readonly inputHash: string
+}
+
+// The `summary_json` metadata blob written alongside a summary node (see
+// SummaryNodeRow). Decoded best-effort on read; a corrupt blob reads as "no
+// summary" rather than throwing (mirrors parseLabels).
+const SummaryMeta = Schema.Struct({
+  model: Schema.String,
+  promptVersion: Schema.Number,
+  promptTokens: Schema.NullOr(Schema.Number),
+  completionTokens: Schema.NullOr(Schema.Number),
+  durationMs: Schema.NullOr(Schema.Number),
+})
+const decodeSummaryMeta = Schema.decodeUnknownOption(Schema.fromJsonString(SummaryMeta))
+
+interface SummaryRawRow {
+  readonly id: SummaryId
+  readonly chatId: ChatId
+  readonly workspaceId: WorkspaceId | null
+  readonly body: string
+  readonly inputHash: string
+  readonly summaryJson: string | null
+  readonly createdAt: string
+}
+
+const toSummaryRow = (raw: SummaryRawRow): SummaryNodeRow | null => {
+  const meta = raw.summaryJson ? decodeSummaryMeta(raw.summaryJson) : undefined
+  if (!meta || meta._tag === "None") return null
+  return {
+    id: raw.id,
+    chatId: raw.chatId,
+    workspaceId: raw.workspaceId,
+    body: raw.body,
+    inputHash: raw.inputHash,
+    model: meta.value.model,
+    promptVersion: meta.value.promptVersion,
+    promptTokens: meta.value.promptTokens,
+    completionTokens: meta.value.completionTokens,
+    durationMs: meta.value.durationMs,
+    createdAt: raw.createdAt,
+  }
+}
 
 /**
  * SQL layer over the work graph substrate — the low-level door (mirrors
@@ -166,6 +217,19 @@ export class WorkStore extends Context.Service<
     readonly loadComments: (
       workRefId: string,
     ) => Effect.Effect<ReadonlyArray<WorkCommentRow>, SqlError>
+    /** Insert a distilled chat-summary node plus its `summarizes` edge to the
+     * chat, atomically. Idempotent on the identity tuple (the
+     * `graph_node_summary_idem` unique index): returns `true` when this call
+     * persisted the row, `false` when an identical-key summary already won the
+     * race — the caller re-reads the winner rather than duplicating it. */
+    readonly insertSummary: (row: SummaryNodeRow) => Effect.Effect<boolean, SqlError>
+    /** The summary matching an idempotency key, or null — the guard that makes a
+     * re-distill with identical inputs return the existing summary. */
+    readonly loadSummaryByKey: (key: SummaryKey) => Effect.Effect<SummaryNodeRow | null, SqlError>
+    /** A chat's most recent summary node, or null when none exists. */
+    readonly loadLatestSummaryForChat: (
+      chatId: string,
+    ) => Effect.Effect<SummaryNodeRow | null, SqlError>
   }
 >()("arcwork/WorkStore") {}
 
@@ -500,6 +564,91 @@ export const WorkStoreLive = Layer.effect(
         WHERE work_ref_id = ${workRefId}
         ORDER BY created_at, id`
 
+    const insertSummary = (row: SummaryNodeRow) =>
+      sql.withTransaction(
+        Effect.gen(function* () {
+          const inserted = yield* sql<{ id: string }>`INSERT INTO graph_node ${sql.insert({
+            id: row.id,
+            kind: "summary",
+            contentHash: row.inputHash,
+            title: "Chat summary",
+            body: row.body,
+            labelsJson: "[]",
+            // Inert for a summary node — no ref, no status_set edge, never read by
+            // the work projection — but the column is NOT NULL, so a neutral literal.
+            status: "final",
+            actor: null,
+            sessionId: null,
+            chatId: row.chatId,
+            workspaceId: row.workspaceId,
+            deviceId: null,
+            observedSource: "rpc",
+            executionJson: null,
+            summaryJson: JSON.stringify({
+              model: row.model,
+              promptVersion: row.promptVersion,
+              promptTokens: row.promptTokens,
+              completionTokens: row.completionTokens,
+              durationMs: row.durationMs,
+            }),
+            createdAt: row.createdAt,
+            schemaVersion: WORK_SCHEMA_VERSION,
+          })} ON CONFLICT DO NOTHING RETURNING id`
+          // Lost the idempotency race: an identical-key summary already exists.
+          // Skip the edge and report the no-op so the caller returns the winner.
+          if (inserted.length === 0) return false
+          yield* sql`INSERT INTO graph_edge ${sql.insert({
+            id: newArcId("work_edge"),
+            type: "summarizes",
+            fromKind: "node",
+            fromId: row.id,
+            toKind: "external",
+            toId: row.chatId,
+            family: "provenance",
+            source: "observed",
+            confidence: "high",
+            note: null,
+            actor: null,
+            sessionId: null,
+            workspaceId: row.workspaceId,
+            observedSource: "rpc",
+            createdAt: row.createdAt,
+            schemaVersion: WORK_SCHEMA_VERSION,
+          })}`
+          return true
+        }),
+      )
+
+    const summarySelect = sql`
+        id AS "id",
+        chat_id AS "chatId",
+        workspace_id AS "workspaceId",
+        body AS "body",
+        content_hash AS "inputHash",
+        summary_json AS "summaryJson",
+        created_at AS "createdAt"
+      FROM graph_node`
+
+    const loadSummaryByKey = (key: SummaryKey) =>
+      Effect.map(
+        sql<SummaryRawRow>`SELECT ${summarySelect}
+          WHERE kind = 'summary' AND chat_id = ${key.chatId} AND content_hash = ${key.inputHash}
+            AND json_extract(summary_json, '$.model') = ${key.model}
+            AND json_extract(summary_json, '$.promptVersion') = ${key.promptVersion}
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1`,
+        (rows) => (rows[0] ? toSummaryRow(rows[0]) : null),
+      )
+
+    const loadLatestSummaryForChat = (chatId: string) =>
+      Effect.map(
+        sql<SummaryRawRow>`SELECT ${summarySelect}
+          WHERE kind = 'summary' AND chat_id = ${chatId}
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1`,
+        (rows) => (rows[0] ? toSummaryRow(rows[0]) : null),
+      )
+
     return {
       createWork,
       applyRevision,
@@ -515,6 +664,9 @@ export const WorkStoreLive = Layer.effect(
       loadEdges,
       insertComment,
       loadComments,
+      insertSummary,
+      loadSummaryByKey,
+      loadLatestSummaryForChat,
     } as const
   }),
 )

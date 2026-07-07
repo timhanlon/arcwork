@@ -22,6 +22,8 @@ export type ArcIdPrefix =
   | "work_edge"
   // a comment on a work revision node or its durable ref
   | "comment"
+  // a distilled chat summary — a graph node (kind 'summary') linked to its chat
+  | "summary"
   // a message queued for delivery into a running target session's inbox
   | "inbox"
 
@@ -101,6 +103,9 @@ export type WorkEdgeId = typeof WorkEdgeId.Type
 
 export const CommentId = ArcId("comment")
 export type CommentId = typeof CommentId.Type
+
+export const SummaryId = ArcId("summary")
+export type SummaryId = typeof SummaryId.Type
 
 export const ActivityId = ArcId("activity")
 export type ActivityId = typeof ActivityId.Type

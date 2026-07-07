@@ -14,7 +14,7 @@
 
 import { Effect } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
-import type { ChatId, CommentId, WorkEdgeId, WorkId, WorkRevId, WorkspaceId } from "../../shared/ids.js"
+import type { ChatId, CommentId, SummaryId, WorkEdgeId, WorkId, WorkRevId, WorkspaceId } from "../../shared/ids.js"
 import type { WorkPriority, WorkStatus } from "../../shared/work.js"
 import { sqlMigration, type Migrations } from "../db/migrator.js"
 import {
@@ -185,6 +185,8 @@ export type WorkEdgeType =
   | "priority_set"
   | "delegated_to"
   | "revises"
+  // links a `summary` node to the chat it distills (to_kind='external', to_id=chatId)
+  | "summarizes"
 
 /** A typed relationship between nodes/refs/externals, carrying source+confidence.
  * Also models append-only workflow *events* — a `status_set` edge points the ref
@@ -230,6 +232,32 @@ export interface WorkCommentRow {
   readonly executionJson: string | null
   readonly createdAt: string
   readonly schemaVersion: number
+}
+
+/**
+ * A distilled chat summary — a second node kind on the same substrate. Stored as
+ * a `graph_node` (kind='summary') whose `body` is the summary markdown and whose
+ * `content_hash` is the `inputHash` (sha256 of the rendered timeline); the model,
+ * prompt version, token usage, and duration ride the nullable `summary_json`
+ * metadata column. Its link to the chat is a `summarizes` edge (and the node's
+ * own `chat_id`). No ref: each distinct (chat, model, promptVersion, inputHash)
+ * is its own immutable node — a different model or reworded prompt is a new
+ * summary, not a revision of an existing one. This is the decoded logical row;
+ * the store maps it onto the graph_node columns. */
+export interface SummaryNodeRow {
+  readonly id: SummaryId
+  readonly chatId: ChatId
+  readonly workspaceId: WorkspaceId | null
+  readonly body: string
+  readonly model: string
+  readonly promptVersion: number
+  /** sha256 of the rendered timeline — the summary's content_hash and part of
+   * its idempotency key. */
+  readonly inputHash: string
+  readonly promptTokens: number | null
+  readonly completionTokens: number | null
+  readonly durationMs: number | null
+  readonly createdAt: string
 }
 
 /** The flattened ref+current-node row a queue/detail projection reads. */
@@ -465,5 +493,25 @@ export const workMigrations: Migrations = {
     `DROP TRIGGER work_comment_search_ai`,
     workCommentSearchAiTrigger({ ifNotExists: false, metadataText: "''" }),
     `ALTER TABLE work_comment DROP COLUMN kind`,
+  ),
+  // A second node kind on the substrate: distilled chat summaries. `summary_json`
+  // is a nullable per-row metadata blob (mirrors `execution_json`) so the summary
+  // model/prompt-version/usage/duration grow without further schema churn; it is
+  // null for every work node. The first index seeks a chat's summaries
+  // (latest-first) and the idempotency lookup, which pre-filters on (kind, chat_id).
+  // The second is the idempotency key itself: a partial UNIQUE index over the
+  // distiller's identity tuple (chat + input hash + model + prompt version) so two
+  // concurrent distills of the same inputs collapse to one row at the DB, not a
+  // race in the check-then-insert. Partial on `kind = 'summary'` because work
+  // revision nodes share `content_hash` and carry a null `summary_json`.
+  "0009_chat_summary_nodes": sqlMigration(
+    `ALTER TABLE graph_node ADD COLUMN summary_json TEXT`,
+    `CREATE INDEX graph_node_summary ON graph_node(kind, chat_id, created_at, id)`,
+    `CREATE UNIQUE INDEX graph_node_summary_idem ON graph_node(
+      chat_id,
+      content_hash,
+      json_extract(summary_json, '$.model'),
+      json_extract(summary_json, '$.promptVersion')
+    ) WHERE kind = 'summary'`,
   ),
 }

@@ -1,5 +1,6 @@
 import { Cause, Effect, Layer, Stream } from "effect"
 import { RpcServer } from "effect/unstable/rpc"
+import type { SqlError } from "effect/unstable/sql/SqlError"
 import { ArcRpcs, type RpcError } from "../shared/rpc.js"
 import { ElectronRpcServerProtocol } from "./rpc-transport.js"
 import { WorkspaceService } from "./services/WorkspaceService.js"
@@ -20,7 +21,8 @@ import { projectApprovals, parseDecisionPayload } from "./services/codex-approva
 import { ArtifactIngestService } from "./services/ArtifactIngestService.js"
 import { WorkService } from "./work/service.js"
 import { ReadService } from "./read/service.js"
-import { ArcRequestError } from "./errors.js"
+import { ChatSummaryDistiller, type ChatSummaryError } from "./summary/distiller.js"
+import { ArcRequestError, arcRequestError } from "./errors.js"
 
 /**
  * Wrap a handler effect with the RPC seam's observability + error policy.
@@ -60,6 +62,22 @@ const rpcEffect = <A, E, R>(tag: string, effect: Effect.Effect<A, E, R>): Effect
  * stays inline. The object key still names the rpc — the contract drives the
  * types, so a mis-shaped handler is still a compile error.
  */
+/**
+ * The distiller's tagged errors (disabled/unreachable/no-model/http/transport/
+ * malformed/empty-chat) are all expected, user-facing conditions, so surface each
+ * as an `ArcRequestError` with its own message rather than collapsing to the
+ * generic unexpected-failure text. A `SqlError` is not one of these and falls
+ * through to the seam's error branch (logged with its cause, collapsed).
+ */
+const summaryRequestError = <A, R>(
+  effect: Effect.Effect<A, ChatSummaryError | SqlError, R>,
+): Effect.Effect<A, ArcRequestError | SqlError, R> =>
+  Effect.catchIf(
+    effect,
+    (e): e is ChatSummaryError => e._tag.startsWith("arc/summary/"),
+    (e) => Effect.fail(arcRequestError(e.message)),
+  )
+
 const svc =
   <S, SR, Req, A, E, R>(
     tag: string,
@@ -162,6 +180,10 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     UpdateChatTitle: svc("UpdateChatTitle", ChatService, (_, req) => _.updateTitle(req.chatId, req.title)),
     ListChatActivity: svc("ListChatActivity", ActivityEventService, (_, req) => _.listForChat(req.chatId)),
     ListChatMessages: svc("ListChatMessages", ChatMessageService, (_, req) => _.listForChat(req.chatId)),
+    DistillChatSummary: svc("DistillChatSummary", ChatSummaryDistiller, (_, req) =>
+      summaryRequestError(_.distill(req.chatId)),
+    ),
+    GetChatSummary: svc("GetChatSummary", ChatSummaryDistiller, (_, req) => _.latest(req.chatId)),
     ReprojectChatMessages: svc("ReprojectChatMessages", ChatMessageService, (_, req) => _.reprojectChat(req.chatId)),
     ReingestWorkspaceArtifacts: svc("ReingestWorkspaceArtifacts", ArtifactIngestService, (_, req) =>
       _.ingestWorkspace(req.workspace, req.provider),
