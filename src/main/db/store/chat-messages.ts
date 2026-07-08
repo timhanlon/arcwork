@@ -350,8 +350,23 @@ export const makeChatMessageStore = (sql: SqlClient): ChatMessageStore => {
         return yield* repairAssistantTurnMessage(row, row.messageId)
       }
 
-      const existing = yield* sql<{ id: string; body: string; requestJson: string | null }>`
-        SELECT id, body, request_json AS requestJson FROM chat_messages WHERE dedup_key = ${row.dedupKey} LIMIT 1`
+      const existing = yield* sql<{
+        id: string
+        body: string
+        status: string
+        requestJson: string | null
+        model: string | null
+        occurredAt: string
+        chunkIndex: number | null
+        messageId: string | null
+        injectedFrom: string | null
+        injectedTargetMessageId: string | null
+      }>`
+        SELECT id, body, status, request_json AS requestJson, model, occurred_at AS occurredAt,
+          chunk_index AS chunkIndex, message_id AS messageId,
+          injected_from_target_session_id AS injectedFrom,
+          injected_target_message_id AS injectedTargetMessageId
+        FROM chat_messages WHERE dedup_key = ${row.dedupKey} LIMIT 1`
 
       if (mode === "insert") {
         if (existing.length > 0) return false
@@ -374,6 +389,29 @@ export const makeChatMessageStore = (sql: SqlClient): ChatMessageStore => {
       // resolution can't be reopened and a supersede can be revived; other
       // rows keep the caller's status.
       const status = requestRowStatus(requestJson) ?? row.status
+
+      // The artifact path re-projects the whole session every watch/poll tick, so
+      // most upserts rewrite a row to the values it already holds — and an
+      // unchanged UPDATE still fires the search_document -> FTS5 trigger cascade.
+      // Skip the write when nothing the UPDATE would set actually changes. For a
+      // COALESCE column the write is a no-op when the incoming value is null (keeps
+      // the existing) or already equal; occurred_at is only written by "replace".
+      if (mode === "replace" || mode === "replace_keep_time") {
+        const coalescedUnchanged = (next: string | number | null, prev: string | number | null) =>
+          next == null || next === prev
+        const unchanged =
+          body === previous.body &&
+          status === previous.status &&
+          requestJson === previous.requestJson &&
+          coalescedUnchanged(row.model, previous.model) &&
+          coalescedUnchanged(row.chunkIndex, previous.chunkIndex) &&
+          coalescedUnchanged(row.messageId, previous.messageId) &&
+          coalescedUnchanged(row.injectedFromTargetSessionId, previous.injectedFrom) &&
+          coalescedUnchanged(row.injectedTargetMessageId, previous.injectedTargetMessageId) &&
+          (mode === "replace_keep_time" || row.occurredAt === previous.occurredAt)
+        if (unchanged) return false
+      }
+
       // Injected-message attribution is written here too, not just on insert: a
       // reprojection strips the marker from `body`, so the attribution must land
       // on the same pass or the row would render as a plain user turn. COALESCE

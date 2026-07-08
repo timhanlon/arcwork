@@ -207,32 +207,77 @@ const isoWithOffset = (base: string, offsetMs: number): string | null => {
 const artifactMessageText = (message: MessageRow): string | null =>
   str(message.text) ?? str(message.thinking)
 
-const matchingProjectedMessageTime = (
-  source: MessageRow | undefined,
+// Per-pass index for tool-timestamp resolution. Without it, each tool re-scanned
+// (and re-copied) the whole message array and re-scanned the whole projected
+// transcript — O(tools x (messages + projected)) per re-projection tick. Built
+// once per pass: messages sorted by ordinal for binary-searched neighbours, and a
+// (targetSession, role, body) -> occurredAt map over the projected rows (first
+// occurrence wins, matching the original `.find`).
+interface ToolTimeIndex {
+  readonly messagesByOrdinal: ReadonlyArray<MessageRow>
+  readonly projectedTimeByKey: ReadonlyMap<string, string>
+}
+
+const projectedTimeKey = (targetSessionId: string, role: string, body: string): string =>
+  `${targetSessionId}\n${role}\n${body}`
+
+const buildToolTimeIndex = (ctx: ArtifactProjectionContext): ToolTimeIndex => {
+  const messagesByOrdinal = [...ctx.rows.messages].sort((a, b) => a.ordinal - b.ordinal)
+  const projectedTimeByKey = new Map<string, string>()
+  for (const message of ctx.projected) {
+    if (message.targetSessionId == null) continue
+    const key = projectedTimeKey(message.targetSessionId, message.role, message.body)
+    if (!projectedTimeByKey.has(key)) projectedTimeByKey.set(key, message.occurredAt)
+  }
+  return { messagesByOrdinal, projectedTimeByKey }
+}
+
+// Largest-ordinal message strictly before `ordinal` (sorted array → lower bound - 1).
+const neighbourBefore = (messages: ReadonlyArray<MessageRow>, ordinal: number): MessageRow | undefined => {
+  let lo = 0
+  let hi = messages.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (messages[mid]!.ordinal < ordinal) lo = mid + 1
+    else hi = mid
+  }
+  return lo > 0 ? messages[lo - 1] : undefined
+}
+
+// Smallest-ordinal message strictly after `ordinal` (sorted array → upper bound).
+const neighbourAfter = (messages: ReadonlyArray<MessageRow>, ordinal: number): MessageRow | undefined => {
+  let lo = 0
+  let hi = messages.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (messages[mid]!.ordinal <= ordinal) lo = mid + 1
+    else hi = mid
+  }
+  return lo < messages.length ? messages[lo] : undefined
+}
+
+const indexedProjectedTime = (
+  index: ToolTimeIndex,
   targetSessionId: string,
-  projected: ReadonlyArray<ChatMessageRow>,
+  source: MessageRow | undefined,
 ): string | null => {
   if (!source) return null
   const text = artifactMessageText(source)
   if (!text) return null
-  return projected.find((message) =>
-    message.targetSessionId === targetSessionId &&
-    message.role === source.role &&
-    message.body === text
-  )?.occurredAt ?? null
+  return index.projectedTimeByKey.get(projectedTimeKey(targetSessionId, source.role, text)) ?? null
 }
 
 const artifactToolOccurredAt = (
   ctx: ArtifactProjectionContext,
+  index: ToolTimeIndex,
   tool: ToolCallRow,
 ): string => {
-  const { rows } = ctx
-  const before = [...rows.messages].reverse().find((message) => message.ordinal < tool.ordinal)
-  const after = rows.messages.find((message) => message.ordinal > tool.ordinal)
-  const beforeAt = before?.createdAt ?? matchingProjectedMessageTime(before, ctx.target.id, ctx.projected)
+  const before = neighbourBefore(index.messagesByOrdinal, tool.ordinal)
+  const after = neighbourAfter(index.messagesByOrdinal, tool.ordinal)
+  const beforeAt = before?.createdAt ?? indexedProjectedTime(index, ctx.target.id, before)
   if (beforeAt) return isoWithOffset(beforeAt, Math.max(1, tool.ordinal - (before?.ordinal ?? tool.ordinal))) ?? beforeAt
 
-  const afterAt = after?.createdAt ?? matchingProjectedMessageTime(after, ctx.target.id, ctx.projected)
+  const afterAt = after?.createdAt ?? indexedProjectedTime(index, ctx.target.id, after)
   if (afterAt) return isoWithOffset(afterAt, -Math.max(1, (after?.ordinal ?? tool.ordinal) - tool.ordinal)) ?? afterAt
 
   // No native time on either neighbour (Cursor): observation time spread by
@@ -331,9 +376,10 @@ const messageRowSpecs = (
 // correlation, which never matches these.
 const toolCallKind: ArtifactProjectionKind = (ctx) => {
   const specs: Array<ArtifactRowSpec> = []
+  const timeIndex = buildToolTimeIndex(ctx)
   for (const tool of ctx.rows.toolCalls) {
     const toolId = tool.nativeToolId ?? tool.id
-    const occurredAt = artifactToolOccurredAt(ctx, tool)
+    const occurredAt = artifactToolOccurredAt(ctx, timeIndex, tool)
     const status: ChatMessageRow["status"] = tool.outputText ? "final" : "pending"
     // Project once and derive both body and request from it: this runs on the
     // 750ms artifact poll, and the two exported helpers each re-parse the tool's

@@ -297,33 +297,41 @@ export const ChatMessageServiceLive = Layer.effect(
           reconcileComposerUser,
           relabelHookUserAsMeta,
         }
-        for (const kind of ARTIFACT_KINDS) {
-          for (const spec of kind(ctx)) {
-            const row = artifactRow(target, rows.session.provider, {
-              role: spec.role,
-              messageId: spec.messageId,
-              body: spec.body,
-              status: spec.status,
-              occurredAt: spec.occurredAt,
-              dedupKey: spec.dedupKey,
-              requestJson: spec.requestJson ?? null,
-              model: spec.model ?? null,
-              injectedFromTargetSessionId: spec.injectedFromTargetSessionId ?? null,
-              injectedTargetMessageId: spec.injectedTargetMessageId ?? null,
-            })
-            if (spec.reconcile) {
-              const claimed = yield* spec.reconcile(row)
-              if (claimed) {
-                changed += 1
-                continue
+        // One transaction for the whole session's re-projection: the loop can
+        // issue 2N+ upserts per tick, and an autocommit per statement means a
+        // WAL fsync per row. Batching them into a single commit is the bulk of
+        // the win (paired with the no-op skip inside upsertChatMessage).
+        yield* db.withTransaction(
+          Effect.gen(function* () {
+            for (const kind of ARTIFACT_KINDS) {
+              for (const spec of kind(ctx)) {
+                const row = artifactRow(target, rows.session.provider, {
+                  role: spec.role,
+                  messageId: spec.messageId,
+                  body: spec.body,
+                  status: spec.status,
+                  occurredAt: spec.occurredAt,
+                  dedupKey: spec.dedupKey,
+                  requestJson: spec.requestJson ?? null,
+                  model: spec.model ?? null,
+                  injectedFromTargetSessionId: spec.injectedFromTargetSessionId ?? null,
+                  injectedTargetMessageId: spec.injectedTargetMessageId ?? null,
+                })
+                if (spec.reconcile) {
+                  const claimed = yield* spec.reconcile(row)
+                  if (claimed) {
+                    changed += 1
+                    continue
+                  }
+                }
+                const upsertMode =
+                  rows.session.provider === "cursor" ? "replace" : "replace_keep_time"
+                const ok = yield* upsertProjected(row, upsertMode, spec.label)
+                if (ok) changed += 1
               }
             }
-            const upsertMode =
-              rows.session.provider === "cursor" ? "replace" : "replace_keep_time"
-            const ok = yield* upsertProjected(row, upsertMode, spec.label)
-            if (ok) changed += 1
-          }
-        }
+          }),
+        )
         return changed
       })
 

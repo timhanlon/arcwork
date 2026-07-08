@@ -113,6 +113,12 @@ export class ArcStore extends Context.Service<
     readonly loadRawHookSignalsForTarget: (
       targetSessionId: string,
     ) => Effect.Effect<ReadonlyArray<RawHookSignalRow>, SqlError>
+    /** Run an effect inside one DB transaction on the shared connection — lets a
+     * caller batch a burst of writes (e.g. whole-session artifact re-projection)
+     * into a single commit instead of one autocommit per statement. */
+    readonly withTransaction: <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | SqlError, R>
   } & ChatMessageStore & GitStore
 >()("arcwork/ArcStore") {}
 
@@ -482,6 +488,8 @@ export const ArcStoreLive = Layer.effect(
     // git/github domain read model — repository/worktree/PR persistence.
     const gitStore = makeGitStore(sql)
 
+    const withTransaction = <A, E, R>(effect: Effect.Effect<A, E, R>) => sql.withTransaction(effect)
+
     return {
       loadWorkspaces,
       upsertWorkspace,
@@ -511,6 +519,7 @@ export const ArcStoreLive = Layer.effect(
       targetSessionsForChat,
       insertRawHookSignal,
       loadRawHookSignalsForTarget,
+      withTransaction,
       ...chatMessageStore,
       ...gitStore,
     } as const
