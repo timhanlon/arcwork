@@ -119,17 +119,34 @@ export const topologicalSort = (
     }
   }
 
+  // Iterative post-order DFS with an explicit work stack: a Cursor session is a
+  // near-linear reference chain thousands of blobs deep, so a recursive walk
+  // overflows the call stack and sinks the whole session's ingest. A blob is
+  // marked visited when it's pushed (matching the recursive mark-before-descend),
+  // its refs are expanded in array order, and it's emitted once its refs are done.
   const sorted: Array<CursorBlob> = []
   const visited = new Set<string>()
-  const traverse = (id: string): void => {
-    if (visited.has(id)) return
-    const b = byId.get(id)
-    if (!b) return
-    visited.add(id)
-    for (const ref of b.refs) traverse(ref)
-    sorted.push(b)
+  if (end) {
+    const stack: Array<{ readonly blob: CursorBlob; refIndex: number }> = []
+    const push = (id: string): void => {
+      if (visited.has(id)) return
+      const blob = byId.get(id)
+      if (!blob) return
+      visited.add(id)
+      stack.push({ blob, refIndex: 0 })
+    }
+    push(end.id)
+    while (stack.length > 0) {
+      const top = stack[stack.length - 1]!
+      if (top.refIndex < top.blob.refs.length) {
+        push(top.blob.refs[top.refIndex]!)
+        top.refIndex += 1
+      } else {
+        stack.pop()
+        sorted.push(top.blob)
+      }
+    }
   }
-  if (end) traverse(end.id)
 
   const orphaned = blobs.filter((b) => !visited.has(b.id))
   return { sorted, orphaned }
