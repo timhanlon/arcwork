@@ -156,6 +156,45 @@ export const ChatMessageServiceLive = Layer.effect(
     const upsertProjected = (row: ChatMessageRow, mode: ChatMessageUpsertMode, label: string) =>
       db.upsertChatMessage(row, mode).pipe(bestEffort(`${label} persist failed`, false))
 
+    // Live pending-permission tracking mutates the in-memory map the sidebar
+    // reads. It belongs to the *live* hook stream only: the reproject replay path
+    // must not run it, or replaying a target's historical turn-end signals would
+    // clear a genuinely-pending approval and drop the sidebar flag. Returns 1 when
+    // it set or cleared the map, else 0.
+    const trackLivePermission = (signal: HookSignal, chatId: ChatId) =>
+      Effect.gen(function* () {
+        const targetSessionId = signal.arcTargetSessionId
+        if (!targetSessionId) return 0
+
+        if (isPermissionRequestSignal(signal)) {
+          livePendingPermissions.set(targetSessionId, { chatId, targetSessionId, kind: "permission" })
+          const input = hookInputObj(signal)
+          yield* recordPendingEvent("pending_permission_set", {
+            chatId,
+            targetSessionId,
+            reason: "permission_request",
+            provider: signal.provider,
+            toolName: str(input?.["tool_name"] ?? input?.["toolName"]),
+          })
+          return 1
+        }
+
+        if (isPermissionResolutionSignal(signal) && livePendingPermissions.delete(targetSessionId)) {
+          const input = hookInputObj(signal)
+          yield* recordPendingEvent("pending_permission_cleared", {
+            chatId,
+            targetSessionId,
+            reason: signal.declaredEvent,
+            provider: signal.provider,
+            nativeToolId: signal.native.toolUseId,
+            toolName: str(input?.["tool_name"] ?? input?.["toolName"]),
+          })
+          return 1
+        }
+
+        return 0
+      })
+
     const persistSignalDrafts = (
       signal: HookSignal,
       chatId: ChatId,
@@ -167,34 +206,6 @@ export const ChatMessageServiceLive = Layer.effect(
         )
 
         let changed = 0
-        const targetSessionId = signal.arcTargetSessionId
-
-        if (targetSessionId && isPermissionRequestSignal(signal)) {
-          livePendingPermissions.set(targetSessionId, { chatId, targetSessionId, kind: "permission" })
-          const input = hookInputObj(signal)
-          yield* recordPendingEvent("pending_permission_set", {
-            chatId,
-            targetSessionId,
-            reason: "permission_request",
-            provider: signal.provider,
-            toolName: str(input?.["tool_name"] ?? input?.["toolName"]),
-          })
-          changed += 1
-        } else if (targetSessionId && isPermissionResolutionSignal(signal)) {
-          if (livePendingPermissions.delete(targetSessionId)) {
-            const input = hookInputObj(signal)
-            yield* recordPendingEvent("pending_permission_cleared", {
-              chatId,
-              targetSessionId,
-              reason: signal.declaredEvent,
-              provider: signal.provider,
-              nativeToolId: signal.native.toolUseId,
-              toolName: str(input?.["tool_name"] ?? input?.["toolName"]),
-            })
-            changed += 1
-          }
-        }
-
         if (drafts.length === 0) return changed
         for (const draft of drafts) {
           const row: ChatMessageRow = {
@@ -240,7 +251,9 @@ export const ChatMessageServiceLive = Layer.effect(
         }
         if (!chatId) return 0
 
-        const changed = yield* persistSignalDrafts(signal, chatId)
+        const rowsChanged = yield* persistSignalDrafts(signal, chatId)
+        const permChanged = yield* trackLivePermission(signal, chatId)
+        const changed = rowsChanged + permChanged
 
         if (changed > 0) yield* PubSub.publish(updates, { chatId })
         return changed

@@ -12,6 +12,7 @@ import { SessionRuntimeRouter } from "../src/main/services/SessionRuntimeRouter.
 import { ChatMessageService, ChatMessageServiceLive } from "../src/main/services/ChatMessageService.js"
 import type { HookSignal } from "../src/main/hooks/signals.js"
 import { toSignal } from "../src/main/hooks/signals.js"
+import { rawHookSignalRowFrom } from "../src/main/hooks/raw-hook-signal.js"
 import { arcId } from "../src/shared/ids.js"
 
 const NOW = "2026-06-11T00:00:00.000Z"
@@ -257,6 +258,52 @@ describe("live pending permission flag (ChatMessageService)", () => {
       expect(pending.after).toBe(0)
     },
   )
+
+  it("a reproject leaves a live pending permission intact", async () => {
+    // The live flag is set from the in-memory hook stream. A manual reproject
+    // replays the target's stored raw signals — including historical turn-end
+    // resolutions — but that replay must not touch the live map, or a reproject
+    // while a target is genuinely awaiting approval would drop the sidebar flag.
+    const result = await run(
+      Effect.gen(function* () {
+        yield* seed
+        const db = yield* ArcStore
+        const svc = yield* ChatMessageService
+        yield* svc.ingestSignal(permissionRequest())
+        // A historical resolution signal sits on the target's raw-signal log.
+        yield* db.insertRawHookSignal(rawHookSignalRowFrom(postToolUse("2026-06-11T00:00:01.000Z"), NOW))
+        const before = (yield* svc.listPending).length
+        yield* svc.reprojectChat(arcId("chat", CHAT))
+        const after = yield* svc.listPending
+        return { before, after }
+      }),
+    )
+
+    expect(result.before).toBe(1)
+    expect(result.after).toEqual([{ chatId: CHAT, targetSessionId: TARGET, kind: "permission" }])
+  })
+
+  it("a reproject emits no pending-permission activity events", async () => {
+    const counts = await run(
+      Effect.gen(function* () {
+        yield* seed
+        const db = yield* ArcStore
+        const svc = yield* ChatMessageService
+        yield* svc.ingestSignal(permissionRequest())
+        yield* db.insertRawHookSignal(rawHookSignalRowFrom(postToolUse("2026-06-11T00:00:01.000Z"), NOW))
+        const pendingEvents = (rows: ReadonlyArray<{ kind: string }>) =>
+          rows.filter((r) => r.kind.startsWith("pending_permission")).length
+        const before = pendingEvents(yield* db.loadActivityEvents(arcId("target", TARGET)))
+        yield* svc.reprojectChat(arcId("chat", CHAT))
+        const after = pendingEvents(yield* db.loadActivityEvents(arcId("target", TARGET)))
+        return { before, after }
+      }),
+    )
+
+    // Reproject re-derives durable rows only; pending-permission events (which
+    // carry no dedup key) must not accumulate on every reproject.
+    expect(counts.after).toBe(counts.before)
+  })
 
   it("clears a stuck Cursor approval on the turn-ending stop (denial backstop)", async () => {
     // A denied shell command may emit no `afterShellExecution`. The turn's `stop`
