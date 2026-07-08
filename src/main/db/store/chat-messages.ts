@@ -176,71 +176,6 @@ export const makeChatMessageStore = (sql: SqlClient): ChatMessageStore => {
       }),
     )
 
-  const repairAssistantTurnMessage = (row: ChatMessageRow, preferredMessageId: string | null) =>
-    Effect.gen(function* () {
-      const targetSessionId = row.targetSessionId
-      const turnId = row.turnId
-      if (!targetSessionId || !turnId) return false
-
-      let repairKey: string | null = preferredMessageId
-        ? `${targetSessionId}:${turnId}:${preferredMessageId}`
-        : null
-
-      if (!repairKey) {
-        const candidates = yield* sql<{ dedupKey: string }>`
-          SELECT dedup_key AS dedupKey FROM chat_messages
-          WHERE target_session_id = ${targetSessionId}
-            AND turn_id = ${turnId}
-            AND role = 'assistant'
-          ORDER BY chunk_index DESC, occurred_at DESC, id DESC
-          LIMIT 1`
-        repairKey = candidates[0]?.dedupKey ?? null
-      }
-
-      // The Stop event's turn id can diverge from the stream's (Claude sends
-      // turn_id on MessageDisplay but not always on Stop), so the turn-scoped
-      // lookup above can miss the streamed bubble. Fall back to the most
-      // recent in-flight assistant row for the session — that is the message
-      // this Stop finalizes — rather than inserting a second final row.
-      if (!repairKey) {
-        const live = yield* sql<{ dedupKey: string }>`
-          SELECT dedup_key AS dedupKey FROM chat_messages
-          WHERE target_session_id = ${targetSessionId}
-            AND role = 'assistant'
-          ORDER BY (status = 'streaming') DESC, occurred_at DESC, chunk_index DESC, id DESC
-          LIMIT 1`
-        repairKey = live[0]?.dedupKey ?? null
-      }
-
-      const finalKey = `${targetSessionId}:${turnId}:assistant-final`
-      const keyToUse = repairKey ?? finalKey
-
-      const existing = yield* sql<{ id: string }>`
-        SELECT id FROM chat_messages WHERE dedup_key = ${keyToUse} LIMIT 1`
-
-      if (existing.length > 0) {
-        yield* sql`UPDATE chat_messages SET
-          body = ${row.body},
-          status = ${row.status},
-          model = COALESCE(${row.model}, model),
-          occurred_at = ${row.occurredAt},
-          message_id = COALESCE(${row.messageId}, message_id)
-          WHERE dedup_key = ${keyToUse}`
-      } else {
-        yield* insertChatMessageRow(row, keyToUse)
-      }
-
-      // Drop sibling assistant fragments for this turn, plus any still-streaming
-      // bubble left behind when the Stop turn id diverged from the stream's.
-      yield* sql`DELETE FROM chat_messages
-        WHERE target_session_id = ${targetSessionId}
-          AND role = 'assistant'
-          AND dedup_key != ${keyToUse}
-          AND (turn_id = ${turnId} OR status = 'streaming')`
-
-      return true
-    })
-
   const reconcileComposerOptimisticUser = (row: ChatMessageRow) =>
     Effect.gen(function* () {
       if (!row.targetSessionId) return false
@@ -323,33 +258,8 @@ export const makeChatMessageStore = (sql: SqlClient): ChatMessageStore => {
       return true
     })
 
-  // Symmetric counterpart to repairAssistantTurnMessage's session-wide
-  // fallback. The Stop hook can finalize a turn *before* its MessageDisplay
-  // stream is committed (cold start, first turn of a session): Stop finds no
-  // streamed bubble to repair and inserts a standalone `:assistant-final` row,
-  // then the stream lands afterward under its own `turn:message` key. repair_turn
-  // only reconciles from the Stop side and has already run, so the two rows
-  // coexist as a duplicate. Once the stream finalizes we hold the full body, so
-  // drop the orphaned Stop placeholder it duplicates — matched on body so a
-  // distinct turn's response is never touched.
-  const absorbOrphanAssistantFinal = (
-    targetSessionId: string,
-    dedupKey: string,
-    body: string,
-  ) =>
-    sql`DELETE FROM chat_messages
-      WHERE target_session_id = ${targetSessionId}
-        AND role = 'assistant'
-        AND dedup_key LIKE '%:assistant-final'
-        AND dedup_key != ${dedupKey}
-        AND body = ${body}`.pipe(Effect.asVoid)
-
   const upsertChatMessage = (row: ChatMessageRow, mode: ChatMessageUpsertMode) =>
     Effect.gen(function* () {
-      if (mode === "repair_turn") {
-        return yield* repairAssistantTurnMessage(row, row.messageId)
-      }
-
       const existing = yield* sql<{
         id: string
         body: string
@@ -376,14 +286,11 @@ export const makeChatMessageStore = (sql: SqlClient): ChatMessageStore => {
 
       if (existing.length === 0) {
         yield* insertChatMessageRow(row)
-        if (mode === "append" && row.role === "assistant" && row.status === "final" && row.targetSessionId) {
-          yield* absorbOrphanAssistantFinal(row.targetSessionId, row.dedupKey, row.body)
-        }
         return true
       }
 
       const previous = existing[0]!
-      const body = mode === "append" ? `${previous.body}${row.body}` : row.body
+      const body = row.body
       const requestJson = mergeRequestJson(previous.requestJson, row.requestJson)
       // A request row's status follows its merged lifecycle state, so a
       // resolution can't be reopened and a supersede can be revived; other
@@ -439,9 +346,6 @@ export const makeChatMessageStore = (sql: SqlClient): ChatMessageStore => {
           chunk_index = COALESCE(${row.chunkIndex}, chunk_index),
           message_id = COALESCE(${row.messageId}, message_id)
           WHERE dedup_key = ${row.dedupKey}`
-      }
-      if (mode === "append" && row.role === "assistant" && status === "final" && row.targetSessionId) {
-        yield* absorbOrphanAssistantFinal(row.targetSessionId, row.dedupKey, body)
       }
       return true
     })

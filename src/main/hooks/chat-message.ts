@@ -9,7 +9,7 @@ import type {
 import { decodeQuestionTool } from "../../shared/question-tools.js"
 import { requestDedupKey, subagentDedupKey } from "../chat-message-keys.js"
 
-export type ChatMessageUpsertMode = "insert" | "append" | "replace" | "replace_keep_time" | "repair_turn"
+export type ChatMessageUpsertMode = "insert" | "replace" | "replace_keep_time"
 
 export interface ChatMessageDraft {
   readonly mode: ChatMessageUpsertMode
