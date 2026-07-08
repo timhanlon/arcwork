@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
 import type { GitChangeStatus, GitFileChange } from "../../../shared/git.js"
@@ -203,25 +203,14 @@ export const parseRemotes = (stdout: string): ReadonlyArray<GitRemote> => {
   return [...byName].map(([name, url]) => ({ name, url }))
 }
 
-export const parseRemotesJson = (json: string): ReadonlyArray<GitRemote> => {
-  try {
-    const raw = JSON.parse(json) as unknown
-    if (!Array.isArray(raw)) return []
-    return raw.flatMap((entry) => {
-      if (
-        typeof entry === "object" &&
-        entry !== null &&
-        typeof (entry as { name?: unknown }).name === "string" &&
-        typeof (entry as { url?: unknown }).url === "string"
-      ) {
-        return [{ name: (entry as { name: string }).name, url: (entry as { url: string }).url }]
-      }
-      return []
-    })
-  } catch {
-    return []
-  }
-}
+const decodeRemotes = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Array(Schema.Struct({ name: Schema.String, url: Schema.String }))),
+)
+
+/** Decode the `remotesJson` column (our own {@link parseRemotes} output round-tripped
+ * through `JSON.stringify`) back to remotes; empty on malformed/corrupt JSON. */
+export const parseRemotesJson = (json: string): ReadonlyArray<GitRemote> =>
+  Option.getOrElse(decodeRemotes(json), () => [])
 
 /** Resolve the GitHub owner/repo for a clone: the first remote whose URL is a
  * GitHub URL, preferring `origin`. Carries the resolving remote's name so the
