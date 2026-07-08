@@ -12,18 +12,19 @@ import type { ShellPane } from "./arcShellMachine.js"
  * the sidebar.
  *
  * A session is adopted only when:
+ *  - it was launched out-of-band — `origin === "orchestrated"`. A manual launch
+ *    is renderer-driven: it opens its own pane at `TARGET_LAUNCH_REQUESTED`,
+ *    before the session even exists, so it never needs adopting. The *only* time
+ *    a manual session is attached-yet-paneless is the window right after its PTY
+ *    exits, when its pane is already closed but the `arc:sessions` snapshot still
+ *    reads `attached`/`running` (the exit event beats the state push over a
+ *    separate channel). Adopting there re-opens a stray empty xterm over a dead
+ *    session — and blocks resume, since a bound pane makes the resume flow reuse
+ *    it instead of re-launching. Restricting to orchestrated sidesteps that race;
  *  - it is attached (this process holds a live PTY) and not exited — a
  *    detached/dead row is surfaced through the sidebar's resume affordance, not
  *    a live pane;
- *  - no pane already binds its id — it is already adopted, or a manual launch
- *    that has bound;
- *  - no *unbound* pane matches its `(provider, chatId)` — a manual launch in the
- *    gap between its pane opening (`TARGET_LAUNCH_REQUESTED`) and its session id
- *    binding (`TARGET_BOUND`). The session is broadcast the instant
- *    `TargetSessionManager.launch` writes the store, which can beat the launch
- *    rpc's response that binds the pane. This guard is only for manual/default
- *    sessions; orchestrated sessions can share a provider with the pending
- *    manual launch and still need their own pane.
+ *  - no pane already binds its id — it is already adopted.
  *
  * Pure and idempotent: once a session has been adopted it carries a bound pane,
  * so a later call excludes it — the App effect can run on every `arc:sessions`
@@ -34,17 +35,14 @@ export function unadoptedSessions(
   panes: ReadonlyArray<ShellPane>,
 ): ReadonlyArray<TargetSession> {
   const boundIds = new Set<string>()
-  const pendingKeys = new Set<string>()
   for (const pane of panes) {
     if (pane.sessionId) boundIds.add(pane.sessionId)
-    else pendingKeys.add(`${pane.chatId}:${pane.provider}`)
   }
   return sessions.filter(
     (session) =>
+      session.origin === "orchestrated" &&
       session.attached === true &&
       session.state !== "exited" &&
-      !boundIds.has(session.id) &&
-      ((session.origin ?? "manual") !== "manual" ||
-        !pendingKeys.has(`${session.chatId}:${session.provider}`)),
+      !boundIds.has(session.id),
   )
 }

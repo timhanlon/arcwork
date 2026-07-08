@@ -80,12 +80,22 @@ export const deriveShellViewModel = (
 
   // A detached session can be surfaced two ways: a focus intent the machine
   // recorded, or a not-attached session the user simply selected in the tree.
-  const machineDetached = context.detachedSessionId
-    ? sessions.find((s) => s.id === context.detachedSessionId && !s.attached)
-    : undefined
-  const selectedDetached = selection.sessionId
-    ? sessions.find((s) => s.id === selection.sessionId && !s.attached)
-    : undefined
+  // A session that already owns a pane here is bound — a resume in flight, or an
+  // adopted live session — even while its PTY is mid-respawn and still reads
+  // `attached: false`. It must not count as detached: surfacing the resume
+  // overlay parks the very pane whose mount fires the resume RPC, so the session
+  // can never re-attach — a resume that silently no-ops until a restart clears
+  // the stale selection.
+  const isBound = (id: TargetId): boolean =>
+    context.panes.some((p) => p.sessionId === id || p.resumeSessionId === id)
+  const machineDetached =
+    context.detachedSessionId && !isBound(context.detachedSessionId)
+      ? sessions.find((s) => s.id === context.detachedSessionId && !s.attached)
+      : undefined
+  const selectedDetached =
+    selection.sessionId && !isBound(selection.sessionId)
+      ? sessions.find((s) => s.id === selection.sessionId && !s.attached)
+      : undefined
 
   return {
     workspaceId,

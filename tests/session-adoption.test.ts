@@ -27,44 +27,38 @@ const pane = (over: Partial<ShellPane> & { readonly id: PaneId }): ShellPane => 
 })
 
 describe("unadoptedSessions", () => {
-  it("adopts an attached session with no pane (an MCP/handoff launch)", () => {
-    const s = session({ id: arcId("target", "target_mcp") })
+  const orchestrated = (over: Partial<TargetSession> & { readonly id: TargetId }): TargetSession =>
+    session({ origin: "orchestrated", ...over })
+
+  it("adopts an attached orchestrated (out-of-band handoff) session with no pane", () => {
+    const s = orchestrated({ id: arcId("target", "target_mcp") })
     expect(unadoptedSessions([s], [])).toEqual([s])
   })
 
-  it("skips a session already bound to a pane", () => {
-    const s = session({ id: arcId("target", "target_bound") })
+  it("never adopts a manual session — a manual launch drives its own pane", () => {
+    // The only time a manual session is attached-yet-paneless is the window right
+    // after its PTY exits, when the arc:sessions snapshot still reads attached
+    // (the exit event beats the state push). Adopting there re-opens a stray pane.
+    const manual = session({ id: arcId("target", "target_manual"), origin: "manual" })
+    const defaulted = session({ id: arcId("target", "target_default") }) // origin undefined → manual
+    expect(unadoptedSessions([manual, defaulted], [])).toEqual([])
+  })
+
+  it("skips an orchestrated session already bound to a pane", () => {
+    const s = orchestrated({ id: arcId("target", "target_bound") })
     const panes = [pane({ id: arcId("pane", "pane_1"), sessionId: arcId("target", "target_bound") })]
     expect(unadoptedSessions([s], panes)).toEqual([])
   })
 
-  it("skips a manual launch mid-bind: an unbound pane for the same (provider, chat)", () => {
-    // The session is broadcast the instant launch writes the store, which can
-    // beat the launch rpc binding its pane — the pane is still unbound here.
-    const s = session({ id: arcId("target", "target_manual"), provider: "claude" })
-    const panes = [pane({ id: arcId("pane", "pane_2"), provider: "claude", chatId: arcId("chat", "chat_a") })]
-    expect(unadoptedSessions([s], panes)).toEqual([])
-  })
-
-  it("adopts an orchestrated same-provider session while a manual launch is mid-bind", () => {
-    const s = session({
-      id: arcId("target", "target_worker"),
-      provider: "cursor",
-      origin: "orchestrated",
-    })
+  it("adopts an orchestrated session regardless of unrelated unbound panes", () => {
+    const s = orchestrated({ id: arcId("target", "target_worker"), provider: "cursor" })
     const panes = [pane({ id: arcId("pane", "pane_2"), provider: "cursor", chatId: arcId("chat", "chat_a") })]
     expect(unadoptedSessions([s], panes)).toEqual([s])
   })
 
-  it("still adopts when an unbound pane is for a different (provider, chat)", () => {
-    const s = session({ id: arcId("target", "target_mcp"), provider: "cursor", chatId: arcId("chat", "chat_a") })
-    const panes = [pane({ id: arcId("pane", "pane_3"), provider: "claude", chatId: arcId("chat", "chat_b") })]
-    expect(unadoptedSessions([s], panes)).toEqual([s])
-  })
-
   it("skips detached and exited sessions (resume affordance, not a live pane)", () => {
-    const detached = session({ id: arcId("target", "target_detached"), attached: false })
-    const exited = session({ id: arcId("target", "target_exited"), state: "exited" })
+    const detached = orchestrated({ id: arcId("target", "target_detached"), attached: false })
+    const exited = orchestrated({ id: arcId("target", "target_exited"), state: "exited" })
     expect(unadoptedSessions([detached, exited], [])).toEqual([])
   })
 })
