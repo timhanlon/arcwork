@@ -117,3 +117,20 @@ describe("codex exec-output wrapper stripping", () => {
     expect(rows.messages).toHaveLength(0)
   })
 })
+
+describe("codex session created_at", () => {
+  const opts = { nativeSessionId: "sess-1", sourcePath: "/rollout.jsonl", workspaceRoot: "/work" }
+
+  it("reads created_at from the session_meta record envelope", () => {
+    const rows = normalizeCodexRecords(records("call_1", "output"), opts)
+    expect(rows.session.createdAt).toBe("2026-06-01T19:40:00.000Z")
+  })
+
+  it("falls back to a legacy payload.timestamp when the envelope has none", () => {
+    const rows = normalizeCodexRecords(
+      [{ type: "session_meta", payload: { id: "sess-1", cwd: "/work", timestamp: "2026-06-01T10:00:00.000Z" } }],
+      opts,
+    )
+    expect(rows.session.createdAt).toBe("2026-06-01T10:00:00.000Z")
+  })
+})

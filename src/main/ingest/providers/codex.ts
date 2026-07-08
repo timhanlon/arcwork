@@ -76,7 +76,6 @@ const SessionMetaHeader = Schema.Struct({
   payload: Schema.Struct({
     id: Schema.optional(NeStr),
     cwd: Schema.optional(NeStr),
-    timestamp: Schema.optional(NeStr),
   }),
 })
 const decodeSessionMetaLine = Schema.decodeUnknownOption(Schema.fromJsonString(SessionMetaHeader))
@@ -126,11 +125,6 @@ export interface CodexNormalizeOptions {
   readonly diagnostics?: ReadonlyArray<Pick<DiagnosticRow, "severity" | "code" | "message" | "sourcePath">>
 }
 
-export const sessionMetaOf = (records: ReadonlyArray<Rec>): Rec | undefined => {
-  const first = records.find((r) => r["type"] === "session_meta")
-  return first ? obj(first["payload"]) : undefined
-}
-
 export const normalizeCodexRecords = (
   records: ReadonlyArray<Rec>,
   options: CodexNormalizeOptions,
@@ -138,11 +132,14 @@ export const normalizeCodexRecords = (
   const b = new SessionRowBuilder("codex", options.nativeSessionId)
   let currentModel: string | null = null
 
-  const meta = sessionMetaOf(records)
-  // Codex carries no per-record DAG: created_at is the session_meta timestamp,
-  // updated_at the last record seen. (observeTimestamp would derive created_at
-  // from the first record, which Codex deliberately does not do.)
-  b.createdAt = str(meta?.["timestamp"])
+  const metaRecord = records.find((r) => r["type"] === "session_meta")
+  const meta = obj(metaRecord?.["payload"])
+  // Codex carries no per-record DAG: created_at is the session_meta record's
+  // top-level timestamp (its `payload` holds only id/cwd), updated_at the last
+  // record seen. (observeTimestamp would derive created_at from the first record,
+  // which Codex deliberately does not do.) The payload read is a fallback for
+  // older rollouts that carried the timestamp there.
+  b.createdAt = str(metaRecord?.["timestamp"]) ?? str(meta?.["timestamp"])
 
   for (const record of records) {
     const type = str(record["type"])
