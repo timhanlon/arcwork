@@ -102,6 +102,9 @@
     "onlyBuiltDependencies": [
       "electron",
       "node-pty"
-    ]
+    ],
+    "overrides": {
+      "undici@>=8.0.0 <8.5.0": ">=8.5.0"
+    }
   }
 }

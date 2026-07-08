@@ -31,12 +31,13 @@ pnpm rebuild
 Run the same checks CI runs:
 
 ```bash
+pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
 ```
 
-All three must pass. PRs are gated on CI.
+All must pass. PRs are gated on CI.
 
 ## Conventions
 
