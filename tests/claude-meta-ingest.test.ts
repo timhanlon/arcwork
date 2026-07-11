@@ -145,6 +145,88 @@ describe("claude meta ingest", () => {
     expect(rows.session.title).toBe("/commit before fixes")
   })
 
+  it("drops harness chrome recorded as user rows (compaction, /model, task notices)", () => {
+    // Compaction recap, local slash-command output, and background task notices
+    // all land as `type: "user"` records the human never typed. None should
+    // surface as a chat turn; only the genuine prompt does.
+    const sessions = parseClaudeSessions([
+      [
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: null,
+          sessionId: "sess-chrome-1",
+          timestamp: "2026-06-01T19:40:00.000Z",
+          message: { content: "the real prompt" },
+        },
+        {
+          type: "user",
+          isCompactSummary: true,
+          uuid: "c1",
+          parentUuid: "u1",
+          sessionId: "sess-chrome-1",
+          timestamp: "2026-06-01T19:41:00.000Z",
+          message: { content: "This session is being continued from a previous conversation…" },
+        },
+        {
+          type: "user",
+          uuid: "s1",
+          parentUuid: "c1",
+          sessionId: "sess-chrome-1",
+          timestamp: "2026-06-01T19:42:00.000Z",
+          message: { content: "<local-command-stdout>Set model to [1mFable 5[22m</local-command-stdout>" },
+        },
+        {
+          type: "user",
+          uuid: "t1",
+          parentUuid: "s1",
+          sessionId: "sess-chrome-1",
+          timestamp: "2026-06-01T19:43:00.000Z",
+          message: { content: "<task-notification> <task-id>b0chw7wu5</task-id> done" },
+        },
+      ],
+    ])
+    const rows = normalizeClaudeSession(sessions[0]!, {
+      workspaceRoot: "/work",
+      sourcePath: "/project",
+    })
+    const users = rows.messages.filter((m) => m.role === "user")
+    expect(users.map((m) => m.text)).toEqual(["the real prompt"])
+    // None of the chrome slipped through under another role either.
+    expect(rows.messages.some((m) => (m.text ?? "").includes("Set model to"))).toBe(false)
+    expect(rows.messages.some((m) => (m.text ?? "").includes("task-notification"))).toBe(false)
+    expect(rows.messages.some((m) => (m.text ?? "").includes("being continued"))).toBe(false)
+  })
+
+  it("does not seed the session title from harness chrome", () => {
+    // A `/model` switch landing before any real prompt must not become the title.
+    const sessions = parseClaudeSessions([
+      [
+        {
+          type: "user",
+          uuid: "s1",
+          parentUuid: null,
+          sessionId: "sess-chrome-2",
+          timestamp: "2026-06-01T19:40:00.000Z",
+          message: { content: "<local-command-stdout>Set model to Fable 5</local-command-stdout>" },
+        },
+        {
+          type: "user",
+          uuid: "u1",
+          parentUuid: "s1",
+          sessionId: "sess-chrome-2",
+          timestamp: "2026-06-01T19:41:00.000Z",
+          message: { content: "what the human actually asked" },
+        },
+      ],
+    ])
+    const rows = normalizeClaudeSession(sessions[0]!, {
+      workspaceRoot: "/work",
+      sourcePath: "/project",
+    })
+    expect(rows.session.title).toBe("what the human actually asked")
+  })
+
   it("collapses an argless slash command and drops its <command-args>", () => {
     const sessions = parseClaudeSessions([
       [

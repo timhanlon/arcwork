@@ -43,6 +43,37 @@ const displayTextForUserPrompt = (text: string | undefined): string | undefined 
   return args ? `${name} ${args}` : name
 }
 
+/**
+ * Claude records several kinds of harness chrome as `type: "user"` rows the human
+ * never typed:
+ *   - the compaction recap (`isCompactSummary: true` — "This session is being
+ *     continued from a previous conversation…");
+ *   - the output of a local slash command, wrapped in `<local-command-stdout>` /
+ *     `-stderr` / `-caveat>` (a `/model` switch's "Set model to …", the `/compact`
+ *     echo with its Pre/PostCompact hook lines, plugin installs, `/exit`'s
+ *     "See ya!", reconnect errors, …);
+ *   - background task-completion notices in `<task-notification>`.
+ * None is a conversational turn, so projecting them verbatim litters the chat
+ * (raw ANSI compaction dumps, "Set model to Fable 5", task ids) and — when one
+ * lands first — can even seed the session title. They are skipped, not emitted.
+ * Typed slash commands (`<command-name>`) are a different wrapper, kept and
+ * collapsed by displayTextForUserPrompt above.
+ */
+const harnessChromePrefixes = [
+  "<local-command-stdout>",
+  "<local-command-stderr>",
+  "<local-command-caveat>",
+  "<task-notification>",
+]
+
+const isHarnessChromeUserRecord = (record: Rec, content: unknown): boolean => {
+  if (record["isCompactSummary"] === true) return true
+  const text = str(content)
+  if (text === undefined) return false
+  const head = text.trimStart()
+  return harnessChromePrefixes.some((prefix) => head.startsWith(prefix))
+}
+
 // ---------------------------------------------------------------------------
 // Normalize one flattened session into database rows.
 // ---------------------------------------------------------------------------
@@ -230,6 +261,11 @@ export const normalizeClaudeSession = (
         }
         continue
       }
+
+      // Harness chrome (compaction recap, local slash-command output, task
+      // notices) is recorded as a user row but was never typed by the human; drop
+      // it rather than projecting a bogus turn. See isHarnessChromeUserRecord.
+      if (isHarnessChromeUserRecord(record, content)) continue
 
       // A new user prompt.
       let text = str(content)
