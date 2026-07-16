@@ -95,6 +95,7 @@ const KIND_BY_NAME: Record<string, ToolKind> = {
   enterplanmode: "generic",
   exitplanmode: "generic",
   // Codex CLI
+  exec: "shell",
   shell: "shell",
   shell_command: "shell",
   exec_command: "shell",
@@ -161,6 +162,7 @@ const SPECS: ReadonlyArray<{ provider: Provider; name: string; render: RenderSha
   { provider: "claude", name: "ExitPlanMode", render: "fallback" },
   { provider: "claude", name: "AskUserQuestion", render: "fallback" },
   // ── Codex CLI ────────────────────────────────────────────────────────────
+  { provider: "codex", name: "exec", render: "shell" },
   { provider: "codex", name: "exec_command", render: "shell" },
   { provider: "codex", name: "shell", render: "shell" },
   { provider: "codex", name: "write_stdin", render: "fallback" },

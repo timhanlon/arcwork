@@ -53,6 +53,170 @@ describe("codex exec-output wrapper stripping", () => {
     expect(outputFor('{"_tag":"Work","id":"work_123"}')).toBe('{"_tag":"Work","id":"work_123"}')
   })
 
+  it("joins Code Mode custom-tool content blocks into the transcript result", () => {
+    const rows = normalizeCodexRecords(
+      [
+        {
+          type: "session_meta",
+          timestamp: "2026-07-14T06:08:00.000Z",
+          payload: { id: "sess-code-mode", cwd: "/work" },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-07-14T06:08:01.000Z",
+          payload: {
+            type: "custom_tool_call",
+            name: "exec",
+            call_id: "call_code_mode",
+            input: 'const r = await tools.exec_command({"cmd":"rg code mode","workdir":"/work"}); text(r.output);',
+          },
+        },
+        {
+          type: "response_item",
+          timestamp: "2026-07-14T06:08:02.000Z",
+          payload: {
+            type: "custom_tool_call_output",
+            call_id: "call_code_mode",
+            output: [
+              { type: "input_text", text: "Script completed\nWall time 0.2 seconds\nOutput:\n" },
+              { type: "input_text", text: "the useful result\n" },
+            ],
+          },
+        },
+      ],
+      { nativeSessionId: "sess-code-mode", sourcePath: "/rollout.jsonl", workspaceRoot: "/work" },
+    )
+
+    expect(rows.toolCalls).toMatchObject([
+      {
+        nativeToolId: "call_code_mode",
+        name: "exec_command",
+        kind: "shell",
+        inputJson: '{"cmd":"rg code mode","workdir":"/work"}',
+        outputText: "the useful result\n",
+      },
+    ])
+  })
+
+  it("surfaces a failed Code Mode script as an [error] result", () => {
+    const rows = normalizeCodexRecords(
+      [
+        { type: "session_meta", payload: { id: "sess-fail", cwd: "/work" } },
+        {
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            name: "exec",
+            call_id: "call_fail",
+            input: 'const r = await tools.exec_command({"cmd":"false"}); text(r.output);',
+          },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call_output",
+            call_id: "call_fail",
+            output: [
+              { type: "input_text", text: "Script failed\nWall time 0.1 seconds\nOutput:\n" },
+              { type: "input_text", text: "boom\n" },
+            ],
+          },
+        },
+      ],
+      { nativeSessionId: "sess-fail", sourcePath: "/rollout.jsonl", workspaceRoot: "/work" },
+    )
+
+    expect(rows.toolCalls[0]).toMatchObject({ name: "exec_command", outputText: "[error]\nboom\n" })
+  })
+
+  it("recovers a Code Mode apply_patch bound through a const so it renders as a diff", () => {
+    const patch =
+      "*** Begin Patch\n*** Update File: /work/src/sidebar/ArcSidebarTree.tsx\n@@\n-  const open = true\n+  const open = false\n*** End Patch"
+    const script = `const patch = ${JSON.stringify(patch)};\nconst r = await tools.apply_patch(patch);\ntext(typeof r === "string" ? r : JSON.stringify(r));\n`
+    const rows = normalizeCodexRecords(
+      [
+        { type: "session_meta", payload: { id: "sess-patch", cwd: "/work" } },
+        {
+          type: "response_item",
+          payload: { type: "custom_tool_call", name: "exec", call_id: "call_patch", input: script },
+        },
+        {
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call_output",
+            call_id: "call_patch",
+            output: [
+              { type: "input_text", text: "Script completed\nWall time 0.4 seconds\nOutput:\n" },
+              { type: "input_text", text: "Success. Updated the following files:\nM src/sidebar/ArcSidebarTree.tsx\n" },
+            ],
+          },
+        },
+      ],
+      { nativeSessionId: "sess-patch", sourcePath: "/rollout.jsonl", workspaceRoot: "/work" },
+    )
+
+    expect(rows.toolCalls).toMatchObject([
+      {
+        name: "apply_patch",
+        kind: "write",
+        inputJson: JSON.stringify({ input: patch }),
+        outputText: "Success. Updated the following files:\nM src/sidebar/ArcSidebarTree.tsx\n",
+      },
+    ])
+    expect(rows.fileHints).toMatchObject([
+      { path: "/work/src/sidebar/ArcSidebarTree.tsx", source: "apply_patch" },
+    ])
+  })
+
+  it("recovers a Code Mode call with an inline string argument", () => {
+    const rows = normalizeCodexRecords(
+      [
+        { type: "session_meta", payload: { id: "sess-inline", cwd: "/work" } },
+        {
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            name: "exec",
+            call_id: "call_inline",
+            input: 'const r = await tools.apply_patch("*** Begin Patch\\n*** Delete File: /work/old.ts\\n*** End Patch"); text(r);',
+          },
+        },
+      ],
+      { nativeSessionId: "sess-inline", sourcePath: "/rollout.jsonl", workspaceRoot: "/work" },
+    )
+
+    expect(rows.toolCalls[0]).toMatchObject({
+      name: "apply_patch",
+      inputJson: JSON.stringify({ input: "*** Begin Patch\n*** Delete File: /work/old.ts\n*** End Patch" }),
+    })
+  })
+
+  it("keeps a multi-call Code Mode script as an exec card", () => {
+    const rows = normalizeCodexRecords(
+      [
+        { type: "session_meta", payload: { id: "sess-multi", cwd: "/work" } },
+        {
+          type: "response_item",
+          payload: {
+            type: "custom_tool_call",
+            name: "exec",
+            call_id: "call_multi",
+            input:
+              'await Promise.all([tools.exec_command({"cmd":"rg one"}), tools.exec_command({"cmd":"rg two"})]);',
+          },
+        },
+      ],
+      { nativeSessionId: "sess-multi", sourcePath: "/rollout.jsonl", workspaceRoot: "/work" },
+    )
+
+    expect(rows.toolCalls[0]).toMatchObject({
+      name: "exec",
+      inputJson: JSON.stringify({
+        command: 'await Promise.all([tools.exec_command({"cmd":"rg one"}), tools.exec_command({"cmd":"rg two"})]);',
+      }),
+    })
+  })
+
   it("extracts token_count records as usage events", () => {
     const rows = normalizeCodexRecords(
       [

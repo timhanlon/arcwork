@@ -36,3 +36,9 @@ const decodeJsonString = Schema.decodeUnknownOption(Schema.UnknownFromJsonString
  */
 export const parseJson = (raw: string): Rec | undefined =>
   obj(Option.getOrUndefined(decodeJsonString(raw)))
+
+/** Parse a JSON string literal (`"…"` with escapes) to its value, or undefined. */
+export const parseJsonString = (raw: string): string | undefined => {
+  const value = Option.getOrUndefined(decodeJsonString(raw))
+  return typeof value === "string" ? value : undefined
+}

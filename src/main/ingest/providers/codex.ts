@@ -5,7 +5,7 @@ import { classifyTool } from "../extract/tool-kind.js"
 import { SessionRowBuilder } from "../extract/session-row-builder.js"
 import { makeJsonlSessionProvider } from "./jsonl-provider.js"
 import type { AgentProvider } from "./provider.js"
-import { type Rec, obj, parseJson, str } from "../extract/json.js"
+import { type Rec, obj, parseJson, parseJsonString, str } from "../extract/json.js"
 
 // --- record payload schemas ------------------------------------------------
 // A Codex record is `{ type, timestamp, payload }`; the payload's own `type`
@@ -19,6 +19,109 @@ import { type Rec, obj, parseJson, str } from "../extract/json.js"
 // raw session_meta passthrough stay as direct reads — decoding them would only
 // add fragility (one malformed top-level field would drop the whole record).
 const NeStr = Schema.NonEmptyString
+
+// Code Mode returns custom-tool results as ordered content blocks instead of
+// the legacy flat string. Keep both wire shapes: rollout files from either
+// transport can coexist in the same local history.
+const ToolResultContent = Schema.Struct({
+  type: Schema.String,
+  text: Schema.optional(Schema.String),
+})
+const ToolResultOutput = Schema.Union([Schema.String, Schema.Array(ToolResultContent)])
+type ToolResultOutput = typeof ToolResultOutput.Type
+
+// Code Mode puts execution metadata in its own first result block; the actual
+// tool result follows in later blocks. Note "Wall time" has no colon here,
+// unlike the exec_command wrapper below. A failed script is a real signal, so
+// keep it as an `[error]` prefix (claude.ts's convention) instead of dropping
+// it with the rest of the header.
+const CODE_MODE_STATUS_BLOCK = /^Script (completed|failed)\nWall time [\d.]+ seconds\nOutput:\n$/
+const toolResultText = (output: ToolResultOutput): string => {
+  if (typeof output === "string") return output
+  const texts = output.flatMap((part) => (part.text === undefined ? [] : [part.text]))
+  const status = CODE_MODE_STATUS_BLOCK.exec(texts[0] ?? "")
+  if (!status) return texts.join("")
+  const body = texts.slice(1).join("")
+  return status[1] === "failed" ? `[error]\n${body}` : body
+}
+
+interface CodeModeToolCall {
+  readonly name: string
+  readonly input: Rec
+}
+
+// Code Mode invokes real tools from a JavaScript wrapper, e.g.
+// `const r = await tools.exec_command({"cmd":"rg …"}); text(r.output)` or
+// `const patch = "*** Begin Patch\n…"; await tools.apply_patch(patch)`.
+// Recover one direct call when its argument is a JSON object literal, a
+// double-quoted string literal, or an identifier bound to one earlier in the
+// script. This is a static parse — it never evaluates transcript code — and
+// multi-call scripts deliberately fall back to the enclosing `exec` card
+// because one result cannot be safely attributed to one of several inner calls.
+const codeModeObjectEnd = (source: string, start: number): number | undefined => {
+  let depth = 0
+  let quoted = false
+  let escaped = false
+  for (let i = start; i < source.length; i++) {
+    const char = source[i]
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') quoted = false
+      continue
+    }
+    if (char === '"') quoted = true
+    else if (char === "{") depth++
+    else if (char === "}" && --depth === 0) return i + 1
+  }
+  return undefined
+}
+
+// Decode the double-quoted string literal starting at `start`. Codex emits
+// JSON-compatible escapes, so the slice decodes via the JSON codec; literals
+// using JS-only escapes fail the decode and the caller falls back.
+const codeModeStringAt = (source: string, start: number): string | undefined => {
+  let escaped = false
+  for (let i = start + 1; i < source.length; i++) {
+    const char = source[i]
+    if (escaped) escaped = false
+    else if (char === "\\") escaped = true
+    else if (char === '"') return parseJsonString(source.slice(start, i + 1))
+    else if (char === "\n") return undefined
+  }
+  return undefined
+}
+
+const codeModeArgument = (source: string, start: number): Rec | undefined => {
+  const char = source[start]
+  if (char === "{") {
+    const end = codeModeObjectEnd(source, start)
+    return end === undefined ? undefined : parseJson(source.slice(start, end))
+  }
+  if (char === '"') {
+    const text = codeModeStringAt(source, start)
+    return text === undefined ? undefined : { input: text }
+  }
+  const id = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(source.slice(start))?.[0]
+  if (!id) return undefined
+  const escapedId = id.replaceAll("$", "\\$")
+  const decl = new RegExp(`\\b(?:const|let|var)\\s+${escapedId}\\s*=\\s*`).exec(source)
+  if (!decl || source[decl.index + decl[0].length] !== '"') return undefined
+  const text = codeModeStringAt(source, decl.index + decl[0].length)
+  return text === undefined ? undefined : { input: text }
+}
+
+const parseCodeModeToolCall = (source: string): CodeModeToolCall | undefined => {
+  const call = /\btools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/g
+  let found: { readonly name: string; readonly argStart: number } | undefined
+  for (let match = call.exec(source); match; match = call.exec(source)) {
+    if (found) return undefined
+    found = { name: match[1]!, argStart: match.index + match[0].length }
+  }
+  if (!found) return undefined
+  const input = codeModeArgument(source, found.argStart)
+  return input === undefined ? undefined : { name: found.name, input }
+}
 
 const TokenUsage = Schema.Struct({
   input_tokens: Schema.optional(Schema.Number),
@@ -64,8 +167,8 @@ const ResponseItemPayload = Schema.Union([
     // ""), so it's a plain optional String, not NonEmptyString.
     input: Schema.optional(Schema.String),
   }),
-  Schema.Struct({ type: Schema.Literal("function_call_output"), call_id: NeStr, output: NeStr }),
-  Schema.Struct({ type: Schema.Literal("custom_tool_call_output"), call_id: NeStr, output: NeStr }),
+  Schema.Struct({ type: Schema.Literal("function_call_output"), call_id: NeStr, output: ToolResultOutput }),
+  Schema.Struct({ type: Schema.Literal("custom_tool_call_output"), call_id: NeStr, output: ToolResultOutput }),
 ])
 const decodeResponseItem = Schema.decodeUnknownOption(ResponseItemPayload)
 
@@ -202,18 +305,21 @@ export const normalizeCodexRecords = (
         }
         case "custom_tool_call": {
           const inputText = p.input ?? ""
+          const nested = parseCodeModeToolCall(inputText)
+          const name = nested?.name ?? p.name
+          const input = nested?.input ?? { command: inputText }
           const row = b.tool({
-            name: p.name,
-            kind: classifyTool("codex", p.name),
+            name,
+            kind: classifyTool("codex", name),
             nativeToolId: p.call_id ?? null,
-            inputJson: JSON.stringify({ input: inputText }),
+            inputJson: JSON.stringify(input),
           })
-          b.hint(p.name, { input: inputText }, null, row.id)
+          b.hint(name, input, null, row.id)
           break
         }
         case "function_call_output":
         case "custom_tool_call_output":
-          b.result(p.call_id, unwrapExecOutput(p.output))
+          b.result(p.call_id, unwrapExecOutput(toolResultText(p.output)))
           break
       }
     }

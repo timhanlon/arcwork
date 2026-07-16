@@ -94,6 +94,10 @@ export const TOOL_SAMPLES: Readonly<Record<string, ToolSample>> = {
     },
   },
   // ── Codex CLI ──────────────────────────────────────────────────────────────
+  "codex:exec": {
+    args: { command: 'const r = await tools.exec_command({"cmd":"rg --files"}); text(r.output);' },
+    output: "src/main/ingest/providers/codex.ts",
+  },
   "codex:exec_command": {
     args: { cmd: "rg --files docs/proposals", workdir: "/Users/you/dev/aux", yield_time_ms: 10000, max_output_tokens: 12000 },
     output: "docs/proposals/2026-06-06-sidebar-work-queue.md",
