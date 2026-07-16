@@ -8,6 +8,7 @@ import {
   useMemo,
   useState,
 } from "react"
+import { DotsSixVertical, PushPin, PushPinSlash } from "@phosphor-icons/react"
 import type { ChatId, TargetId, WorkspaceId } from "../../../shared/ids.js"
 import { Collapsible } from "@base-ui/react/collapsible"
 import { Button } from "@base-ui/react/button"
@@ -45,6 +46,7 @@ import { DisclosureSection } from "../ui/DisclosureSection.js"
 import { Caret } from "../ui/Caret.js"
 import { Indent } from "../ui/Indent.js"
 import { useSessionActivityProjection } from "./useSessionActivityProjection.js"
+import { orderProjects, useProjectPreferences } from "./projectPreferences.js"
 
 /** How many chats a workspace shows before a "show all" expander — keeps a
  * profile with hundreds of chats from rendering the whole list. Chats arrive
@@ -86,6 +88,12 @@ interface SidebarTreeController {
   /** workspace ids whose chat list is expanded past {@link CHAT_CAP} */
   readonly expandedChatLists: ReadonlySet<string>
   readonly toggleChatList: (workspaceId: WorkspaceId) => void
+  readonly pinnedProjectKeys: ReadonlySet<string>
+  readonly toggleProjectPin: (projectKey: string) => void
+  readonly moveProject: (sourceKey: string, targetKey: string) => void
+  /** Temporary compact tree while each project row acts as a drop target. */
+  readonly draggingProjectKey?: string
+  readonly setDraggingProjectKey: (projectKey?: string) => void
 }
 
 const TreeContext = createContext<SidebarTreeController | null>(null)
@@ -219,7 +227,8 @@ function ChatNode({
 function WorkspaceNode({ group }: { readonly group: WorkspaceGroup }): JSX.Element {
   const tree = useTree()
   const { workspace, chats, sessionsByChat } = group
-  const workspaceOpen = tree.disclosure.isOpen("workspace", workspace.id, true)
+  const workspaceOpen =
+    tree.draggingProjectKey === undefined && tree.disclosure.isOpen("workspace", workspace.id, true)
   const chatsOpen = tree.disclosure.isOpen("chatSection", workspace.id, false)
 
   // Cap the list unless the user expanded it, or the chat being revealed lives
@@ -297,6 +306,9 @@ function WorkspaceNode({ group }: { readonly group: WorkspaceGroup }): JSX.Eleme
  * collapsible repo header nesting its checkouts and worktrees. */
 function ProjectNode({ project }: { readonly project: ProjectGroup }): JSX.Element {
   const tree = useTree()
+  const [dragging, setDragging] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const pinned = tree.pinnedProjectKeys.has(project.key)
   const members = (
     <>
       {project.members.map((member) => (
@@ -304,10 +316,11 @@ function ProjectNode({ project }: { readonly project: ProjectGroup }): JSX.Eleme
       ))}
     </>
   )
-  if (project.repositoryId === null) return <Fragment>{members}</Fragment>
-  return (
+  const contents = project.repositoryId === null ? (
+    <Fragment>{members}</Fragment>
+  ) : (
     <Collapsible.Root
-      open={tree.disclosure.isOpen("project", project.key, false)}
+      open={tree.draggingProjectKey === undefined && tree.disclosure.isOpen("project", project.key, false)}
       onOpenChange={(open) => tree.disclosure.setOpen("project", project.key, open)}
       className="min-w-0"
     >
@@ -318,6 +331,55 @@ function ProjectNode({ project }: { readonly project: ProjectGroup }): JSX.Eleme
         </Indent>
       </Collapsible.Panel>
     </Collapsible.Root>
+  )
+  return (
+    <div
+      className={`group/project relative min-w-0 ${dragging ? "opacity-45" : ""} ${dragOver ? "border-t-2 border-accent" : ""}`}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move"
+        event.dataTransfer.setData("text/plain", project.key)
+        setDragging(true)
+        tree.setDraggingProjectKey(project.key)
+      }}
+      onDragEnd={() => {
+        setDragging(false)
+        setDragOver(false)
+        tree.setDraggingProjectKey(undefined)
+      }}
+      onDragOver={(event) => {
+        event.preventDefault()
+        event.dataTransfer.dropEffect = "move"
+        setDragOver(true)
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragOver(false)
+      }}
+      onDrop={(event) => {
+        event.preventDefault()
+        const sourceKey = event.dataTransfer.getData("text/plain")
+        if (sourceKey) tree.moveProject(sourceKey, project.key)
+        setDragOver(false)
+      }}
+    >
+      <div className="pointer-events-none absolute right-1 top-1 z-10 flex items-center gap-0.5 opacity-0 group-hover/project:opacity-100 group-focus-within/project:opacity-100">
+        <span className="inline-flex h-6 w-4 items-center justify-center text-fg-faint" aria-hidden>
+          <DotsSixVertical size={14} />
+        </span>
+        <button
+          type="button"
+          className="pointer-events-auto inline-flex h-6 w-6 items-center justify-center rounded-[var(--radius)] text-fg-dim hover:bg-elev hover:text-foreground focus-visible:bg-elev focus-visible:text-foreground focus-visible:outline-none"
+          aria-label={`${pinned ? "Unpin" : "Pin"} ${project.label}`}
+          title={`${pinned ? "Unpin" : "Pin"} project`}
+          draggable={false}
+          onDragStart={(event) => event.preventDefault()}
+          onClick={() => tree.toggleProjectPin(project.key)}
+        >
+          {pinned ? <PushPinSlash size={13} /> : <PushPin size={13} />}
+        </button>
+      </div>
+      {contents}
+    </div>
   )
 }
 
@@ -409,9 +471,24 @@ export function ArcSidebarTree(): JSX.Element {
     [runStopTarget, shellActions],
   )
 
-  const projects = useMemo(
+  const groupedProjects = useMemo(
     () => groupByProject(groupSidebarData(workspaces, chats, sessions)),
     [workspaces, chats, sessions],
+  )
+  const projectPreferences = useProjectPreferences()
+  const [draggingProjectKey, setDraggingProjectKey] = useState<string | undefined>()
+  const projects = useMemo(
+    () => orderProjects(groupedProjects, { pinned: [...projectPreferences.pinned], order: projectPreferences.order }),
+    [groupedProjects, projectPreferences.pinned, projectPreferences.order],
+  )
+  const moveProject = useCallback(
+    (sourceKey: string, targetKey: string): void =>
+      projectPreferences.move(
+        sourceKey,
+        targetKey,
+        projects.map((project) => project.key),
+      ),
+    [projectPreferences, projects],
   )
   const activeChats = useMemo(
     () => activeChatEntries(projects, workspaces, chats, sessions, pendingSessionIds),
@@ -511,6 +588,11 @@ export function ArcSidebarTree(): JSX.Element {
       onCreateChat: createChat,
       expandedChatLists,
       toggleChatList,
+      pinnedProjectKeys: projectPreferences.pinned,
+      toggleProjectPin: projectPreferences.togglePinned,
+      moveProject,
+      draggingProjectKey,
+      setDraggingProjectKey,
     }),
     [
       disclosure,
@@ -527,6 +609,10 @@ export function ArcSidebarTree(): JSX.Element {
       createChat,
       expandedChatLists,
       toggleChatList,
+      projectPreferences.pinned,
+      projectPreferences.togglePinned,
+      moveProject,
+      draggingProjectKey,
     ],
   )
 
