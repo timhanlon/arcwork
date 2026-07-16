@@ -7,6 +7,7 @@ import { renderShapeFor } from "../../../../shared/tool-catalog.js"
 import { tildify } from "../../format-path.js"
 import { Button } from "../../ui/Button.js"
 import { Label } from "../../ui/Label.js"
+import { DIFF_THEME, useDiffHighlighterReady } from "../../ui/useDiffHighlighter.js"
 import { parseApplyPatchEdits } from "./apply-patch.js"
 
 // Shared per-tool argument rendering. Both the permission card (the decision the
@@ -186,7 +187,8 @@ function EditDiff({
   readonly path: string | null
   readonly oldStr: string
   readonly newStr: string
-}): JSX.Element {
+}): JSX.Element | null {
+  const highlighterReady = useDiffHighlighterReady()
   const name = diffName(path)
   const fileDiff = useMemo(
     () =>
@@ -199,13 +201,14 @@ function EditDiff({
       ),
     [name, oldStr, newStr],
   )
+  if (!highlighterReady) return null
   return (
     <FileDiff
       fileDiff={fileDiff}
       disableWorkerPool
       className="min-w-0 text-[11px]"
       options={{
-        theme: "vitesse-dark",
+        theme: DIFF_THEME,
         themeType: "dark",
         diffStyle: "unified",
         disableLineNumbers: true,

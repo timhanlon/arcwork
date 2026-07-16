@@ -8,6 +8,7 @@ import type { GitChangeStatus, GitCommit, GitFileChange } from "../../../shared/
 import type { Workspace } from "../../../shared/workspace.js"
 import { DISCLOSURE, Row, ROW_GRID } from "../ui/Row.js"
 import { DisclosureSection } from "../ui/DisclosureSection.js"
+import { DIFF_THEME, useDiffHighlighterReady } from "../ui/useDiffHighlighter.js"
 import { gitFileDiffAtomFor, successOr } from "../atoms.js"
 import { RepoContextBar } from "./RepoContextBar.js"
 import { useWorkspaceGit } from "./useWorkspaceGit.js"
@@ -200,15 +201,17 @@ function InlineDiff({ workspace, path }: { readonly workspace: Workspace; readon
 /** The diff content itself — a syntax-highlighted patch when it parses as one,
  * else a plain monospace fallback. Renders at natural height; the changes list
  * scrolls. */
-function DiffBody({ diff }: { readonly diff: string }): JSX.Element {
+function DiffBody({ diff }: { readonly diff: string }): JSX.Element | null {
+  const highlighterReady = useDiffHighlighterReady()
   if (isPatch(diff)) {
+    if (!highlighterReady) return null
     return (
       <PatchDiff
         patch={diff}
         disableWorkerPool
         className="min-w-0 text-[11px]"
         options={{
-          theme: "vitesse-dark",
+          theme: DIFF_THEME,
           themeType: "dark",
           diffStyle: "unified",
           disableLineNumbers: false,
