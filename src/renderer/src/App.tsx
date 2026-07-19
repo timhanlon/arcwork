@@ -1,4 +1,4 @@
-import { type JSX, useEffect, useMemo, useRef, useState } from "react"
+import { type JSX, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import { Exit } from "effect"
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels"
@@ -21,6 +21,13 @@ import { sync as syncTerminals } from "./terminal/terminalRegistry.js"
 import { UnifiedChatPane, type ChatPaneHandle, type LaunchableProvider } from "./chat/UnifiedChatPane.js"
 import { WorkPane, type WorkPaneHandle } from "./work/WorkPane.js"
 import { GitPane } from "./git/GitPane.js"
+import { ImageView } from "./ui/ImageView.js"
+// Monaco + its Shiki grammars are ~13 MB — a lot to parse on every launch for a
+// pane that only appears when a file is opened. Split it behind a lazy import so
+// the editor chunk is fetched on first file-open, not at startup.
+const WorkspaceFileView = lazy(() =>
+  import("./editor/WorkspaceFileView.js").then((m) => ({ default: m.WorkspaceFileView })),
+)
 import { GitPrefetch } from "./git/GitPrefetch.js"
 import { NavBar } from "./shell/NavBar.js"
 import { ArcSearchPanel } from "./search/ArcSearchPanel.js"
@@ -448,6 +455,19 @@ export function App(): JSX.Element {
                 selectedPath={vm.gitPath}
                 onSelectPath={selectGitPath}
               />
+            ) : right.surface.kind === "file" ? (
+              <Suspense
+                fallback={<div className="px-2 py-2 text-[12px] text-fg-dim">Loading…</div>}
+              >
+                <WorkspaceFileView
+                  workspaceId={right.surface.workspaceId}
+                  path={right.surface.path}
+                  line={right.surface.line}
+                  className="h-full"
+                />
+              </Suspense>
+            ) : right.surface.kind === "image" ? (
+              <ImageView src={right.surface.src} title={right.surface.title} className="h-full" />
             ) : (
               <TargetSessionPane
                 panes={panes}

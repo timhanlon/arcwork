@@ -2,6 +2,7 @@ import type {
   DiagnosticRow,
   ExtractedRows,
   FileHintRow,
+  ImageDraft,
   MessageRow,
   Mutable,
   Provider,
@@ -61,6 +62,7 @@ export class SessionRowBuilder {
   private readonly toolCalls: Array<Mutable<ToolCallRow>> = []
   private readonly fileHints: Array<FileHintRow> = []
   private readonly usageEvents: Array<UsageEventRow> = []
+  private readonly images: Array<ImageDraft> = []
   private readonly toolByCallId = new Map<string, Mutable<ToolCallRow>>()
 
   private msgSeq = 0
@@ -190,6 +192,7 @@ export class SessionRowBuilder {
       kind: opts.kind ?? null,
       inputJson: opts.inputJson ?? null,
       outputText: null,
+      imagesJson: null,
       rawJson: null,
       sequence: this.toolSeq,
       ordinal: this.ord++,
@@ -204,12 +207,26 @@ export class SessionRowBuilder {
    * Attach a (provider-coerced) result to a previously-recorded tool call,
    * matched by native call id. Returns the row when found so the provider can
    * make further edits; returns undefined for an unknown or absent id.
+   *
+   * `images` are the base64 pictures the result carried (a Read of a `.png`, a
+   * browser screenshot): the row gets a `[{hash, mediaType}]` reference and the
+   * bytes are accumulated for the store to write to the content-addressed cache.
    */
-  result(callId: string | null | undefined, outputText?: string): Mutable<ToolCallRow> | undefined {
+  result(
+    callId: string | null | undefined,
+    outputText?: string,
+    images?: ReadonlyArray<{ readonly hash: string; readonly mediaType: string; readonly data: string }>,
+  ): Mutable<ToolCallRow> | undefined {
     if (!callId) return undefined
     const row = this.toolByCallId.get(callId)
     if (!row) return undefined
     if (outputText !== undefined) row.outputText = outputText
+    if (images && images.length > 0) {
+      row.imagesJson = JSON.stringify(images.map((i) => ({ hash: i.hash, mediaType: i.mediaType })))
+      for (const i of images) {
+        this.images.push({ sessionId: this.sid, toolCallId: row.id, hash: i.hash, mediaType: i.mediaType, data: i.data })
+      }
+    }
     return row
   }
 
@@ -315,6 +332,7 @@ export class SessionRowBuilder {
       fileHints: this.fileHints,
       usageEvents: this.usageEvents,
       diagnostics,
+      images: this.images,
     }
   }
 }

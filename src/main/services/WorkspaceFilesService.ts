@@ -3,8 +3,8 @@ import { execFile } from "node:child_process"
 import type { Dirent } from "node:fs"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
-import type { WorkspaceFiles } from "../../shared/rpc.js"
-import type { ArcRequestError } from "../errors.js"
+import type { WorkspaceFileContent, WorkspaceFiles } from "../../shared/rpc.js"
+import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { WorkspaceService } from "./WorkspaceService.js"
 
 /**
@@ -28,11 +28,22 @@ export class WorkspaceFilesService extends Context.Service<
   WorkspaceFilesService,
   {
     readonly list: (workspaceId: string) => Effect.Effect<WorkspaceFiles, ArcRequestError>
+    readonly read: (
+      workspaceId: string,
+      relativePath: string,
+    ) => Effect.Effect<WorkspaceFileContent, ArcRequestError>
   }
 >()("WorkspaceFilesService") {}
 
 /** Hard ceiling on returned paths — enough for fuzzy-matching, bounded for IPC. */
 const FILE_CAP = 8000
+
+/** Largest file body shipped to the editor. Above this we truncate: the read-only
+ * view is for inspecting source, not loading multi-megabyte blobs over the seam. */
+const READ_CAP_BYTES = 2 * 1024 * 1024
+
+/** A NUL byte in the head means "not text" — show a placeholder, not decoded mojibake. */
+const isBinary = (head: Buffer): boolean => head.includes(0)
 
 /** Directories the fs-walk fallback never descends into (git already excludes these). */
 const SKIP_DIRS = new Set([
@@ -123,6 +134,66 @@ export const WorkspaceFilesServiceLive = Layer.effect(
         }).pipe(
           Effect.withSpan("arc.workspace.list_files", {
             attributes: { "arc.workspace_id": workspaceId },
+          }),
+        ),
+      read: (workspaceId, relativePath) =>
+        Effect.gen(function* () {
+          // Same trust model as `list`: resolve the root from arc's own list, then
+          // confirm the requested path resolves to a real location *inside* that
+          // root before touching it — a `../` (or symlink) escape off the wire
+          // can't read arbitrary disk.
+          const known = yield* workspaces.list
+          const workspace = known.find((w) => w.id === workspaceId)
+          if (!workspace) {
+            return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
+          }
+          const root = path.resolve(workspace.path)
+          const resolved = path.resolve(root, relativePath)
+          // `root + sep` so a sibling dir sharing the root's prefix (…/repo-2) can't
+          // pass; the root itself is a directory, never a readable file.
+          if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+            return yield* Effect.fail(arcRequestError(`Path escapes workspace: ${relativePath}`))
+          }
+          const content = yield* Effect.tryPromise({
+            try: async (): Promise<WorkspaceFileContent> => {
+              // realpath so a symlink whose *target* sits outside the root is caught
+              // too, not just lexical `../`. Missing file → ENOENT rejects below.
+              // The root is realpath'd as well: it (or a parent) is itself often a
+              // symlink — `/tmp`→`/private/tmp` on macOS, Docker/NFS bind mounts —
+              // so comparing a canonical file path against a non-canonical root
+              // would reject every read in the workspace as an escape.
+              const realRoot = await fs.realpath(root)
+              const real = await fs.realpath(resolved)
+              if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+                throw new Error(`Path escapes workspace: ${relativePath}`)
+              }
+              const stat = await fs.stat(real)
+              if (!stat.isFile()) {
+                throw new Error(`Not a file: ${relativePath}`)
+              }
+              const handle = await fs.open(real, "r")
+              try {
+                // Read at most one byte past the cap so we can tell "exactly at cap"
+                // from "over cap" (truncated) without statting size separately.
+                const buf = Buffer.alloc(READ_CAP_BYTES + 1)
+                const { bytesRead } = await handle.read(buf, 0, buf.length, 0)
+                const body = buf.subarray(0, bytesRead)
+                if (isBinary(body.subarray(0, 8192))) {
+                  return { path: relativePath, text: "", truncated: false, binary: true }
+                }
+                const truncated = bytesRead > READ_CAP_BYTES
+                const text = body.subarray(0, Math.min(bytesRead, READ_CAP_BYTES)).toString("utf8")
+                return { path: relativePath, text, truncated, binary: false }
+              } finally {
+                await handle.close()
+              }
+            },
+            catch: (cause) => arcRequestError(cause instanceof Error ? cause.message : String(cause)),
+          })
+          return content
+        }).pipe(
+          Effect.withSpan("arc.workspace.read_file", {
+            attributes: { "arc.workspace_id": workspaceId, "arc.path": relativePath },
           }),
         ),
     })

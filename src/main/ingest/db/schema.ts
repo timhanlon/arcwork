@@ -62,11 +62,33 @@ export interface ToolCallRow {
   readonly kind: string | null
   readonly inputJson: string | null
   readonly outputText: string | null
+  /**
+   * JSON array of the images this tool result carried (`[{hash, mediaType}]`),
+   * or null. The actual bytes live content-addressed on disk (see
+   * {@link ImageDraft} / `arcWorkImagesDir`); this row only references them by
+   * hash so the renderer can build an `arc-img://cache/<hash>.<ext>` src.
+   */
+  readonly imagesJson: string | null
   readonly rawJson: string | null
   /** Per-table tool index, used for the row id. */
   readonly sequence: number
   /** Per-session display order shared with `messages` — see `MessageRow.ordinal`. */
   readonly ordinal: number
+}
+
+/**
+ * One image extracted from a tool result, carrying the base64 bytes out of the
+ * pure normalizer to the store, which writes them to the content-addressed image
+ * cache. `hash` is `sha256(data)`; the paired {@link ToolCallRow.imagesJson}
+ * references the same hash. Not a DB row — it never hits a table, only disk.
+ */
+export interface ImageDraft {
+  readonly sessionId: string
+  readonly toolCallId: string
+  readonly hash: string
+  readonly mediaType: string
+  /** base64 image payload, exactly as the transcript carried it. */
+  readonly data: string
 }
 
 /** Best-effort file paths mentioned by tool inputs/patches. Not attribution proof. */
@@ -127,6 +149,13 @@ export interface ExtractedRows {
   readonly fileHints: ReadonlyArray<FileHintRow>
   readonly usageEvents: ReadonlyArray<UsageEventRow>
   readonly diagnostics: ReadonlyArray<DiagnosticRow>
+  /**
+   * Image bytes referenced by `toolCalls[*].imagesJson`, for the store to write
+   * to the content-addressed cache. Only present on the extract→write path
+   * (`SessionRowBuilder.finish`); a session read back from the DB has no bytes to
+   * re-persist, so it's optional and defaults to empty.
+   */
+  readonly images?: ReadonlyArray<ImageDraft>
 }
 
 /** A session row as stored, including the store-managed ingest timestamps. */
@@ -260,4 +289,9 @@ export const ingestMigrations: Migrations = {
   )`,
     `CREATE INDEX usage_events_session_sequence ON usage_events(session_id, sequence)`,
   ),
+  // Images a tool result carried (a Read of a `.png`, a browser screenshot).
+  // The bytes are cached content-addressed on disk (`arcWorkImagesDir`); this
+  // column only references them by hash so the renderer can render the picture
+  // instead of the old `[image]` placeholder. Re-ingest repopulates it.
+  "0004_tool_call_images": sqlMigration(`ALTER TABLE tool_calls ADD COLUMN images_json TEXT`),
 }

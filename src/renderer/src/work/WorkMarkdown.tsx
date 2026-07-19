@@ -95,7 +95,10 @@ const workRehypePlugins: RehypePlugins = Object.entries(defaultRehypePlugins).ma
   key === "sanitize" ? allowArcHrefProtocol(plugin) : plugin,
 )
 
-const workComponents = (onOpenWork: (workId: WorkId) => void) => ({
+const workComponents = (
+  onOpenWork: (workId: WorkId) => void,
+  onOpenFile: (href: string) => boolean,
+) => ({
   ...baseComponents,
   a: ({ children, href }: { readonly children?: ReactNode; readonly href?: string }) => {
     if (href?.startsWith("arc://work/")) {
@@ -117,8 +120,20 @@ const workComponents = (onOpenWork: (workId: WorkId) => void) => ({
     // `arc` scheme as a whole, so neutralise any other arc path to inert text
     // rather than emit a live link into an unregistered/unhandled scheme.
     if (href?.startsWith("arc://")) return <span>{children}</span>
+    // A file path the assistant linked (`[tracker.js](/Users/…/tracker.js)`):
+    // `onOpenFile` opens it in the in-app read-only editor when it resolves inside
+    // an open workspace, else hands it to the OS opener — returning true either
+    // way so we prevent the anchor's navigation. It returns false only for a
+    // non-file href (an http/PR link), which then navigates normally and is routed
+    // to the real browser by the main process's `will-navigate` guard.
     return (
-      <a href={href} className="text-accent underline">
+      <a
+        href={href}
+        className="text-accent underline"
+        onClick={(event: MouseEvent<HTMLAnchorElement>) => {
+          if (href && onOpenFile(href)) event.preventDefault()
+        }}
+      >
         {children}
       </a>
     )
@@ -163,14 +178,14 @@ export function WorkMarkdown({
   readonly streaming?: boolean
   readonly compact?: boolean
 }): JSX.Element {
-  const { open } = useShellActions()
+  const { open, openFilePath } = useShellActions()
   // Memoize so Streamdown's per-block memo survives streaming re-renders (a new
   // components object or remark array each delta would re-render every block,
-  // Shiki code included). `open` is a stable shell action; the remark array has
-  // no deps, so it's hoisted to module scope.
+  // Shiki code included). `open`/`openFilePath` are stable shell actions; the
+  // remark array has no deps, so it's hoisted to module scope.
   const components = useMemo(
-    () => workComponents((workId) => open({ kind: "work", workId }, "right")),
-    [open],
+    () => workComponents((workId) => open({ kind: "work", workId }, "right"), openFilePath),
+    [open, openFilePath],
   )
   return (
     <Markdown

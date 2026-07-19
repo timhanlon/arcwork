@@ -3,6 +3,8 @@ import { FileDiff } from "@pierre/diffs/react"
 import type { JSX, ReactNode } from "react"
 import { useLayoutEffect, useMemo, useRef, useState } from "react"
 import type { Provider } from "../../../../shared/provider.js"
+import type { ToolCallImage } from "../../../../shared/tool-call.js"
+import { arcImgCacheSrc } from "../../../../shared/images.js"
 import { renderShapeFor } from "../../../../shared/tool-catalog.js"
 import { tildify } from "../../format-path.js"
 import { Button } from "../../ui/Button.js"
@@ -155,6 +157,45 @@ export function CodeBlock({
     <Collapsible collapsedHeight={collapsedHeight} frameClassName={frameClassName}>
       <pre className={CODE_TEXT}>{text}</pre>
     </Collapsible>
+  )
+}
+
+/**
+ * The pictures a tool result carried (a Read of a `.png`, a browser screenshot),
+ * rendered inline in place of the old `[image]` text. Each is served from the
+ * content-addressed ingest cache via the `arc-img://` protocol, capped to a
+ * thumbnail height; `onOpen` (when given) opens the full picture in the viewer
+ * pane. A load failure (cache miss) collapses the element rather than showing a
+ * broken-image glyph.
+ */
+export function ImageOutput({
+  images,
+  onOpen,
+}: {
+  readonly images: ReadonlyArray<ToolCallImage>
+  readonly onOpen?: (src: string) => void
+}): JSX.Element {
+  return (
+    <div className="flex flex-wrap gap-2 min-w-0">
+      {images.map((image) => {
+        const src = arcImgCacheSrc(image.hash, image.mediaType)
+        return (
+          <img
+            key={image.hash}
+            src={src}
+            alt=""
+            loading="lazy"
+            onClick={onOpen ? () => onOpen(src) : undefined}
+            onError={(event) => {
+              event.currentTarget.style.display = "none"
+            }}
+            className={`max-h-64 max-w-full rounded-[var(--radius)] border border-border object-contain ${
+              onOpen ? "cursor-zoom-in" : ""
+            }`}
+          />
+        )
+      })}
+    </div>
   )
 }
 

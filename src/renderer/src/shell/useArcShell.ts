@@ -14,6 +14,8 @@ import {
   type ShellTreeSelection,
 } from "./arcShellMachine.js"
 import { loadPersistedSelection, savePersistedSelection } from "./shellPersistence.js"
+import { fileHrefToPath, resolveWorkspaceFile } from "./workspaceFilePath.js"
+import { arcImgFileSrc, isImagePath } from "../../../shared/images.js"
 import { DEV } from "../bridge.js"
 
 export interface ArcShellActions {
@@ -24,6 +26,13 @@ export interface ArcShellActions {
    * replacing the old setCenterView/setRightView/openWorkInRightPane/
    * selectGitPath/closeRightWork. Illegal (target, pane) pairs are no-ops. */
   readonly open: (target: OpenTarget, pane: Pane) => void
+  /** Open a file the assistant linked in a transcript (`[foo.ts](/abs/path/foo.ts)`,
+   * optionally with a `:line`). Resolves the absolute path (or `file://` URL)
+   * against the open workspaces: inside one → the read-only editor pane; outside
+   * all of them → the OS opener. Returns `true` when the href was a file path it
+   * took over (so the caller prevents the anchor's navigation), `false` for a
+   * non-file href (http/mailto/relative) — left to navigate normally. */
+  readonly openFilePath: (href: string) => boolean
   readonly launchTarget: (provider: string, chatId: ChatId) => void
   readonly bindTarget: (paneId: PaneId, sessionId: TargetId) => void
   readonly focusSession: (sessionId: TargetId) => void
@@ -78,6 +87,7 @@ const workspaceForSession = (
 }
 
 export function useArcShell({
+  workspaces,
   chats,
   sessions,
 }: {
@@ -124,6 +134,39 @@ export function useArcShell({
       },
       open: (target, pane) => {
         actor.send({ type: "SURFACE_OPENED", target, pane })
+      },
+      openFilePath: (href) => {
+        const target = fileHrefToPath(href)
+        // Not an absolute file path (an http/mailto/relative link): leave it to the
+        // anchor's own navigation, which the main process routes externally.
+        if (!target) return false
+        // An image opens in the in-app viewer pane regardless of workspace — its
+        // bytes are served by the `arc-img` protocol by absolute path, so a `/tmp`
+        // scratchpad image works the same as one inside a repo.
+        if (isImagePath(target.path)) {
+          actor.send({
+            type: "SURFACE_OPENED",
+            target: { kind: "image", src: arcImgFileSrc(target.path), title: target.path.split("/").pop() },
+            pane: "right",
+          })
+          return true
+        }
+        const resolved = resolveWorkspaceFile(workspaces, target.path)
+        if (resolved) {
+          actor.send({
+            type: "SURFACE_OPENED",
+            target: { kind: "file", ...resolved, line: target.line },
+            pane: "right",
+          })
+        } else {
+          // Outside every open workspace, so the in-app editor can't resolve it —
+          // hand the bare path to the OS opener. `window.arc` is attached long
+          // before any click; optional-chain guards Storybook, where it's absent.
+          window.arc?.openPath(target.path)
+        }
+        // Either way it was a file path we took responsibility for — tell the
+        // caller to prevent the anchor's default navigation.
+        return true
       },
       launchTarget: (provider, chatId) => {
         actor.send({
@@ -201,7 +244,7 @@ export function useArcShell({
         actor.send({ type: "RIGHT_PANEL_COLLAPSED_CHANGED", collapsed })
       },
     }),
-    [actor, chats, sessions],
+    [actor, workspaces, chats, sessions],
   )
 
   return { state, actions }

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron"
 import {
   ASSISTANT_STREAM_CHANNEL,
+  OPEN_PATH_CHANNEL,
   PTY_DATA_CHANNEL,
   PTY_DROPPED_CHANNEL,
   PTY_EXIT_CHANNEL,
@@ -49,6 +50,10 @@ const arcApi = {
 
   /** Ship one encoded RPC client message (request/ack) to main. */
   rpcSend: (message: unknown): void => ipcRenderer.send(RPC_CHANNEL, message),
+
+  /** Hand an absolute filesystem path to the OS opener (main-side `shell.openPath`)
+   * — the fallback when a linked file lands outside every open workspace. */
+  openPath: (path: string): void => ipcRenderer.send(OPEN_PATH_CHANNEL, path),
 
   /** Subscribe to encoded RPC server messages (exits/defects) from main. */
   onRpcMessage: (cb: (message: unknown) => void): (() => void) => {

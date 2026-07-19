@@ -8,10 +8,11 @@
  * and makes the projection rules unit-testable in isolation.
  */
 import type { Effect } from "effect"
+import { Option, Schema } from "effect"
 import type { ChatMessageRow } from "../../db/schema.js"
 import type { ExtractedRows, MessageRow, ToolCallRow } from "../../ingest/db/schema.js"
 import type { QuestionRequest } from "../../../shared/chat-request.js"
-import type { ToolCall as ToolCallData } from "../../../shared/tool-call.js"
+import { type ToolCall as ToolCallData, type ToolCallImage, ToolCallImage as ToolCallImageSchema } from "../../../shared/tool-call.js"
 import { decodeQuestionTool } from "../../../shared/question-tools.js"
 import { type ChatId, newArcId, type TargetId } from "../../../shared/ids.js"
 import { str } from "../../hooks/hook-input.js"
@@ -115,8 +116,10 @@ export const artifactQuestionBody = (tool: ToolCallRow): string | null => {
 export const artifactQuestionRequest = (tool: ToolCallRow): QuestionRequest | null =>
   artifactQuestionProjection(tool)
 
-const toolStateFromOutput = (output: string | null): ToolCallData["state"] => {
-  if (!output) return "input-available"
+// A row bearing images (a Read of a `.png`) completed even with no text output,
+// so `hasImages` counts as output for state/completion. `output` is the text.
+const toolStateFromOutput = (output: string | null, hasImages: boolean): ToolCallData["state"] => {
+  if (!output) return hasImages ? "output-available" : "input-available"
   const lower = output.toLowerCase()
   if (lower.includes("user doesn't want to proceed") || lower.includes("user does not want to proceed")) {
     return "output-denied"
@@ -126,6 +129,19 @@ const toolStateFromOutput = (output: string | null): ToolCallData["state"] => {
   // a successful read) must not flip the state pill to error.
   if (lower.startsWith("[error]")) return "output-error"
   return "output-available"
+}
+
+const decodeImages = Schema.decodeUnknownOption(Schema.Array(ToolCallImageSchema))
+
+/** The `[{hash, mediaType}]` a tool result carried, or `[]`. Arc-authored, but
+ * decoded through the schema so a malformed column degrades to no images. */
+export const toolImages = (tool: ToolCallRow): ReadonlyArray<ToolCallImage> => {
+  if (!tool.imagesJson) return []
+  try {
+    return Option.getOrElse(decodeImages(JSON.parse(tool.imagesJson)), () => [])
+  } catch {
+    return []
+  }
 }
 
 export const artifactToolCall = (tool: ToolCallRow): ToolCallData | null => {
@@ -139,12 +155,14 @@ export const artifactToolCall = (tool: ToolCallRow): ToolCallData | null => {
       args = tool.inputJson
     }
   }
+  const images = toolImages(tool)
   return {
     kind: "tool",
-    state: toolStateFromOutput(tool.outputText),
+    state: toolStateFromOutput(tool.outputText, images.length > 0),
     toolName,
     ...(args === undefined ? {} : { args }),
     ...(tool.outputText ? { output: tool.outputText } : {}),
+    ...(images.length > 0 ? { images } : {}),
   }
 }
 
@@ -154,6 +172,7 @@ const toolLines = (tool: ToolCallData): Array<string> => {
     lines.push("Input:", typeof tool.args === "string" ? tool.args : JSON.stringify(tool.args, null, 2))
   }
   if (tool.output) lines.push("Output:", tool.output)
+  if (tool.images && tool.images.length > 0) lines.push(`Output: [${tool.images.length} image(s)]`)
   return lines
 }
 
@@ -380,7 +399,9 @@ const toolCallKind: ArtifactProjectionKind = (ctx) => {
   for (const tool of ctx.rows.toolCalls) {
     const toolId = tool.nativeToolId ?? tool.id
     const occurredAt = artifactToolOccurredAt(ctx, timeIndex, tool)
-    const status: ChatMessageRow["status"] = tool.outputText ? "final" : "pending"
+    // An image-only result (a Read of a `.png`) has no `outputText` but is still
+    // complete — its images are the output — so `imagesJson` also marks it final.
+    const status: ChatMessageRow["status"] = tool.outputText || tool.imagesJson ? "final" : "pending"
     // Project once and derive both body and request from it: this runs on the
     // 750ms artifact poll, and the two exported helpers each re-parse the tool's
     // JSON + re-decode the question. (A null projection means "not a question".)

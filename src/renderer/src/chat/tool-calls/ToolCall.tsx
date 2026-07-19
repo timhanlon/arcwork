@@ -5,7 +5,7 @@ import type { ToolCall as ToolCallData } from "../../../../shared/tool-call.js"
 import { useShellActions } from "../../shell/ShellActionsContext.js"
 import { arcResultSupersedesInput, arcToolBody, arcToolLabel, arcToolOutput, isArcTool } from "./arc-tool-body.js"
 import { chromeToolBody, chromeToolLabel, isChromeTool } from "./chrome-tool-body.js"
-import { CodeBlock, FLAG, flagsFor, formatArgs, toolBody } from "./tool-body.js"
+import { CodeBlock, FLAG, flagsFor, formatArgs, ImageOutput, toolBody } from "./tool-body.js"
 import { renderShapeFor } from "../../../../shared/tool-catalog.js"
 
 const CARD = "grid gap-2 min-w-0"
@@ -33,6 +33,7 @@ export function ToolCall({
 }): JSX.Element {
   const { open } = useShellActions()
   const openWork = (workId: WorkId): void => open({ kind: "work", workId }, "right")
+  const openImage = (src: string): void => open({ kind: "image", src }, "right")
   const flags = flagsFor(tool.args)
   // Arc's own MCP toolkit (`mcp__arc__arc_*`) gets dedicated work/comment/search
   // cards rather than the generic MCP raw-JSON fallback — we know its exact
@@ -77,6 +78,7 @@ export function ToolCall({
       {body}
       {fallback && <CodeBlock text={fallback} />}
       {outputCard ?? (!isDiff && tool.output ? <CodeBlock text={tool.output} /> : null)}
+      {tool.images && tool.images.length > 0 && <ImageOutput images={tool.images} onOpen={openImage} />}
     </div>
   )
 }

@@ -101,6 +101,15 @@ export const arcWorkStateDir = (profile: ArcProfile): string =>
   path.join(os.homedir(), ARCWORK_DIRNAME, profile, "state")
 
 /**
+ * The profile's content-addressed image cache — pictures a tool result carried
+ * (a Read of a `.png`, a browser screenshot), decoded from the transcript's
+ * base64 at ingest and written as `<sha256>.<ext>`. Arc-owned and regenerable
+ * (re-ingest rewrites it), so it lives under the state dir rather than any repo.
+ */
+export const arcWorkImagesDir = (profile: ArcProfile): string =>
+  path.join(arcWorkStateDir(profile), "images")
+
+/**
  * The profile's home-rooted Arc Work *runtime* dir — Arc-owned, regenerable
  * scratch that must live outside any target repo. The hook helper script lives
  * here (one copy per profile, not one per workspace), so a repo Arc opens never

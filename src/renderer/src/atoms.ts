@@ -234,7 +234,7 @@ export const gitCommitsAtom = Atom.family((workspaceId: WorkspaceId) =>
  * reference-unique; a workspace id and a path never contain a newline, so it is an
  * unambiguous separator.
  */
-const gitFileDiffKey = (workspaceId: WorkspaceId, path: string): string => `${workspaceId}\n${path}`
+const workspacePathKey = (workspaceId: WorkspaceId, path: string): string => `${workspaceId}\n${path}`
 
 export const gitFileDiffAtom = Atom.family((key: string) => {
   const sep = key.indexOf("\n")
@@ -247,7 +247,28 @@ export const gitFileDiffAtom = Atom.family((key: string) => {
 })
 
 export const gitFileDiffAtomFor = (workspaceId: WorkspaceId, path: string) =>
-  gitFileDiffAtom(gitFileDiffKey(workspaceId, path))
+  gitFileDiffAtom(workspacePathKey(workspaceId, path))
+
+/**
+ * A workspace file's contents for the editor's read-only view, keyed the same
+ * `workspaceId\npath` way as the diff atom above (and for the same reason —
+ * `Atom.family` memoizes by `Equal`, so a flat string key shares one atom per
+ * file). It refreshes on the workspace's git status signal so a save landing on
+ * disk (ours later, or an external edit now) re-pulls the body, and carries the
+ * same idle TTL so an unopened file's content drops out of the cache.
+ */
+export const workspaceFileAtom = Atom.family((key: string) => {
+  const sep = key.indexOf("\n")
+  const workspaceId = arcId("workspace", key.slice(0, sep))
+  const path = key.slice(sep + 1)
+  return ArcRpcAtomClient.query("ReadWorkspaceFile", { workspaceId, path }).pipe(
+    Atom.makeRefreshOnSignal(gitStatusSignalAtom(workspaceId)),
+    Atom.setIdleTTL(GIT_ATOM_TTL),
+  )
+})
+
+export const workspaceFileAtomFor = (workspaceId: WorkspaceId, path: string) =>
+  workspaceFileAtom(workspacePathKey(workspaceId, path))
 
 /**
  * The work navigator/comments refresh signal. Work has two change sources folded

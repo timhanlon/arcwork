@@ -1,12 +1,17 @@
 import { Clock, Context, Effect, Layer } from "effect"
 import { SqlClient } from "effect/unstable/sql/SqlClient"
+import * as fs from "node:fs/promises"
+import * as path from "node:path"
 import { withSqlOperation } from "../../db/sql-operation.js"
+import { arcWorkImagesDir, resolveProfile } from "../../db/paths.js"
+import { imageExtForMediaType } from "../../../shared/images.js"
 import type { SqlError } from "effect/unstable/sql/SqlError"
 import {
   ingestMigrations,
   type DiagnosticRow,
   type ExtractedRows,
   type FileHintRow,
+  type ImageDraft,
   type MessageRow,
   type Provider,
   type StoredSession,
@@ -61,6 +66,40 @@ export const IngestStoreLive = Layer.effect(
 
     const nowIso = Effect.map(Clock.currentTimeMillis, (ms) => new Date(ms).toISOString())
 
+    // Content-addressed image cache — the profile is stable for the process, so
+    // resolve the dir once.
+    const imagesDir = arcWorkImagesDir(resolveProfile())
+
+    // Persist any images a tool result carried (a Read of a `.png`, a browser
+    // screenshot) as `<sha256>.<ext>` under the cache dir, so the renderer can
+    // render the picture from `arc-img://cache/<hash>.<ext>` instead of the old
+    // `[image]` placeholder. Best-effort (never fails the ingest) and idempotent:
+    // an existing content-addressed file is already correct, so it's left as-is.
+    const writeImages = (images: ReadonlyArray<ImageDraft>): Effect.Effect<void> =>
+      images.length === 0
+        ? Effect.void
+        : Effect.promise(async () => {
+            try {
+              await fs.mkdir(imagesDir, { recursive: true })
+              for (const img of images) {
+                const file = path.join(imagesDir, `${img.hash}.${imageExtForMediaType(img.mediaType)}`)
+                try {
+                  await fs.access(file)
+                  continue
+                } catch {
+                  await fs.writeFile(file, Buffer.from(img.data, "base64"))
+                }
+              }
+            } catch {
+              // A failed cache write just degrades to a broken preview downstream,
+              // never a failed session ingest.
+            }
+          }).pipe(
+            Effect.withSpan("arc.ingest.write_images", {
+              attributes: { "arc.ingest.images": images.length },
+            }),
+          )
+
     // Insert `rows` into `table` in chunks small enough to stay under SQLite's
     // bound-parameter ceiling (see MAX_SQL_VARIABLES). The chunk size is derived
     // from the row width, so adding a column can never silently push a table back
@@ -88,7 +127,12 @@ export const IngestStoreLive = Layer.effect(
     // the phase spans below decompose the hold so duration can be correlated
     // with transcript size (row counts on the outer span).
     const replaceSession = (rows: ExtractedRows) =>
-      sql
+      // Write the image bytes to the cache first, so the files exist before the
+      // rows that reference them land (a crash between the two leaves harmless
+      // orphan cache files, not dangling references).
+      Effect.andThen(
+        writeImages(rows.images ?? []),
+        sql
         .withTransaction(
           Effect.gen(function* () {
             const now = yield* nowIso
@@ -153,7 +197,8 @@ export const IngestStoreLive = Layer.effect(
             },
           }),
           withSqlOperation("arc.ingest.replace_session", { sessionId: rows.session.id }),
-        )
+        ),
+      )
 
     const listSessions = (filter?: SessionFilter) =>
       Effect.gen(function* () {

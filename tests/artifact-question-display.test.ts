@@ -12,6 +12,7 @@ const tool = (row: Partial<ToolCallRow>): ToolCallRow => ({
   kind: "generic",
   inputJson: null,
   outputText: null,
+  imagesJson: null,
   rawJson: null,
   sequence: 0,
   ordinal: 0,

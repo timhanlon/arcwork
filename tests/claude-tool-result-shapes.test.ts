@@ -57,10 +57,36 @@ describe("claude tool_result content shapes", () => {
     expect(out).not.toBeNull()
   })
 
-  it("represents image blocks rather than dropping them", () => {
-    expect(outputFor("Read", [{ type: "image", source: { type: "base64", media_type: "image/png", data: "x" } }])).toBe(
-      "[image]",
-    )
+  it("captures image blocks as a content-addressed reference, not [image] text", () => {
+    const sessions = parseClaudeSessions([
+      session("sess-img", "Read", [{ type: "image", source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" } }]),
+    ])
+    const rows = normalizeClaudeSession(sessions[0]!, { workspaceRoot: "/work", sourcePath: "/project" })
+    const call = rows.toolCalls.find((t) => t.nativeToolId === "toolu_1")!
+    // No "[image]" placeholder — an image-only result leaves outputText null and
+    // carries the picture instead (the projection treats images as completion).
+    expect(call.outputText).toBeNull()
+    const images = JSON.parse(call.imagesJson!) as Array<{ readonly hash: string; readonly mediaType: string }>
+    expect(images).toHaveLength(1)
+    expect(images[0]!.mediaType).toBe("image/png")
+    expect(images[0]!.hash).toMatch(/^[a-f0-9]{64}$/)
+    // The bytes ride the sibling `images` collection for the store to persist.
+    expect(rows.images).toHaveLength(1)
+    expect(rows.images![0]!.data).toBe("aGVsbG8=")
+    expect(rows.images![0]!.toolCallId).toBe(call.id)
+  })
+
+  it("keeps sibling text alongside an image (browser screenshot shape)", () => {
+    const sessions = parseClaudeSessions([
+      session("sess-shot", "mcp__claude-in-chrome__computer", [
+        { type: "text", text: "captured screenshot" },
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "eHk=" } },
+      ]),
+    ])
+    const rows = normalizeClaudeSession(sessions[0]!, { workspaceRoot: "/work", sourcePath: "/project" })
+    const call = rows.toolCalls.find((t) => t.nativeToolId === "toolu_1")!
+    expect(call.outputText).toBe("captured screenshot")
+    expect(JSON.parse(call.imagesJson!)).toHaveLength(1)
   })
 
   it("flags an errored result", () => {

@@ -59,6 +59,14 @@ export const PTY_REPLAYED_CHANNEL = "arc:pty-replayed"
 export const PTY_DROPPED_CHANNEL = "arc:pty-dropped"
 export const ASSISTANT_STREAM_CHANNEL = "arc:assistant-stream"
 
+/** Fire-and-forget renderer→main: hand an absolute filesystem path to the OS
+ * opener (`shell.openPath`). Used when a transcript file link lands outside every
+ * open workspace, so it can't open in the in-app editor. Doing this over an
+ * explicit channel — rather than letting the anchor navigate and relying on the
+ * `will-navigate` guard — keeps it working in `pnpm dev`, where a root-relative
+ * href resolves against `http://localhost`, not `file://`. */
+export const OPEN_PATH_CHANNEL = "arc:open-path"
+
 /**
  * Typed error returned across the seam. `ArcRequestError` is an expected,
  * user-facing condition (unknown chat, target not running, empty prompt...);
@@ -118,6 +126,24 @@ export const WorkspaceFiles = Schema.Struct({
 })
 export type WorkspaceFiles = typeof WorkspaceFiles.Type
 
+/**
+ * One workspace file's contents, for the editor's read-only view. `path` is the
+ * relative POSIX path the caller asked for (echoed so the renderer can key on
+ * it). `text` is the decoded UTF-8 body; it is empty when `binary` is true (we
+ * don't ship raw bytes over the seam to render as text) or when `truncated`
+ * capped an oversized file. `truncated` says the body was cut at the size
+ * ceiling so the editor can flag the view as partial rather than imply it's
+ * whole; `binary` says the file looked non-text (a NUL byte in the head) so the
+ * editor can show a placeholder instead of mojibake.
+ */
+export const WorkspaceFileContent = Schema.Struct({
+  path: Schema.String,
+  text: Schema.String,
+  truncated: Schema.Boolean,
+  binary: Schema.Boolean,
+})
+export type WorkspaceFileContent = typeof WorkspaceFileContent.Type
+
 // "all" (sweep every provider) plus each provider, derived from the canonical
 // union so a new provider can't be added there and silently omitted here.
 const IngestKinds = Schema.Union([Schema.Literal("all"), Provider])
@@ -158,6 +184,18 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("ListWorkspaceFiles", {
     payload: { workspaceId: WorkspaceId },
     success: WorkspaceFiles,
+    error: RpcError,
+  }),
+  /**
+   * One file's contents for the editor's read-only view. Like `ListWorkspaceFiles`
+   * the file is named by workspace *id* + relative path: main resolves the root
+   * from its persisted list and confirms the resolved real path stays inside it,
+   * so a `../` escape off the wire can't read arbitrary disk. Oversized files are
+   * truncated and non-text files come back flagged, not as raw bytes.
+   */
+  Rpc.make("ReadWorkspaceFile", {
+    payload: { workspaceId: WorkspaceId, path: Schema.String },
+    success: WorkspaceFileContent,
     error: RpcError,
   }),
   Rpc.make("GetWorkspaceGitStatus", {

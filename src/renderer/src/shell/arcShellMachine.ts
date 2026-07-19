@@ -55,6 +55,20 @@ export type RightSurface =
   | { readonly kind: "terminal" }
   | { readonly kind: "git"; readonly path?: string }
   | { readonly kind: "work"; readonly workId: WorkId }
+  // A read-only view of one workspace file (the Monaco editor), named by
+  // workspace id + relative path — the same identity the file/diff RPCs use.
+  // `line` is the 1-based line to reveal when the link carried one (`foo.ts:7`).
+  | {
+      readonly kind: "file"
+      readonly workspaceId: WorkspaceId
+      readonly path: string
+      readonly line?: number
+    }
+  // An image viewed in-app: a tool result's picture, or an image file-link
+  // (including outside every workspace, e.g. `/tmp`). Keyed by its `arc-img://`
+  // src rather than a workspace id + relative path, since images aren't confined
+  // to a workspace root. `title` is an optional caption (e.g. the file name).
+  | { readonly kind: "image"; readonly src: string; readonly title?: string }
 
 // The one verb for moving a surface into a region: `open(target, pane)`. The
 // target is the *what* (a tagged surface), the pane the *where* — replacing the
@@ -69,6 +83,13 @@ export type OpenTarget =
   | { readonly kind: "work"; readonly workId?: WorkId }
   | { readonly kind: "git"; readonly path?: string }
   | { readonly kind: "terminal" }
+  | {
+      readonly kind: "file"
+      readonly workspaceId: WorkspaceId
+      readonly path: string
+      readonly line?: number
+    }
+  | { readonly kind: "image"; readonly src: string; readonly title?: string }
 
 export interface ShellLayout {
   readonly left: { readonly surface: LeftSurface; readonly collapsed: boolean }
@@ -250,6 +271,19 @@ const openSurface = (
   if (target.kind === "terminal") return { layout: showRight(context.layout, { kind: "terminal" }) }
   if (target.kind === "work") {
     return target.workId ? { layout: showRight(context.layout, { kind: "work", workId: target.workId }) } : {}
+  }
+  if (target.kind === "file") {
+    return {
+      layout: showRight(context.layout, {
+        kind: "file",
+        workspaceId: target.workspaceId,
+        path: target.path,
+        line: target.line,
+      }),
+    }
+  }
+  if (target.kind === "image") {
+    return { layout: showRight(context.layout, { kind: "image", src: target.src, title: target.title }) }
   }
   if (target.kind === "git") {
     // No path → reveal git, seeding the remembered file. A path → select + remember it.

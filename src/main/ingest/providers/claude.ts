@@ -1,4 +1,5 @@
 import { Effect, FileSystem, Option, Path, Schema } from "effect"
+import { createHash } from "node:crypto"
 import { homedir } from "node:os"
 import type { DiagnosticRow, ExtractedRows } from "../db/schema.js"
 import type { IngestError } from "../errors.js"
@@ -85,36 +86,61 @@ const isHarnessChromeUserRecord = (record: Rec, content: unknown): boolean => {
 // output-less/pending forever even though the transcript carried a result.
 const TextBlock = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })
 const ToolReferenceBlock = Schema.Struct({ type: Schema.Literal("tool_reference"), tool_name: Schema.String })
-const ImageBlock = Schema.Struct({ type: Schema.Literal("image") })
+// The image block now keeps its `source` (base64 bytes + media type) rather than
+// discarding it: the bytes are cached to disk and the picture rendered inline,
+// replacing the old `[image]` placeholder text.
+const ImageBlock = Schema.Struct({
+  type: Schema.Literal("image"),
+  source: Schema.Struct({ media_type: Schema.String, data: Schema.String }),
+})
 const ToolResultBlock = Schema.Union([TextBlock, ToolReferenceBlock, ImageBlock])
 const decodeToolResultBlock = Schema.decodeUnknownOption(ToolResultBlock)
 
-const toolResultBlockText = (block: typeof ToolResultBlock.Type): string => {
+// The text members only — image blocks are pulled out separately in
+// `toolResultContent`, so the switch here never sees one and stays exhaustive.
+type ToolResultTextBlock = Exclude<typeof ToolResultBlock.Type, { readonly type: "image" }>
+const toolResultBlockText = (block: ToolResultTextBlock): string => {
   switch (block.type) {
     case "text":
       return block.text
     case "tool_reference":
       return `→ ${block.tool_name}`
-    case "image":
-      return "[image]"
   }
 }
 
-/** Collapse a tool_result's content (string or array of typed blocks) to a string. */
-const toolResultText = (content: unknown): string => {
+export interface ResultImage {
+  readonly hash: string
+  readonly mediaType: string
+  readonly data: string
+}
+
+const sha256Hex = (data: string): string => createHash("sha256").update(data).digest("hex")
+
+/**
+ * Collapse a tool_result's content (string or array of typed blocks) to its text
+ * plus any embedded images. A Read of a `.png` carries a lone image block; a
+ * browser screenshot carries text *and* an image — both are preserved. The image
+ * bytes are content-addressed by `sha256(data)` so repeated screenshots dedupe.
+ */
+const toolResultContent = (content: unknown): { readonly text: string; readonly images: ReadonlyArray<ResultImage> } => {
   const s = str(content)
-  if (s !== undefined) return s
+  if (s !== undefined) return { text: s, images: [] }
   const parts: Array<string> = []
+  const images: Array<ResultImage> = []
   for (const item of arr(content)) {
     const block = decodeToolResultBlock(item)
     // Unknown block shapes decode to None and are skipped rather than emitting
     // an empty string; add a schema member above to capture a new shape.
-    if (Option.isSome(block)) {
+    if (Option.isNone(block)) continue
+    if (block.value.type === "image") {
+      const { media_type, data } = block.value.source
+      images.push({ hash: sha256Hex(data), mediaType: media_type, data })
+    } else {
       const text = toolResultBlockText(block.value)
       if (text) parts.push(text)
     }
   }
-  return parts.join("\n")
+  return { text: parts.join("\n"), images }
 }
 
 const NeStr = Schema.NonEmptyString
@@ -251,8 +277,12 @@ export const normalizeClaudeSession = (
           const useId = p.value.tool_use_id
           if (!useId) continue
           const isError = p.value.is_error === true
-          const text = toolResultText(p.value.content)
-          const call = b.result(useId, isError ? `[error] ${text}` : text)
+          const { text, images } = toolResultContent(p.value.content)
+          // An image-only result (a Read of a `.png`) has no text: leave
+          // outputText null and let the images carry completion — the projection
+          // treats a row with images as output-available, not pending.
+          const outputText = text ? (isError ? `[error] ${text}` : text) : undefined
+          const call = b.result(useId, outputText, images)
           if (!call) continue
           // Scoped to the question tool: every other tool also carries a
           // sidecar (Bash stdout, file contents, …) and duplicating those into
