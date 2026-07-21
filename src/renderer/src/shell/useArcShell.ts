@@ -26,9 +26,10 @@ export interface ArcShellActions {
    * replacing the old setCenterView/setRightView/openWorkInRightPane/
    * selectGitPath/closeRightWork. Illegal (target, pane) pairs are no-ops. */
   readonly open: (target: OpenTarget, pane: Pane) => void
+  readonly closeCenterTab: (id: string) => void
   /** Open a file the assistant linked in a transcript (`[foo.ts](/abs/path/foo.ts)`,
    * optionally with a `:line`). Resolves the absolute path (or `file://` URL)
-   * against the open workspaces: inside one → the read-only editor pane; outside
+   * against the open workspaces: inside one → the center editor pane; outside
    * all of them → the OS opener. Returns `true` when the href was a file path it
    * took over (so the caller prevents the anchor's navigation), `false` for a
    * non-file href (http/mailto/relative) — left to navigate normally. */
@@ -135,6 +136,9 @@ export function useArcShell({
       open: (target, pane) => {
         actor.send({ type: "SURFACE_OPENED", target, pane })
       },
+      closeCenterTab: (id) => {
+        actor.send({ type: "CENTER_TAB_CLOSED", id })
+      },
       openFilePath: (href) => {
         const target = fileHrefToPath(href)
         // Not an absolute file path (an http/mailto/relative link): leave it to the
@@ -147,7 +151,7 @@ export function useArcShell({
           actor.send({
             type: "SURFACE_OPENED",
             target: { kind: "image", src: arcImgFileSrc(target.path), title: target.path.split("/").pop() },
-            pane: "right",
+            pane: "center",
           })
           return true
         }

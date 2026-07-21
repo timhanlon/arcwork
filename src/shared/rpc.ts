@@ -144,6 +144,10 @@ export const WorkspaceFileContent = Schema.Struct({
 })
 export type WorkspaceFileContent = typeof WorkspaceFileContent.Type
 
+/** Echoes the relative path of an existing workspace file that was saved. */
+export const WorkspaceFileWrite = Schema.Struct({ path: Schema.String })
+export type WorkspaceFileWrite = typeof WorkspaceFileWrite.Type
+
 // "all" (sweep every provider) plus each provider, derived from the canonical
 // union so a new provider can't be added there and silently omitted here.
 const IngestKinds = Schema.Union([Schema.Literal("all"), Provider])
@@ -196,6 +200,12 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("ReadWorkspaceFile", {
     payload: { workspaceId: WorkspaceId, path: Schema.String },
     success: WorkspaceFileContent,
+    error: RpcError,
+  }),
+  /** Save text to an existing file after main resolves it under the workspace root. */
+  Rpc.make("WriteWorkspaceFile", {
+    payload: { workspaceId: WorkspaceId, path: Schema.String, text: Schema.String },
+    success: WorkspaceFileWrite,
     error: RpcError,
   }),
   Rpc.make("GetWorkspaceGitStatus", {

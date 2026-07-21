@@ -1,4 +1,4 @@
-import { type JSX, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { type JSX, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import { Exit } from "effect"
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels"
@@ -16,6 +16,7 @@ import {
 import type { ChatId, PaneId, TargetId, WorkspaceId } from "../../shared/ids.js"
 import type { TargetSession } from "../../shared/instance.js"
 import { ArcSidebarTree } from "./sidebar/ArcSidebarTree.js"
+import { WorkspaceFilesTree } from "./sidebar/WorkspaceFilesTree.js"
 import { TargetSessionPane } from "./chat/TargetSessionPane.js"
 import { sync as syncTerminals } from "./terminal/terminalRegistry.js"
 import { UnifiedChatPane, type ChatPaneHandle, type LaunchableProvider } from "./chat/UnifiedChatPane.js"
@@ -72,6 +73,7 @@ export function App(): JSX.Element {
   const workspaces = successList(useAtomValue(workspacesAtom))
   const [searchOpen, setSearchOpen] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
+  const [dirtyCenterTabs, setDirtyCenterTabs] = useState<ReadonlySet<string>>(() => new Set())
 
   const providers = successList(useAtomValue(providersAtom))
   const sessions = successList(useAtomValue(sessionsAtom))
@@ -108,8 +110,17 @@ export function App(): JSX.Element {
     return options
   })
 
-  const centerView = center.surface.kind === "work" ? "work" : "chat"
-  const rightView = right.surface.kind === "git" ? "git" : "terminal"
+  const activeCenterTab = center.tabs.find((tab) => tab.id === center.activeId) ?? center.tabs[0]!
+  const rightView = right.surface.kind === "git" ? "git" : right.surface.kind === "files" ? "files" : "terminal"
+  const closeCenterTab = useCallback((id: string): void => {
+    if (dirtyCenterTabs.has(id) && !window.confirm("Discard unsaved changes?")) return
+    setDirtyCenterTabs((current) => {
+      const next = new Set(current)
+      next.delete(id)
+      return next
+    })
+    shell.actions.closeCenterTab(id)
+  }, [dirtyCenterTabs, shell.actions])
 
   useEffect(() => {
     document.title = isDev ? "Arc Work (dev)" : "Arc Work"
@@ -205,6 +216,7 @@ export function App(): JSX.Element {
       // remembered id back through `open`), rather than landing on the list — an
       // absent workId would read as a deselect and clear the pick.
       showWorkView: () => shell.actions.open({ kind: "work", workId: vm.workId }, "center"),
+      closeCenterTab: () => closeCenterTab(activeCenterTab.id),
       // New chat lands in the selected workspace, falling back to the first — a
       // no-op when none are open yet. Unlike createWork it's an async RPC
       // (useChatMutations), so it runs here rather than as a machine transition.
@@ -230,7 +242,7 @@ export function App(): JSX.Element {
       }
     }
     return handlers
-  }, [shell.actions, pendingOrder, vm.detachedSession, vm.workId, vm.workspaceId, workspaces, createChat])
+  }, [shell.actions, pendingOrder, vm.detachedSession, vm.workId, vm.workspaceId, workspaces, createChat, activeCenterTab.id, closeCenterTab])
   useKeyboardShortcuts(shortcutHandlers)
 
   const paletteCommands = buildPaletteCommands({
@@ -362,18 +374,24 @@ export function App(): JSX.Element {
         ) : null}
         <NavBar
           isDev={isDev}
-          centerView={centerView}
+          centerTabs={center.tabs}
+          activeCenterTabId={activeCenterTab.id}
           rightView={rightView}
           leftPanelCollapsed={left.collapsed}
           rightPanelCollapsed={right.collapsed}
-          onCenterViewChange={(view) =>
+          onCenterTabSelect={(tab) =>
             shell.actions.open(
-              view === "work" ? { kind: "work", workId: vm.workId } : { kind: "chat" },
+              tab.kind === "file"
+                ? { kind: "file", workspaceId: tab.workspaceId, path: tab.path, line: tab.line }
+                : tab.kind === "work"
+                  ? { kind: "work", workId: vm.workId }
+                  : { kind: "chat" },
               "center",
             )
           }
+          onCenterTabClose={closeCenterTab}
           onRightViewChange={(view) =>
-            shell.actions.open(view === "git" ? { kind: "git" } : { kind: "terminal" }, "right")
+            shell.actions.open(view === "git" ? { kind: "git" } : view === "files" ? { kind: "files" } : { kind: "terminal" }, "right")
           }
           onToggleLeftPanel={shell.actions.toggleLeftPanel}
           onToggleRightPanel={shell.actions.toggleRightPanel}
@@ -402,14 +420,15 @@ export function App(): JSX.Element {
           <Separator className="w-px flex-none bg-border transition-colors hover:bg-border-strong focus-visible:bg-accent focus-visible:outline-none active:bg-accent" />
 
           <Panel defaultSize="38%" minSize="24%" className="min-w-[280px]">
-            {center.surface.kind === "work" ? (
+            <div className="h-full">
+            {activeCenterTab.kind === "work" ? (
               <WorkPane
                 ref={workPaneRef}
                 chatId={vm.chat?.id}
                 selectedId={vm.workId}
                 onSelectWork={(workId) => shell.actions.open({ kind: "work", workId }, "center")}
               />
-            ) : (
+            ) : activeCenterTab.kind === "chat" ? (
               <UnifiedChatPane
                 ref={chatPaneRef}
                 chat={vm.chat}
@@ -423,7 +442,27 @@ export function App(): JSX.Element {
                 onFocusSession={focusSession}
                 onRenameChat={renameChat}
               />
-            )}
+            ) : null}
+            {center.tabs.filter((tab) => tab.kind === "file").map((tab) => (
+              <Suspense key={tab.id} fallback={null}>
+                <WorkspaceFileView
+                  workspaceId={tab.workspaceId}
+                  path={tab.path}
+                  line={tab.line}
+                  className={tab.id === activeCenterTab.id ? "h-full" : "hidden"}
+                  onDirtyChange={(dirty) =>
+                    setDirtyCenterTabs((current) => {
+                      if (current.has(tab.id) === dirty) return current
+                      const next = new Set(current)
+                      if (dirty) next.add(tab.id)
+                      else next.delete(tab.id)
+                      return next
+                    })
+                  }
+                />
+              </Suspense>
+            ))}
+            </div>
           </Panel>
 
           <Separator className="w-px flex-none bg-border transition-colors hover:bg-border-strong focus-visible:bg-accent focus-visible:outline-none active:bg-accent" />
@@ -455,17 +494,8 @@ export function App(): JSX.Element {
                 selectedPath={vm.gitPath}
                 onSelectPath={selectGitPath}
               />
-            ) : right.surface.kind === "file" ? (
-              <Suspense
-                fallback={<div className="px-2 py-2 text-[12px] text-fg-dim">Loading…</div>}
-              >
-                <WorkspaceFileView
-                  workspaceId={right.surface.workspaceId}
-                  path={right.surface.path}
-                  line={right.surface.line}
-                  className="h-full"
-                />
-              </Suspense>
+            ) : right.surface.kind === "files" ? (
+              <WorkspaceFilesTree workspaceId={vm.workspace?.id} workspacePath={vm.workspace?.path} />
             ) : right.surface.kind === "image" ? (
               <ImageView src={right.surface.src} title={right.surface.title} className="h-full" />
             ) : (

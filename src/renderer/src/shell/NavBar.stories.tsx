@@ -1,6 +1,9 @@
 import { useState } from "react"
 import { NavBar } from "./NavBar.js"
-import type { ViewKey } from "../sidebar/ViewToggleCompact.js"
+import type { CenterTab } from "./arcShellMachine.js"
+import { arcId } from "../../../shared/ids.js"
+
+const CHAT_TAB: ReadonlyArray<CenterTab> = [{ id: "chat", kind: "chat" }]
 
 export default {
   title: "Shell / NavBar",
@@ -10,11 +13,13 @@ export default {
 export const BothOpen = () => (
   <NavBar
     isDev={false}
-    centerView="chat"
+    centerTabs={CHAT_TAB}
+    activeCenterTabId="chat"
     rightView="terminal"
     leftPanelCollapsed={false}
     rightPanelCollapsed={false}
-    onCenterViewChange={() => {}}
+    onCenterTabSelect={() => {}}
+    onCenterTabClose={() => {}}
     onRightViewChange={() => {}}
     onToggleLeftPanel={() => {}}
     onToggleRightPanel={() => {}}
@@ -26,11 +31,13 @@ export const BothOpen = () => (
 export const BothCollapsed = () => (
   <NavBar
     isDev={false}
-    centerView="chat"
+    centerTabs={CHAT_TAB}
+    activeCenterTabId="chat"
     rightView="git"
     leftPanelCollapsed
     rightPanelCollapsed
-    onCenterViewChange={() => {}}
+    onCenterTabSelect={() => {}}
+    onCenterTabClose={() => {}}
     onRightViewChange={() => {}}
     onToggleLeftPanel={() => {}}
     onToggleRightPanel={() => {}}
@@ -42,11 +49,13 @@ export const BothCollapsed = () => (
 export const DevProfile = () => (
   <NavBar
     isDev
-    centerView="chat"
+    centerTabs={CHAT_TAB}
+    activeCenterTabId="chat"
     rightView="terminal"
     leftPanelCollapsed={false}
     rightPanelCollapsed={false}
-    onCenterViewChange={() => {}}
+    onCenterTabSelect={() => {}}
+    onCenterTabClose={() => {}}
     onRightViewChange={() => {}}
     onToggleLeftPanel={() => {}}
     onToggleRightPanel={() => {}}
@@ -58,16 +67,23 @@ export const DevProfile = () => (
 export const Interactive = () => {
   const [left, setLeft] = useState(false)
   const [right, setRight] = useState(false)
-  const [view, setView] = useState<ViewKey>("chat")
-  const [rightView, setRightView] = useState<"terminal" | "git">("terminal")
+  const [tabs, setTabs] = useState<ReadonlyArray<CenterTab>>([
+    { id: "chat", kind: "chat" },
+    { id: "work", kind: "work" },
+    { id: "file:demo", kind: "file", workspaceId: arcId("workspace", "demo"), path: "src/App.tsx" },
+  ])
+  const [activeTabId, setActiveTabId] = useState("chat")
+  const [rightView, setRightView] = useState<"terminal" | "files" | "git">("terminal")
   return (
     <NavBar
       isDev={false}
-      centerView={view}
+      centerTabs={tabs}
+      activeCenterTabId={activeTabId}
       rightView={rightView}
       leftPanelCollapsed={left}
       rightPanelCollapsed={right}
-      onCenterViewChange={setView}
+      onCenterTabSelect={(tab) => setActiveTabId(tab.id)}
+      onCenterTabClose={(id) => setTabs((current) => current.filter((tab) => tab.id !== id))}
       onRightViewChange={setRightView}
       onToggleLeftPanel={() => setLeft((v) => !v)}
       onToggleRightPanel={() => setRight((v) => !v)}

@@ -101,6 +101,9 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     ListProviders: svc("ListProviders", ProviderRegistry, (_) => _.list),
     ListWorkspaceFiles: svc("ListWorkspaceFiles", WorkspaceFilesService, (_, req) => _.list(req.workspaceId)),
     ReadWorkspaceFile: svc("ReadWorkspaceFile", WorkspaceFilesService, (_, req) => _.read(req.workspaceId, req.path)),
+    WriteWorkspaceFile: svc("WriteWorkspaceFile", WorkspaceFilesService, (_, req) =>
+      _.write(req.workspaceId, req.path, req.text),
+    ),
     GetWorkspaceGitStatus: svc("GetWorkspaceGitStatus", GitService, (_, req) => _.status(req.workspaceId)),
     GetWorkspaceGitFileDiff: svc("GetWorkspaceGitFileDiff", GitService, (_, req) =>
       _.diff(req.workspaceId, req.path),

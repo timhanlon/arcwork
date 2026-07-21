@@ -1,21 +1,23 @@
 import type { JSX } from "react"
 import { ToggleGroup } from "@base-ui/react/toggle-group"
 import { Toggle } from "@base-ui/react/toggle"
-import { FolderSimplePlus, GitMerge, SidebarSimple, Terminal } from "@phosphor-icons/react"
+import { FolderSimple, FolderSimplePlus, GitMerge, SidebarSimple, Terminal } from "@phosphor-icons/react"
 import { IconButton, ICON_TOGGLE_ITEM } from "../ui/IconButton.js"
-import { ViewToggleCompact } from "../sidebar/ViewToggleCompact.js"
-import type { ViewKey } from "../sidebar/ViewToggleCompact.js"
+import type { CenterTab } from "./arcShellMachine.js"
+import { CenterTabStrip } from "./CenterTabStrip.js"
 import { bindingFor } from "./keybindings.js"
 
 export interface NavBarProps {
   /** running under the `dev` profile — surfaces a badge since macOS labels the binary "Electron" */
   readonly isDev: boolean
-  readonly centerView: ViewKey
-  readonly rightView: "terminal" | "git"
+  readonly centerTabs: ReadonlyArray<CenterTab>
+  readonly activeCenterTabId: string
+  readonly rightView: "terminal" | "files" | "git"
   readonly leftPanelCollapsed: boolean
   readonly rightPanelCollapsed: boolean
-  readonly onCenterViewChange: (view: ViewKey) => void
-  readonly onRightViewChange: (view: "terminal" | "git") => void
+  readonly onCenterTabSelect: (tab: CenterTab) => void
+  readonly onCenterTabClose: (id: string) => void
+  readonly onRightViewChange: (view: "terminal" | "files" | "git") => void
   readonly onToggleLeftPanel: () => void
   readonly onToggleRightPanel: () => void
   readonly onOpenWorkspace: () => void
@@ -31,11 +33,13 @@ export interface NavBarProps {
  */
 export function NavBar({
   isDev,
-  centerView,
+  centerTabs,
+  activeCenterTabId,
   rightView,
   leftPanelCollapsed,
   rightPanelCollapsed,
-  onCenterViewChange,
+  onCenterTabSelect,
+  onCenterTabClose,
   onRightViewChange,
   onToggleLeftPanel,
   onToggleRightPanel,
@@ -64,8 +68,8 @@ export function NavBar({
           <FolderSimplePlus size={16} weight="regular" />
         </IconButton>
       </div>
-      <div className="flex items-center justify-self-center">
-        <ViewToggleCompact value={centerView} onValueChange={onCenterViewChange} />
+      <div className="flex min-w-0 max-w-full items-center justify-self-center overflow-hidden">
+        <CenterTabStrip tabs={centerTabs} activeId={activeCenterTabId} onSelect={onCenterTabSelect} onClose={onCenterTabClose} />
       </div>
       <div className="flex items-center justify-self-end gap-0.5">
         <RightPaneToggle value={rightView} onValueChange={onRightViewChange} />
@@ -85,6 +89,7 @@ export function NavBar({
 
 const RIGHT_ITEMS = [
   { value: "terminal", label: "terminal", Icon: Terminal },
+  { value: "files", label: "files", Icon: FolderSimple },
   { value: "git", label: "git", Icon: GitMerge },
 ] as const
 
@@ -92,15 +97,15 @@ function RightPaneToggle({
   value,
   onValueChange,
 }: {
-  readonly value: "terminal" | "git"
-  readonly onValueChange: (value: "terminal" | "git") => void
+  readonly value: "terminal" | "files" | "git"
+  readonly onValueChange: (value: "terminal" | "files" | "git") => void
 }): JSX.Element {
   return (
     <ToggleGroup
       value={[value]}
       onValueChange={(next) => {
         const picked = next.find((v) => v !== value) ?? next[0]
-        if (picked && picked !== value) onValueChange(picked as "terminal" | "git")
+        if (picked && picked !== value) onValueChange(picked as "terminal" | "files" | "git")
       }}
       aria-label="Right pane"
       className="inline-flex items-center gap-0.5"

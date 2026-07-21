@@ -17,6 +17,7 @@ const DEFAULT_ACTIONS: ArcShellActions = {
   selectChat: noop,
   selectSidebar: noop,
   open: noop,
+  closeCenterTab: noop,
   openFilePath: () => false,
   launchTarget: noop,
   bindTarget: noop,

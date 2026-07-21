@@ -3,7 +3,7 @@ import { execFile } from "node:child_process"
 import type { Dirent } from "node:fs"
 import * as fs from "node:fs/promises"
 import * as path from "node:path"
-import type { WorkspaceFileContent, WorkspaceFiles } from "../../shared/rpc.js"
+import type { WorkspaceFileContent, WorkspaceFiles, WorkspaceFileWrite } from "../../shared/rpc.js"
 import { type ArcRequestError, arcRequestError } from "../errors.js"
 import { WorkspaceService } from "./WorkspaceService.js"
 
@@ -32,6 +32,7 @@ export class WorkspaceFilesService extends Context.Service<
       workspaceId: string,
       relativePath: string,
     ) => Effect.Effect<WorkspaceFileContent, ArcRequestError>
+    readonly write: (workspaceId: string, relativePath: string, text: string) => Effect.Effect<WorkspaceFileWrite, ArcRequestError>
   }
 >()("WorkspaceFilesService") {}
 
@@ -193,6 +194,35 @@ export const WorkspaceFilesServiceLive = Layer.effect(
           return content
         }).pipe(
           Effect.withSpan("arc.workspace.read_file", {
+            attributes: { "arc.workspace_id": workspaceId, "arc.path": relativePath },
+          }),
+        ),
+      write: (workspaceId, relativePath, text) =>
+        Effect.gen(function* () {
+          const workspace = (yield* workspaces.list).find((w) => w.id === workspaceId)
+          if (!workspace) return yield* Effect.fail(arcRequestError(`Unknown workspace: ${workspaceId}`))
+          const root = path.resolve(workspace.path)
+          const resolved = path.resolve(root, relativePath)
+          if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+            return yield* Effect.fail(arcRequestError(`Path escapes workspace: ${relativePath}`))
+          }
+          return yield* Effect.tryPromise({
+            try: async (): Promise<WorkspaceFileWrite> => {
+              // Canonical paths keep an existing symlink from redirecting a save
+              // outside the workspace. Creation is deliberately a separate RPC.
+              const realRoot = await fs.realpath(root)
+              const real = await fs.realpath(resolved)
+              if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+                throw new Error(`Path escapes workspace: ${relativePath}`)
+              }
+              if (!(await fs.stat(real)).isFile()) throw new Error(`Not a file: ${relativePath}`)
+              await fs.writeFile(real, text, "utf8")
+              return { path: relativePath }
+            },
+            catch: (cause) => arcRequestError(cause instanceof Error ? cause.message : String(cause)),
+          })
+        }).pipe(
+          Effect.withSpan("arc.workspace.write_file", {
             attributes: { "arc.workspace_id": workspaceId, "arc.path": relativePath },
           }),
         ),

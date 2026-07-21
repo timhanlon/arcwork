@@ -99,7 +99,7 @@ describe("arcShellMachine TARGET_ADOPTED", () => {
     expect(emitted).toEqual([])
     expect(ctx.selection.chatId).toBeUndefined()
     expect(ctx.layout.right.surface).toEqual(initialArcShellContext.layout.right.surface)
-    expect(ctx.layout.center.surface).toEqual(initialArcShellContext.layout.center.surface)
+    expect(ctx.layout.center).toEqual(initialArcShellContext.layout.center)
   })
 
   it("mounts later adoptions in the background without stealing the active pane", () => {

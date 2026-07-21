@@ -4,6 +4,7 @@ import {
   arcShellMachine,
   type ArcShellEmitted,
   type ArcShellEvent,
+  type ArcShellContext,
   type ShellSessionRef,
 } from "../src/renderer/src/shell/arcShellMachine.js"
 import { arcId } from "../src/shared/ids.js"
@@ -15,6 +16,9 @@ const snapshotAfter = (...events: ReadonlyArray<ArcShellEvent>) => {
   actor.stop()
   return snapshot.context
 }
+
+const activeCenterKind = (context: ArcShellContext): string | undefined =>
+  context.layout.center.tabs.find((tab) => tab.id === context.layout.center.activeId)?.kind
 
 // Collect the imperative signals (focus/scroll) the machine emits while
 // processing a sequence of events — the replacement for the old epoch counters.
@@ -59,6 +63,18 @@ describe("arc shell machine", () => {
     actor.stop()
   })
 
+  it("opens files as deduplicated, closable center tabs while keeping Chat pinned", () => {
+    const workspaceId = arcId("workspace", "workspace_tabs")
+    const context = snapshotAfter(
+      { type: "SURFACE_OPENED", target: { kind: "file", workspaceId, path: "src/App.tsx" }, pane: "center" },
+      { type: "SURFACE_OPENED", target: { kind: "file", workspaceId, path: "src/App.tsx", line: 42 }, pane: "center" },
+      { type: "CENTER_TAB_CLOSED", id: `file:${workspaceId}:src/App.tsx` },
+      { type: "CENTER_TAB_CLOSED", id: "chat" },
+    )
+    expect(context.layout.center.tabs).toEqual([{ id: "chat", kind: "chat" }])
+    expect(context.layout.center.activeId).toBe("chat")
+  })
+
   it("launches an unbound pane then binds it to the target session", () => {
     const context = snapshotAfter(
       {
@@ -71,7 +87,7 @@ describe("arc shell machine", () => {
       { type: "TARGET_BOUND", paneId: arcId("pane", "pane_1"), sessionId: arcId("target", "target_1") },
     )
 
-    expect(context.layout.center.surface.kind).toBe("chat")
+    expect(activeCenterKind(context)).toBe("chat")
     expect(context.selection.chatByWorkspace[arcId("workspace", "workspace_1")]).toBe("chat_1")
     expect(context.selection.terminalPaneId).toBe("pane_1")
     // Launch focuses the composer, not the not-yet-spawned terminal, so the
@@ -172,7 +188,7 @@ describe("arc shell machine", () => {
     expect(inGit.layout.right.surface.kind).toBe("git")
     expect(inGit.layout.right.collapsed).toBe(false)
     // Git is self-contained in the right region — the center is untouched.
-    expect(inGit.layout.center.surface.kind).toBe("chat")
+    expect(activeCenterKind(inGit)).toBe("chat")
   })
 
   it("records the selected path on the right git surface, leaving the center alone", () => {
@@ -182,7 +198,7 @@ describe("arc shell machine", () => {
       { type: "SURFACE_OPENED", target: { kind: "git", path: "src/app.ts" }, pane: "right" },
     )
     expect(context.layout.right.surface).toEqual({ kind: "git", path: "src/app.ts" })
-    expect(context.layout.center.surface.kind).toBe("chat")
+    expect(activeCenterKind(context)).toBe("chat")
     expect(context.selection.gitPathByWorkspace[arcId("workspace", "workspace_1")]).toBe("src/app.ts")
   })
 
@@ -195,7 +211,7 @@ describe("arc shell machine", () => {
       { type: "SURFACE_OPENED", target: { kind: "git", path: "src/app.ts" }, pane: "right" },
       { type: "SURFACE_OPENED", target: { kind: "terminal" }, pane: "right" },
     )
-    expect(context.layout.center.surface.kind).toBe("work")
+    expect(activeCenterKind(context)).toBe("work")
     expect(context.layout.right.surface.kind).toBe("terminal")
   })
 
@@ -215,7 +231,7 @@ describe("arc shell machine", () => {
       { type: "SURFACE_OPENED", target: { kind: "git" }, pane: "right" },
       { type: "SURFACE_OPENED", target: { kind: "work" }, pane: "center" },
     )
-    expect(context.layout.center.surface.kind).toBe("work")
+    expect(activeCenterKind(context)).toBe("work")
     expect(context.layout.right.surface.kind).toBe("git")
   })
 
@@ -378,7 +394,7 @@ describe("arc shell machine", () => {
     // Start on the work view to prove ⌘L pulls the center back to chat (the
     // composer's home) before handing it focus.
     const once = snapshotAfter({ type: "SURFACE_OPENED", target: { kind: "work" }, pane: "center" }, focus)
-    expect(once.layout.center.surface.kind).toBe("chat")
+    expect(activeCenterKind(once)).toBe("chat")
     expect(emittedAfter({ type: "SURFACE_OPENED", target: { kind: "work" }, pane: "center" }, focus)).toEqual(["focusComposer"])
 
     // Each press re-emits so the composer re-runs its focus even while already shown.
@@ -388,7 +404,7 @@ describe("arc shell machine", () => {
   it("surfaces the chat and emits scrollChatToBottom on a ⌘↓ request", () => {
     const jump: ArcShellEvent = { type: "CHAT_JUMP_TO_BOTTOM_REQUESTED" }
     const once = snapshotAfter({ type: "SURFACE_OPENED", target: { kind: "work" }, pane: "center" }, jump)
-    expect(once.layout.center.surface.kind).toBe("chat")
+    expect(activeCenterKind(once)).toBe("chat")
     expect(emittedAfter({ type: "SURFACE_OPENED", target: { kind: "work" }, pane: "center" }, jump)).toEqual([
       "scrollChatToBottom",
     ])

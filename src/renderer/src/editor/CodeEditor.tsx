@@ -14,6 +14,10 @@ export interface CodeEditorProps {
    * `foo.ts:7` link. Re-revealed when it changes so re-opening the same file at a
    * different line jumps again. */
   readonly line?: number
+  /** Enable editing and receive Monaco model changes. Defaults to the existing
+   * safe preview behaviour, so callers opt into writes deliberately. */
+  readonly readOnly?: boolean
+  readonly onChange?: (value: string) => void
   readonly className?: string
 }
 
@@ -53,7 +57,7 @@ const revealLine = (ed: editor.IStandaloneCodeEditor | undefined, line: number |
  * takes text, not a workspace id — so it renders in Storybook with a fixture;
  * `WorkspaceFileView` is the atom-backed wrapper that feeds it real files.
  */
-export function CodeEditor({ value, language, line, className }: CodeEditorProps): JSX.Element {
+export function CodeEditor({ value, language, line, readOnly = true, onChange, className }: CodeEditorProps): JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<editor.IStandaloneCodeEditor | undefined>(undefined)
   // Latest props, read when `getMonaco()` resolves. The first-ever create waits on
@@ -61,8 +65,10 @@ export function CodeEditor({ value, language, line, className }: CodeEditorProps
   // lands inside that window would otherwise be lost — the update effects below
   // no-op while `editorRef` is still undefined, and a mount-only closure would bake
   // in the props as they were at mount. Creating from `latest` closes that gap.
-  const latest = useRef({ value, language, line })
-  latest.current = { value, language, line }
+  const latest = useRef({ value, language, line, readOnly })
+  latest.current = { value, language, line, readOnly }
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
 
   // Create once. `getMonaco()` is async (it builds the Shiki highlighter), so a
   // fast unmount can resolve after teardown — `disposed` guards that race.
@@ -72,10 +78,13 @@ export function CodeEditor({ value, language, line, className }: CodeEditorProps
       if (disposed || !hostRef.current) return
       editorRef.current = monaco.editor.create(hostRef.current, {
         ...EDITOR_OPTIONS,
+        readOnly: latest.current.readOnly,
+        domReadOnly: latest.current.readOnly,
         value: latest.current.value,
         language: latest.current.language,
         theme: EDITOR_THEME,
       })
+      editorRef.current.onDidChangeModelContent(() => onChangeRef.current?.(editorRef.current?.getValue() ?? ""))
       // The model has its content at construction, so an initial `foo.ts:7` line
       // can be revealed straight away.
       revealLine(editorRef.current, latest.current.line)
@@ -98,6 +107,10 @@ export function CodeEditor({ value, language, line, className }: CodeEditorProps
       model.setValue(value)
     }
   }, [value])
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({ readOnly, domReadOnly: readOnly })
+  }, [readOnly])
 
   // Re-reveal when the target line changes — re-opening the same (already mounted)
   // file at a different line jumps again, without recreating the editor.

@@ -46,24 +46,20 @@ export type LeftSurface = { readonly kind: "workspaceTree" }
 // work view is the navigator (list ↔ detail); *which* item is selected is a
 // product pick, so it lives in `selection.workByWorkspace`, not on the surface —
 // the surface only records that the navigator is the visible center view.
-export type CenterSurface =
-  | { readonly kind: "chat" }
-  | { readonly kind: "work" }
+export type CenterTab =
+  | { readonly id: "chat"; readonly kind: "chat" }
+  | { readonly id: "work"; readonly kind: "work" }
+  | { readonly id: string; readonly kind: "file"; readonly workspaceId: WorkspaceId; readonly path: string; readonly line?: number }
 // `git` owns the whole right region — the changed-file list and the selected
 // file's diff together (master-detail), carrying its own selected `path`.
 export type RightSurface =
   | { readonly kind: "terminal" }
+  | { readonly kind: "files" }
   | { readonly kind: "git"; readonly path?: string }
   | { readonly kind: "work"; readonly workId: WorkId }
   // A read-only view of one workspace file (the Monaco editor), named by
   // workspace id + relative path — the same identity the file/diff RPCs use.
   // `line` is the 1-based line to reveal when the link carried one (`foo.ts:7`).
-  | {
-      readonly kind: "file"
-      readonly workspaceId: WorkspaceId
-      readonly path: string
-      readonly line?: number
-    }
   // An image viewed in-app: a tool result's picture, or an image file-link
   // (including outside every workspace, e.g. `/tmp`). Keyed by its `arc-img://`
   // src rather than a workspace id + relative path, since images aren't confined
@@ -83,6 +79,7 @@ export type OpenTarget =
   | { readonly kind: "work"; readonly workId?: WorkId }
   | { readonly kind: "git"; readonly path?: string }
   | { readonly kind: "terminal" }
+  | { readonly kind: "files" }
   | {
       readonly kind: "file"
       readonly workspaceId: WorkspaceId
@@ -93,7 +90,7 @@ export type OpenTarget =
 
 export interface ShellLayout {
   readonly left: { readonly surface: LeftSurface; readonly collapsed: boolean }
-  readonly center: { readonly surface: CenterSurface }
+  readonly center: { readonly tabs: ReadonlyArray<CenterTab>; readonly activeId: string }
   readonly right: { readonly surface: RightSurface; readonly collapsed: boolean }
 }
 
@@ -169,6 +166,7 @@ export type ArcShellEvent =
       readonly selection: ShellTreeSelection
     }
   | { readonly type: "SURFACE_OPENED"; readonly target: OpenTarget; readonly pane: Pane }
+  | { readonly type: "CENTER_TAB_CLOSED"; readonly id: string }
   | {
       readonly type: "TARGET_LAUNCH_REQUESTED"
       readonly paneId: PaneId
@@ -219,10 +217,30 @@ export type ArcShellEvent =
 // Git is self-contained in the right region now, so there are no cross-pane
 // helpers to keep a center/right pair consistent.
 
-const showCenter = (layout: ShellLayout, surface: CenterSurface): ShellLayout => ({
-  ...layout,
-  center: { surface },
-})
+const fileTabId = (workspaceId: WorkspaceId, path: string): string => `file:${workspaceId}:${path}`
+
+const showCenter = (layout: ShellLayout, tab: CenterTab): ShellLayout => {
+  const existing = layout.center.tabs.find((candidate) => candidate.id === tab.id)
+  return {
+    ...layout,
+    center: {
+      tabs: existing ? layout.center.tabs.map((candidate) => (candidate.id === tab.id ? tab : candidate)) : [...layout.center.tabs, tab],
+      activeId: tab.id,
+    },
+  }
+}
+
+const closeCenterTab = (layout: ShellLayout, id: string): ShellLayout => {
+  // Chat is the permanent home tab; every other center surface is explicitly
+  // opened and may be closed.
+  if (id === "chat") return layout
+  const index = layout.center.tabs.findIndex((tab) => tab.id === id)
+  if (index < 0) return layout
+  const tabs = layout.center.tabs.filter((tab) => tab.id !== id)
+  const fallback = tabs[Math.max(0, index - 1)] ?? tabs[0]
+  if (!fallback) return layout
+  return { ...layout, center: { tabs, activeId: layout.center.activeId === id ? fallback.id : layout.center.activeId } }
+}
 
 const showRight = (layout: ShellLayout, surface: RightSurface): ShellLayout => ({
   ...layout,
@@ -247,7 +265,7 @@ const openSurface = (
   pane: Pane,
 ): Partial<ArcShellContext> => {
   if (pane === "center") {
-    if (target.kind === "chat") return { layout: showCenter(context.layout, { kind: "chat" }) }
+    if (target.kind === "chat") return { layout: showCenter(context.layout, { id: "chat", kind: "chat" }) }
     if (target.kind === "work") {
       // The navigator always becomes the visible center view; the workId is the
       // *selection*, remembered per workspace. A workId selects + remembers it; an
@@ -255,7 +273,7 @@ const openSurface = (
       // later re-entry shows the list rather than springing back to a stale item.
       // (Re-entry from the NavBar passes the remembered id back in to restore it.)
       const ws = context.selection.workspaceId
-      const layout = showCenter(context.layout, { kind: "work" })
+      const layout = showCenter(context.layout, { id: "work", kind: "work" })
       if (!ws) return { layout }
       const { [ws]: _dropped, ...rest } = context.selection.workByWorkspace
       return {
@@ -266,22 +284,24 @@ const openSurface = (
         },
       }
     }
+    if (target.kind === "file") {
+      return {
+        layout: showCenter(context.layout, {
+          id: fileTabId(target.workspaceId, target.path),
+          kind: "file",
+          workspaceId: target.workspaceId,
+          path: target.path,
+          line: target.line,
+        }),
+      }
+    }
     return {}
   }
   if (target.kind === "terminal") return { layout: showRight(context.layout, { kind: "terminal" }) }
   if (target.kind === "work") {
     return target.workId ? { layout: showRight(context.layout, { kind: "work", workId: target.workId }) } : {}
   }
-  if (target.kind === "file") {
-    return {
-      layout: showRight(context.layout, {
-        kind: "file",
-        workspaceId: target.workspaceId,
-        path: target.path,
-        line: target.line,
-      }),
-    }
-  }
+  if (target.kind === "files") return { layout: showRight(context.layout, { kind: "files" }) }
   if (target.kind === "image") {
     return { layout: showRight(context.layout, { kind: "image", src: target.src, title: target.title }) }
   }
@@ -318,7 +338,7 @@ const selectChat = (
   // Switching chats drops the composer target; focus handlers re-set it, and a
   // bare chat switch falls back to the first attached in-chat target.
   activeTargetId: undefined,
-  layout: showCenter(context.layout, { kind: "chat" }),
+  layout: showCenter(context.layout, { id: "chat", kind: "chat" }),
 })
 
 /**
@@ -345,7 +365,7 @@ const attachSessionPane = (
   const { session, workspaceId, paneId, resume } = opts
   const base = workspaceId
     ? selectChat(context, workspaceId, session.chatId)
-    : { ...context, layout: showCenter(context.layout, { kind: "chat" as const }) }
+    : { ...context, layout: showCenter(context.layout, { id: "chat", kind: "chat" }) }
   const right = { surface: { kind: "terminal" as const }, collapsed: false }
   const existing = base.panes.find((pane) => pane.sessionId === session.id)
   if (existing) {
@@ -397,7 +417,7 @@ const closePaneForSession = (
 export const initialArcShellContext: ArcShellContext = {
   layout: {
     left: { surface: { kind: "workspaceTree" }, collapsed: false },
-    center: { surface: { kind: "chat" } },
+    center: { tabs: [{ id: "chat", kind: "chat" }], activeId: "chat" },
     right: { surface: { kind: "terminal" }, collapsed: false },
   },
   selection: {
@@ -443,12 +463,15 @@ export const arcShellMachine = createMachine({
         SURFACE_OPENED: {
           actions: assign(({ context, event }) => openSurface(context, event.target, event.pane)),
         },
+        CENTER_TAB_CLOSED: {
+          actions: assign(({ context, event }) => ({ layout: closeCenterTab(context.layout, event.id) })),
+        },
         TARGET_LAUNCH_REQUESTED: {
           actions: [
             assign(({ context, event }) => {
               const base = event.workspaceId
                 ? selectChat(context, event.workspaceId, event.chatId)
-                : { ...context, layout: showCenter(context.layout, { kind: "chat" as const }) }
+                : { ...context, layout: showCenter(context.layout, { id: "chat", kind: "chat" }) }
               const pane: ShellPane = {
                 id: event.paneId,
                 provider: event.provider,
@@ -536,7 +559,7 @@ export const arcShellMachine = createMachine({
               if (event.session.runtime === "rpc") {
                 const base = event.workspaceId
                   ? selectChat(context, event.workspaceId, event.session.chatId)
-                  : { ...context, layout: showCenter(context.layout, { kind: "chat" as const }) }
+                  : { ...context, layout: showCenter(context.layout, { id: "chat", kind: "chat" }) }
                 return {
                   ...base,
                   detachedSessionId: undefined,
@@ -549,7 +572,7 @@ export const arcShellMachine = createMachine({
               if (!event.session.attached) {
                 const base = event.workspaceId
                   ? selectChat(context, event.workspaceId, event.session.chatId)
-                  : { ...context, layout: showCenter(context.layout, { kind: "chat" as const }) }
+                  : { ...context, layout: showCenter(context.layout, { id: "chat", kind: "chat" }) }
                 return {
                   ...base,
                   layout: {
@@ -621,7 +644,7 @@ export const arcShellMachine = createMachine({
           // takes focus — even when chat was already visible.
           actions: [
             assign(({ context }) => ({
-              layout: showCenter(context.layout, { kind: "chat" }),
+              layout: showCenter(context.layout, { id: "chat", kind: "chat" }),
             })),
             emit({ type: "focusComposer" }),
           ],
@@ -632,7 +655,7 @@ export const arcShellMachine = createMachine({
           // chat was already visible.
           actions: [
             assign(({ context }) => ({
-              layout: showCenter(context.layout, { kind: "chat" }),
+              layout: showCenter(context.layout, { id: "chat", kind: "chat" }),
             })),
             emit({ type: "scrollChatToBottom" }),
           ],
@@ -644,7 +667,7 @@ export const arcShellMachine = createMachine({
           // when work was already visible.
           actions: [
             assign(({ context }) => ({
-              layout: showCenter(context.layout, { kind: "work" }),
+              layout: showCenter(context.layout, { id: "work", kind: "work" }),
             })),
             emit({ type: "startWorkCreate" }),
           ],

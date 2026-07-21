@@ -30,7 +30,11 @@ export function useKeyboardShortcuts(handlers: CommandHandlers): void {
         }
       }
     }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
+    // Monaco consumes several modifier chords during bubbling (including ⌘K),
+    // so global Arc commands listen in capture phase before the editor can stop
+    // propagation. Local editor commands remain untouched because this handler
+    // only prevents defaults for bindings in the global registry.
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
   }, [handlers])
 }

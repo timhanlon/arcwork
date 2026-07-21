@@ -50,6 +50,7 @@ export const launchTargetAtom = ArcRpcAtomClient.mutation("LaunchTarget")
 export const resumeTargetAtom = ArcRpcAtomClient.mutation("ResumeTarget")
 export const stopTargetAtom = ArcRpcAtomClient.mutation("StopTarget")
 export const listWorkspaceFilesAtom = ArcRpcAtomClient.mutation("ListWorkspaceFiles")
+export const writeWorkspaceFileAtom = ArcRpcAtomClient.mutation("WriteWorkspaceFile")
 /** Answer a codex app-server approval by echoing a decision's `payload` back. */
 export const answerAppServerApprovalAtom = ArcRpcAtomClient.mutation("AnswerAppServerApproval")
 
@@ -269,6 +270,11 @@ export const workspaceFileAtom = Atom.family((key: string) => {
 
 export const workspaceFileAtomFor = (workspaceId: WorkspaceId, path: string) =>
   workspaceFileAtom(workspacePathKey(workspaceId, path))
+
+/** Render-driven list for the file explorer; the composer keeps its lazy mutation. */
+export const workspaceFilesAtom = Atom.family((workspaceId: WorkspaceId) =>
+  ArcRpcAtomClient.query("ListWorkspaceFiles", { workspaceId }),
+)
 
 /**
  * The work navigator/comments refresh signal. Work has two change sources folded
