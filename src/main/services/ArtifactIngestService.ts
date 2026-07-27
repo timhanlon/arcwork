@@ -3,6 +3,7 @@ import type { ChatId } from "../../shared/ids.js"
 import type { Provider } from "../ingest/db/schema.js"
 import { IngestStore } from "../ingest/db/store.js"
 import { makeProviders } from "../ingest/layers.js"
+import type { CollectHint } from "../ingest/providers/provider.js"
 import { ChatMessageService } from "./ChatMessageService.js"
 import { ArcStore } from "../db/store.js"
 import { bestEffort } from "./failure-policy.js"
@@ -26,11 +27,12 @@ export class ArtifactIngestService extends Context.Service<
     readonly ingestWorkspace: (
       workspace: string,
       provider?: Provider | "all",
-      /** When set, only the session with this native id is persisted. The
-       * workspace is still parsed once (providers can't locate a single session
-       * without parsing), but ~N redundant session rewrites are avoided — the
-       * common turn-end case, where only the active session changed. */
-      nativeSessionId?: string,
+      /** What the caller already knows about the session it wants ingested (see
+       * `CollectHint`). `nativeSessionId` scopes persistence to that one session,
+       * avoiding ~N redundant rewrites on the common turn-end path;
+       * `transcriptPath` is how a session whose cwd has drifted from its
+       * transcript's location is found at all. */
+      hint?: CollectHint,
     ) => Effect.Effect<ReadonlyArray<ProviderIngestSummary>, never>
     readonly reingestAndReprojectChat: (
       chatId: ChatId,
@@ -51,12 +53,9 @@ export const ArtifactIngestServiceLive = Layer.effect(
     const activity = yield* ActivityEventService
     const providers = yield* makeProviders
 
-    const ingestWorkspace = (
-      workspace: string,
-      filter: Provider | "all" = "all",
-      nativeSessionId?: string,
-    ) =>
+    const ingestWorkspace = (workspace: string, filter: Provider | "all" = "all", hint?: CollectHint) =>
       Effect.gen(function* () {
+        const nativeSessionId = hint?.nativeSessionId
         const summaries: Array<ProviderIngestSummary> = []
         const selected = providers.filter((p) => filter === "all" || p.id === filter)
 
@@ -75,12 +74,13 @@ export const ArtifactIngestServiceLive = Layer.effect(
           // id is a hint: providers that can parse just that session (cursor) do;
           // others parse all and we filter below. Either way persist scopes to it.
           const collected = yield* Effect.result(
-            provider.collect(workspace, nativeSessionId).pipe(
+            provider.collect(workspace, hint).pipe(
               Effect.withSpan("arc.ingest.collect", {
                 attributes: {
                   "arc.provider": provider.id,
                   "arc.workspace": workspace,
                   "arc.native_session_id": nativeSessionId ?? null,
+                  "arc.transcript_path": hint?.transcriptPath ?? null,
                 },
               }),
             ),
@@ -183,7 +183,8 @@ export const ArtifactIngestServiceLive = Layer.effect(
           attributes: {
             "arc.workspace": workspace,
             "arc.filter": filter,
-            "arc.native_session_id": nativeSessionId ?? null,
+            "arc.native_session_id": hint?.nativeSessionId ?? null,
+            "arc.transcript_path": hint?.transcriptPath ?? null,
           },
         }),
         bestEffort<ReadonlyArray<ProviderIngestSummary>>("artifact ingest failed", []),
@@ -191,12 +192,32 @@ export const ArtifactIngestServiceLive = Layer.effect(
 
     const reingestAndReprojectChat = (chatId: ChatId, filter: Provider | "all" = "all") =>
       Effect.gen(function* () {
-        const workspace = yield* arc.workspacePathForChat(chatId)
-        if (!workspace) {
-          yield* Effect.logWarning(`chat reingest skipped; no workspace for chat ${chatId}`)
-          return { ingest: [], reproject: { deleted: 0, inserted: 0 } }
+        // Re-ingest each of the chat's targets from the transcript arc bound to
+        // it, not from the chat's workspace path. This is the manual repair door,
+        // and a chat needing repair is exactly the one whose session has drifted
+        // away from that path — reaching it through the workspace would rediscover
+        // nothing, which is what made the drift unrecoverable from the UI.
+        const targets = yield* arc.targetSessionsForChat(chatId)
+        const ingest: Array<ProviderIngestSummary> = []
+        for (const target of targets) {
+          if (target.nativeTranscriptPath === null) continue
+          ingest.push(
+            ...(yield* ingestWorkspace(target.cwd, filter, {
+              ...(target.nativeSessionId === null ? {} : { nativeSessionId: target.nativeSessionId }),
+              transcriptPath: target.nativeTranscriptPath,
+            })),
+          )
         }
-        const ingest = yield* ingestWorkspace(workspace, filter)
+        // Targets with no bound transcript (never launched, or a provider arc
+        // doesn't file-back) still need the workspace sweep to find anything.
+        if (ingest.length === 0) {
+          const workspace = yield* arc.workspacePathForChat(chatId)
+          if (!workspace) {
+            yield* Effect.logWarning(`chat reingest skipped; no workspace for chat ${chatId}`)
+            return { ingest: [], reproject: { deleted: 0, inserted: 0 } }
+          }
+          ingest.push(...(yield* ingestWorkspace(workspace, filter)))
+        }
         const reproject = yield* chat.reprojectChat(chatId)
         return { ingest, reproject }
         // Best-effort observation: degrade to an empty result on any failure.

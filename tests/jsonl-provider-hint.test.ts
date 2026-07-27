@@ -63,7 +63,38 @@ describe("jsonl provider collect hint", () => {
     const ids = await run(
       Effect.gen(function* () {
         const provider = yield* makeProvider(root)
-        const rows = yield* provider.collect(cwd, "sess-a")
+        const rows = yield* provider.collect(cwd, { nativeSessionId: "sess-a" })
+        return rows.map((r) => r.session.nativeSessionId)
+      }),
+    )
+    expect(ids).toEqual(["sess-a"])
+  })
+
+  // The workspace a session was launched from is not where it necessarily still
+  // is: an agent that relocates keeps writing the same file under a header cwd
+  // that no longer matches, and cwd-based discovery then finds nothing at all.
+  it("reads the hinted transcript even when its cwd doesn't match the workspace", async () => {
+    const ids = await run(
+      Effect.gen(function* () {
+        const provider = yield* makeProvider(root)
+        const rows = yield* provider.collect(cwd, {
+          nativeSessionId: "sess-c",
+          transcriptPath: nodePath.join(root, "c.jsonl"),
+        })
+        return rows.map((r) => r.session.nativeSessionId)
+      }),
+    )
+    expect(ids).toEqual(["sess-c"])
+  })
+
+  it("falls back to cwd discovery when the hinted transcript is gone", async () => {
+    const ids = await run(
+      Effect.gen(function* () {
+        const provider = yield* makeProvider(root)
+        const rows = yield* provider.collect(cwd, {
+          nativeSessionId: "sess-a",
+          transcriptPath: nodePath.join(root, "vanished.jsonl"),
+        })
         return rows.map((r) => r.session.nativeSessionId)
       }),
     )

@@ -10,7 +10,7 @@ import type { DiagnosticRow, ExtractedRows } from "../db/schema.js"
 import { CursorReadError, type IngestError } from "../errors.js"
 import { classifyTool } from "../extract/tool-kind.js"
 import { SessionRowBuilder } from "../extract/session-row-builder.js"
-import type { AgentProvider } from "./provider.js"
+import type { AgentProvider, CollectHint } from "./provider.js"
 import { type Rec, obj, parseJson, str } from "../extract/json.js"
 
 /** A tool-result's `result` as display text: strings pass through; objects/arrays
@@ -398,15 +398,19 @@ export const makeCursorProvider: Effect.Effect<AgentProvider, never, FileSystem.
     // 750ms during a turn, and parsing all sessions per tick pegged the main
     // process (61 dbs / 184 MB on a real workspace) to use exactly one. Without
     // the hint we list the session dirs and read each once.
-    const collect = (workspace: string, nativeSessionId?: string) =>
+    //
+    // `hint.transcriptPath` is ignored: cursor sessions aren't backed by a
+    // transcript file, and the session id already names the db exactly, so there
+    // is no cwd-derived path to be wrong about below the workspace dir itself.
+    const collect = (workspace: string, hint?: CollectHint) =>
       Effect.gen(function* () {
         const real = yield* fs.realPath(workspace).pipe(Effect.orElseSucceed(() => workspace))
         const dir = chatsDirFor(real)
         if (!(yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false)))) return []
-        if (nativeSessionId !== undefined) {
-          const dbPath = path.join(dir, nativeSessionId, "store.db")
+        if (hint?.nativeSessionId !== undefined) {
+          const dbPath = path.join(dir, hint.nativeSessionId, "store.db")
           if (!(yield* fs.exists(dbPath).pipe(Effect.orElseSucceed(() => false)))) return []
-          return [yield* extractOne(real, nativeSessionId, dbPath)]
+          return [yield* extractOne(real, hint.nativeSessionId, dbPath)]
         }
         const entries = yield* fs
           .readDirectory(dir)

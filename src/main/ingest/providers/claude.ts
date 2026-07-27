@@ -6,7 +6,7 @@ import type { IngestError } from "../errors.js"
 import { classifyTool } from "../extract/tool-kind.js"
 import { SessionRowBuilder } from "../extract/session-row-builder.js"
 import { readJsonl } from "./jsonl.js"
-import type { AgentProvider } from "./provider.js"
+import type { AgentProvider, CollectHint } from "./provider.js"
 import { type ClaudeSession, parseClaudeSessions } from "./claude-dag.js"
 import { type Rec, arr, obj, str } from "../extract/json.js"
 
@@ -402,25 +402,43 @@ const loadProject = (
   fs: FileSystem.FileSystem,
   path: Path.Path,
   workspace: string,
-  nativeSessionId?: string,
+  hint?: CollectHint,
 ): Effect.Effect<LoadedProject | undefined, IngestError> =>
   Effect.gen(function* () {
-    const real = yield* fs.realPath(workspace).pipe(Effect.orElseSucceed(() => workspace))
-    const projectDir = path.join(homedir(), ".claude", "projects", claudeProjectDirName(real))
-    if (!(yield* fs.exists(projectDir).pipe(Effect.orElseSucceed(() => false)))) return undefined
+    const exists = (candidate: string) => fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))
 
     // Claude writes one self-contained `<sessionId>.jsonl` per session (verified:
-    // every record in a file carries that file's basename as its `sessionId`).
-    // So when a caller names a session — the transcript-watch path, fired because
-    // exactly that file changed — read only it instead of re-parsing the whole
-    // project dir (hundreds of files / hundreds of MB) to keep a few new rows.
-    // Falls back to the full scan when the named file is absent or no id is given
-    // (startup reconcile / filter="all"). The cross-file `mergeBySessionId` merge
-    // stays correct: it just operates over the one file's records.
+    // every record in a file carries that file's basename as its `sessionId`), so
+    // a named session is one file. Two ways to reach it, in order of trust:
+    //
+    // 1. The caller handed us the transcript path. That is the file claude itself
+    //    reported, so it survives the session moving out from under the derived
+    //    location — entering a worktree remints the project dir, and the target's
+    //    launch cwd keeps resolving to the old one forever.
+    // 2. Derive the project dir from the workspace and look for the file there.
+    //
+    // Either beats re-parsing the whole project dir (hundreds of files / hundreds
+    // of MB) to pick up a few new rows. The full scan remains the fallback for
+    // startup reconcile and `filter="all"`, which name no session. The cross-file
+    // `mergeBySessionId` merge stays correct over a single file's records.
+    const hintedFile =
+      hint?.transcriptPath !== undefined && (yield* exists(hint.transcriptPath))
+        ? hint.transcriptPath
+        : undefined
+    if (hintedFile) {
+      return yield* readProject(fs, path, path.dirname(hintedFile), [hintedFile])
+    }
+
+    const real = yield* fs.realPath(workspace).pipe(Effect.orElseSucceed(() => workspace))
+    const projectDir = path.join(homedir(), ".claude", "projects", claudeProjectDirName(real))
+    if (!(yield* exists(projectDir))) return undefined
+
     const scopedFile =
-      nativeSessionId !== undefined ? path.join(projectDir, `${nativeSessionId}.jsonl`) : undefined
+      hint?.nativeSessionId !== undefined
+        ? path.join(projectDir, `${hint.nativeSessionId}.jsonl`)
+        : undefined
     let files: ReadonlyArray<string>
-    if (scopedFile !== undefined && (yield* fs.exists(scopedFile).pipe(Effect.orElseSucceed(() => false)))) {
+    if (scopedFile !== undefined && (yield* exists(scopedFile))) {
       files = [scopedFile]
     } else {
       const entries = yield* fs
@@ -428,7 +446,16 @@ const loadProject = (
         .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>))
       files = entries.filter((name) => name.endsWith(".jsonl")).map((name) => path.join(projectDir, name))
     }
+    return yield* readProject(fs, path, projectDir, files)
+  })
 
+const readProject = (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+  projectDir: string,
+  files: ReadonlyArray<string>,
+): Effect.Effect<LoadedProject, IngestError> =>
+  Effect.gen(function* () {
     const perFile: Array<ReadonlyArray<Rec>> = []
     const titleBySession = new Map<string, string>()
     const parseErrorsByBase = new Map<string, Array<{ line: number; message: string; path: string }>>()
@@ -492,10 +519,10 @@ export const makeClaudeProvider: Effect.Effect<AgentProvider, never, FileSystem.
     // normalized from that single in-memory parse. The old shape ran `loadProject`
     // again inside a per-session `extract`, re-reading the whole directory once
     // per session (O(sessions × transcript)).
-    const collect = (workspace: string, nativeSessionId?: string) =>
+    const collect = (workspace: string, hint?: CollectHint) =>
       Effect.gen(function* () {
         const real = yield* fs.realPath(workspace).pipe(Effect.orElseSucceed(() => workspace))
-        const project = yield* loadProject(fs, path, workspace, nativeSessionId)
+        const project = yield* loadProject(fs, path, workspace, hint)
         if (!project) return []
         return project.sessions.map((session) =>
           normalizeClaudeSession(session, {

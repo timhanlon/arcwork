@@ -21,6 +21,7 @@ import {
 } from "../hooks/commit.js"
 import { turnLifecycle } from "../hooks/turn-lifecycle.js"
 import type { Provider } from "../ingest/db/schema.js"
+import type { CollectHint } from "../ingest/providers/provider.js"
 import type { HookBinding, HookSignal } from "../hooks/signals.js"
 import { hookSignalToAssistantStreamDelta } from "../hooks/assistant-stream-delta.js"
 import { PTY_TRACE_ENABLED, tracePtySend } from "./pty-trace.js"
@@ -68,6 +69,15 @@ const shouldPollArtifacts = (signal: HookSignal): boolean => {
 const KNOWN_PROVIDERS = new Set<string>(["claude", "codex", "cursor"])
 const providerFilter = (signal: HookSignal): Provider | "all" =>
   KNOWN_PROVIDERS.has(signal.provider) ? (signal.provider as Provider) : "all"
+
+/** A hook reports the transcript it is writing, so ingest can read that file
+ * instead of re-deriving a location from `signal.cwd` — which is wherever the
+ * agent happens to be standing when the hook fires, a subdirectory as often as
+ * not, and only coincidentally the path its transcript is filed under. */
+const hintFromSignal = (signal: HookSignal): CollectHint => ({
+  ...(signal.native.sessionId ? { nativeSessionId: signal.native.sessionId } : {}),
+  ...(signal.native.transcriptPath ? { transcriptPath: signal.native.transcriptPath } : {}),
+})
 
 const transcriptPathToWatch = (session: TargetSession): string | undefined =>
   session.attached === true && session.state !== "exited" && session.nativeSessionId
@@ -237,11 +247,14 @@ export const launchArcMainController = (
         const started = yield* Clock.currentTimeMillis
         yield* recordControllerEvent(session, "ingest_started", { trigger, ...extra })
         const result = yield* Effect.result(
-          artifactIngest.ingestWorkspace(
-            session.cwd,
-            providerForSession(session),
-            session.nativeSessionId ?? undefined,
-          ),
+          artifactIngest.ingestWorkspace(session.cwd, providerForSession(session), {
+            ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
+            // `session.cwd` is the target's *launch* directory and never moves,
+            // so on its own it stops finding the transcript the moment the agent
+            // relocates (claude entering a worktree remints its project dir). The
+            // bound transcript path is the provider's own answer and follows.
+            ...(session.nativeTranscriptPath ? { transcriptPath: session.nativeTranscriptPath } : {}),
+          }),
         )
         const durationMs = (yield* Clock.currentTimeMillis) - started
         if (result._tag === "Failure") {
@@ -327,7 +340,7 @@ export const launchArcMainController = (
             // poll only needs the session being interacted with; the rest aren't
             // changing. Falls back to the full provider sweep when the id is
             // absent (`?? undefined`), so a missing id never stops ingest.
-            .ingestWorkspace(signal.cwd, providerFilter(signal), signal.native.sessionId ?? undefined)
+            .ingestWorkspace(signal.cwd, providerFilter(signal), hintFromSignal(signal))
             .pipe(Effect.repeat(Schedule.spaced(ARTIFACT_POLL_INTERVAL)))
         : Effect.void
 
@@ -533,7 +546,7 @@ export const launchArcMainController = (
             yield* artifactIngest.ingestWorkspace(
               signal.cwd,
               providerFilter(signal),
-              signal.native.sessionId ?? undefined,
+              hintFromSignal(signal),
             )
             if (signal.arcTargetSessionId) yield* FiberMap.remove(pollers, signal.arcTargetSessionId)
           } else if (shouldPollArtifacts(signal) && signal.arcTargetSessionId) {
