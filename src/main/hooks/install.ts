@@ -159,9 +159,15 @@ const CLAUDE_EVENTS = [
   "SubagentStart", "SubagentStop", "TaskCreated", "TaskCompleted", "TeammateIdle",
   "Stop", "StopFailure",
   "InstructionsLoaded", "ConfigChange", "CwdChanged",
-  "WorktreeCreate", "WorktreeRemove",
   "PreCompact", "PostCompact",
 ] as const
+
+/** Provider hooks — the CLI delegates the *work* to whatever is configured here
+ * and expects the resulting worktree path back on stdout, rather than merely
+ * notifying us. Arc's helper only prints on `SessionStart`, so registering these
+ * turned every worktree creation into a silent failure. Arc must never claim
+ * them, and must strip the command from settings files that already have it. */
+const PROVIDER_CLAUDE_EVENTS = ["WorktreeCreate", "WorktreeRemove"] as const
 
 const CODEX_EVENTS = [
   "SessionStart",
@@ -195,6 +201,14 @@ function mergeClaudeHooks(file: string, helperPath: string): void {
   for (const event of CLAUDE_EVENTS) {
     const command = quotedCommand(helperPath, "claude", event)
     nextHooks[event] = replaceArcBlock(nextHooks[event], { matcher: "", hooks: [{ type: "command", command }] })
+  }
+  for (const event of PROVIDER_CLAUDE_EVENTS) {
+    const kept = (Array.isArray(nextHooks[event]) ? nextHooks[event] : [])
+      .filter(isRecord)
+      .map(stripArcFromBlock)
+      .filter((b): b is Record<string, unknown> => b !== null)
+    if (kept.length > 0) nextHooks[event] = kept
+    else delete nextHooks[event]
   }
   writeJsonObject(file, { ...root, hooks: nextHooks })
 }
