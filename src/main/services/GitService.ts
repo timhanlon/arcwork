@@ -2,6 +2,7 @@ import { Cause, Context, Duration, Effect, Fiber, Layer, PubSub, Queue, Schema, 
 import { watch as watchFs, type FSWatcher } from "node:fs"
 import * as path from "node:path"
 import type {
+  DiffTree,
   GitCommit,
   GitFileChange,
   GitFileDiff,
@@ -42,12 +43,17 @@ import {
   untrackedStat,
 } from "./git/parse.js"
 import { mapGhPullRequest, toWirePullRequest, toWireRepository, toWireWorktree } from "./git/wire.js"
+import { buildDiffTree } from "./git/diff-tree.js"
+import { semFactsFor } from "./git/sem.js"
 
 export class GitService extends Context.Service<
   GitService,
   {
     readonly status: (workspaceId: WorkspaceId) => Effect.Effect<GitStatus, ArcRequestError>
     readonly diff: (workspaceId: WorkspaceId, filePath: string) => Effect.Effect<GitFileDiff, ArcRequestError>
+    /** Current working-tree changes as an ordered tree of module groups. Carries
+     * no diff text; rows fetch that via {@link diff}. */
+    readonly diffTree: (workspaceId: WorkspaceId) => Effect.Effect<DiffTree, ArcRequestError>
     /** Recent commits on the workspace's current branch (newest first). Empty when
      * the cwd is not a git repo or the branch is unborn. */
     readonly commits: (
@@ -650,6 +656,41 @@ export const GitServiceLive = Layer.effect(
           .map(([sha, shortSha, author, authoredAt, subject]) => ({ sha, shortSha, author, authoredAt, subject }))
       }).pipe(Effect.withSpan("arc.git.commits", { attributes: { "arc.workspace_id": workspaceId } }))
 
+    const diffTree = (workspaceId: WorkspaceId): Effect.Effect<DiffTree, ArcRequestError> =>
+      Effect.gen(function* () {
+        const workspace = yield* workspaces.get(workspaceId)
+        const empty = (): DiffTree =>
+          buildDiffTree({
+            workspaceId,
+            changes: [],
+            sem: null,
+          })
+
+        const isRepoResult = yield* Effect.promise(() =>
+          runGit(workspace.path, ["rev-parse", "--is-inside-work-tree"]),
+        )
+        if (isRepoResult.stdout.trim() !== "true") return empty()
+
+        // `sem` supplies optional entity facts for the same dirty tree as status.
+        const [changes, sem] = yield* Effect.all(
+          [
+            status(workspaceId).pipe(Effect.map((s) => s.changes)),
+            semFactsFor(workspace.path, []),
+          ],
+          { concurrency: 2 },
+        )
+
+        return buildDiffTree({
+          workspaceId,
+          changes,
+          sem,
+        })
+      }).pipe(
+        Effect.withSpan("arc.git.diff_tree", {
+          attributes: { "arc.workspace_id": workspaceId },
+        }),
+      )
+
     // A git hook runs with cwd = the worktree root. Refresh every workspace that
     // sits in that worktree — its own cwd is the root or a subdirectory of it.
     const workspacesUnderCwd = (
@@ -860,6 +901,7 @@ export const GitServiceLive = Layer.effect(
           const fallback = yield* Effect.promise(() => runGit(workspace.path, ["diff", "-M", "--", change.path]))
           return { path: filePath, diff: fallback.stdout || "(no diff available)" }
         }),
+      diffTree,
     })
   }),
 )

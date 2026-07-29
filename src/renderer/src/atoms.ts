@@ -168,6 +168,16 @@ const gitChangeCountsAtom = Atom.family((workspaceId: WorkspaceId) =>
 )
 
 /**
+ * A user-driven refresh counter per workspace — the Git pane's manual refresh
+ * writes it (`(n) => n + 1`). Both signals below add it in, so one bump re-pulls
+ * the entire read model (status, context, commits, both diff trees, every open
+ * file diff) rather than only the atoms a component can name. The watcher stream
+ * is still the normal path; this is the escape hatch for a change that never
+ * reached us.
+ */
+export const gitManualRefreshAtom = Atom.family((_workspaceId: WorkspaceId) => Atom.make(0))
+
+/**
  * Per-workspace git read-model refresh signal — context/commits. Derived from the
  * shared counts as the bare `repo` number (not the wrapping `AsyncResult`, whose
  * identity changes every emission), so a working-tree edit — which moves `all` but
@@ -176,7 +186,10 @@ const gitChangeCountsAtom = Atom.family((workspaceId: WorkspaceId) =>
  * own first pull on mount isn't doubled by a boot tick.
  */
 export const gitChangesSignalAtom = Atom.family((workspaceId: WorkspaceId) =>
-  Atom.map(gitChangeCountsAtom(workspaceId), (r) => (AsyncResult.isSuccess(r) ? r.value.repo : 0)),
+  Atom.make((get) => {
+    const counts = get(gitChangeCountsAtom(workspaceId))
+    return (AsyncResult.isSuccess(counts) ? counts.value.repo : 0) + get(gitManualRefreshAtom(workspaceId))
+  }),
 )
 
 /**
@@ -186,7 +199,10 @@ export const gitChangesSignalAtom = Atom.family((workspaceId: WorkspaceId) =>
  * can also change the dirty set).
  */
 const gitStatusSignalAtom = Atom.family((workspaceId: WorkspaceId) =>
-  Atom.map(gitChangeCountsAtom(workspaceId), (r) => (AsyncResult.isSuccess(r) ? r.value.all : 0)),
+  Atom.make((get) => {
+    const counts = get(gitChangeCountsAtom(workspaceId))
+    return (AsyncResult.isSuccess(counts) ? counts.value.all : 0) + get(gitManualRefreshAtom(workspaceId))
+  }),
 )
 
 /**
@@ -213,6 +229,17 @@ export const gitStatusAtom = Atom.family((workspaceId: WorkspaceId) =>
 export const gitContextAtom = Atom.family((workspaceId: WorkspaceId) =>
   ArcRpcAtomClient.query("GetWorkspaceGitContext", { workspaceId }).pipe(
     Atom.makeRefreshOnSignal(gitChangesSignalAtom(workspaceId)),
+    Atom.setIdleTTL(GIT_ATOM_TTL),
+  )
+)
+
+/**
+ * The current working tree's diff tree. Rides the status-inclusive signal so a
+ * file edit refreshes both its row and its inline diff.
+ */
+export const diffTreeAtom = Atom.family((workspaceId: WorkspaceId) =>
+  ArcRpcAtomClient.query("GetWorkspaceDiffTree", { workspaceId }).pipe(
+    Atom.makeRefreshOnSignal(gitStatusSignalAtom(workspaceId)),
     Atom.setIdleTTL(GIT_ATOM_TTL),
   )
 )

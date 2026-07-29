@@ -18,6 +18,9 @@ export interface WorkspaceGit {
   readonly loading: boolean
   /** First-pull state for the commit list (no commits value yet). */
   readonly commitsLoading: boolean
+  /** A pull is in flight over an already-shown value — the refresh affordance's
+   * busy state, as distinct from {@link loading}'s empty first pull. */
+  readonly refreshing: boolean
   readonly error?: string
 }
 
@@ -38,6 +41,10 @@ export function useWorkspaceGit(workspaceId: WorkspaceId): WorkspaceGit {
     commits: successList(commitsResult),
     loading: !AsyncResult.isSuccess(statusResult),
     commitsLoading: !AsyncResult.isSuccess(commitsResult),
+    refreshing:
+      AsyncResult.isWaiting(statusResult) ||
+      AsyncResult.isWaiting(contextResult) ||
+      AsyncResult.isWaiting(commitsResult),
     error: errorMessage(statusResult) ?? errorMessage(commitsResult),
   }
 }

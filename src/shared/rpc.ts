@@ -7,7 +7,15 @@ import { Chat } from "./chat.js"
 import { ActivityEvent } from "./activity-event.js"
 import { ChatMessage } from "./chat-message.js"
 import { ChatSummary } from "./chat-summary.js"
-import { GitCommit, GitFileDiff, GitStatus, PullRequest, Worktree, WorkspaceGitContext } from "./git.js"
+import {
+  DiffTree,
+  GitCommit,
+  GitFileDiff,
+  GitStatus,
+  PullRequest,
+  Worktree,
+  WorkspaceGitContext,
+} from "./git.js"
 import { PendingRequest } from "./chat-request.js"
 import { AppServerApproval } from "./codex-approval.js"
 import { Instance, TargetSession } from "./instance.js"
@@ -216,6 +224,15 @@ export const ArcRpcs = RpcGroup.make(
   Rpc.make("GetWorkspaceGitFileDiff", {
     payload: { workspaceId: WorkspaceId, path: Schema.String },
     success: GitFileDiff,
+    error: RpcError,
+  }),
+  /** Current working-tree changes as an ordered tree of module groups, with
+   * generated files quarantined and (when the optional `sem` binary is
+   * installed) entity-level counts. Carries no diff text — rows fetch that
+   * per-file via `GetWorkspaceGitFileDiff`. */
+  Rpc.make("GetWorkspaceDiffTree", {
+    payload: { workspaceId: WorkspaceId },
+    success: DiffTree,
     error: RpcError,
   }),
   /** Recent commits on the workspace's current branch (newest first), for the Git

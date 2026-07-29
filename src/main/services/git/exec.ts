@@ -64,6 +64,18 @@ export const runGitCapture = (cwd: string, args: ReadonlyArray<string>): Promise
     )
   })
 
+/** Run the optional `sem` binary (semantic, entity-level diffs) in `cwd`.
+ * Shares {@link GhResult}'s shape for the same reason: `sem` is not a hard
+ * dependency, so a missing binary (`errored`) has to stay distinguishable from
+ * a real non-zero exit. Callers degrade to line counts either way. */
+export const runSem = (cwd: string, args: ReadonlyArray<string>): Promise<GhResult> =>
+  new Promise((resolve) => {
+    execFile("sem", args, { cwd, maxBuffer: 128 * 1024 * 1024, env: GIT_CLEAN_ENV }, (error, stdout) => {
+      const { code, spawnFailed } = exitCodeOf(error)
+      resolve({ stdout, exitCode: code, errored: spawnFailed })
+    })
+  })
+
 export const runGh = (cwd: string, args: ReadonlyArray<string>): Promise<GhResult> =>
   new Promise((resolve) => {
     execFile("gh", args, { cwd, maxBuffer: 64 * 1024 * 1024, env: GIT_CLEAN_ENV }, (error, stdout) => {

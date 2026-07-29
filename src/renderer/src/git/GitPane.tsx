@@ -1,15 +1,17 @@
 import { PatchDiff } from "@pierre/diffs/react"
-import { CaretDown, CaretRight } from "@phosphor-icons/react"
-import { Fragment, type JSX, type ReactNode, useState } from "react"
-import { useAtomValue } from "@effect/atom-react"
+import type { JSX, ReactNode } from "react"
+import { useState } from "react"
+import { useAtomSet, useAtomValue } from "@effect/atom-react"
+import { ArrowsClockwise } from "@phosphor-icons/react"
 import { Option } from "effect"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
-import type { GitChangeStatus, GitCommit, GitFileChange } from "../../../shared/git.js"
+import type { GitCommit } from "../../../shared/git.js"
 import type { Workspace } from "../../../shared/workspace.js"
-import { DISCLOSURE, Row, ROW_GRID } from "../ui/Row.js"
 import { DisclosureSection } from "../ui/DisclosureSection.js"
+import { IconButton } from "../ui/IconButton.js"
 import { DIFF_THEME, useDiffHighlighterReady } from "../ui/useDiffHighlighter.js"
-import { gitFileDiffAtomFor, successOr } from "../atoms.js"
+import { diffTreeAtom, gitFileDiffAtomFor, gitManualRefreshAtom, successOr } from "../atoms.js"
+import { DiffTree } from "./DiffTree.js"
 import { RepoContextBar } from "./RepoContextBar.js"
 import { useWorkspaceGit } from "./useWorkspaceGit.js"
 
@@ -17,30 +19,6 @@ export interface GitPaneProps {
   readonly workspace?: Workspace
   readonly selectedPath?: string
   readonly onSelectPath: (path: string) => void
-}
-
-const STATUS_GLYPH: Record<GitChangeStatus, string> = {
-  added: "A",
-  modified: "M",
-  deleted: "D",
-  renamed: "R",
-  copied: "C",
-  untracked: "?",
-  unmerged: "U",
-  typeChange: "T",
-  unknown: ".",
-}
-
-const STATUS_COLOR: Record<GitChangeStatus, string> = {
-  added: "text-ok",
-  untracked: "text-ok",
-  modified: "text-request",
-  typeChange: "text-request",
-  deleted: "text-danger",
-  renamed: "text-accent",
-  copied: "text-accent",
-  unmerged: "text-purple-400",
-  unknown: "text-fg-dim",
 }
 
 const ERROR_BANNER =
@@ -77,7 +55,11 @@ function GitPaneBody({
   readonly selectedPath?: string
   readonly onSelectPath: (path: string) => void
 }): JSX.Element {
-  const { status, context, commits, loading, commitsLoading, error } = useWorkspaceGit(workspace.id)
+  const { status, context, commits, loading, commitsLoading, refreshing, error } = useWorkspaceGit(workspace.id)
+  // The watcher stream drives the pane; this is the by-hand re-pull for when a
+  // change didn't reach it. Bumping the workspace's nonce re-runs every git atom
+  // — status, context, commits, both diff trees and any open file diff.
+  const bumpRefresh = useAtomSet(gitManualRefreshAtom(workspace.id))
   const [changesOpen, setChangesOpen] = useState(true)
   const [commitsOpen, setCommitsOpen] = useState(true)
   // Which files have their diff expanded inline. Multiple may be open at once;
@@ -98,9 +80,7 @@ function GitPaneBody({
     })
   }
 
-  // The service already returns changes sorted by status then path, so the
-  // renderer lists them flat — the row's coloured glyph carries the status, no
-  // group headers needed.
+  // Only for the section header's count; the tree adds grouping and entity facts.
   const changes = status?.changes ?? []
 
   return (
@@ -119,19 +99,18 @@ function GitPaneBody({
             count={status ? changes.length : undefined}
             open={changesOpen}
             onToggle={() => setChangesOpen((v) => !v)}
+            actions={
+              <>
+                <RefreshButton busy={refreshing} onRefresh={() => bumpRefresh((n) => n + 1)} />
+              </>
+            }
           >
-            {loading ? (
-              <ListNote label="Loading changes" />
-            ) : changes.length === 0 ? (
-              <ListNote label="No changes" />
-            ) : (
-              <ChangedFilesList
-                changes={changes}
-                workspace={workspace}
-                expanded={expanded}
-                onToggle={toggleFile}
-              />
-            )}
+            <DiffTreeSection
+              workspace={workspace}
+              expanded={expanded}
+              onToggleFile={toggleFile}
+              selectedPath={selectedPath}
+            />
           </GitSection>
           <GitSection
             title="Commits"
@@ -162,15 +141,17 @@ function GitSection({
   open,
   onToggle,
   children,
+  actions,
 }: {
   readonly title: string
   readonly count?: number
   readonly open: boolean
   readonly onToggle: () => void
   readonly children: ReactNode
+  readonly actions?: ReactNode
 }): JSX.Element {
   return (
-    <DisclosureSection title={title} count={count} open={open} onToggle={onToggle} fill>
+    <DisclosureSection title={title} count={count} open={open} onToggle={onToggle} actions={actions} fill>
       {children}
     </DisclosureSection>
   )
@@ -244,29 +225,58 @@ function ListNote({ label }: { readonly label: string }): JSX.Element {
   return <div className="pl-row-indent pr-2 py-2 text-[12px] text-fg-dim">{label}</div>
 }
 
-/** The changed files, flat and already status-sorted. Each row toggles its own
- * diff inline beneath it; the leading glyph (its colour) is the status cue, so
- * rows carry no textual status label. */
-function ChangedFilesList({
-  changes,
+/**
+ * The changes section's body: the diff tree for the chosen change-set, with each
+ * file row expanding its diff inline.
+ *
+ * Reads its own atom because the tree carries entity counts and the generated-file
+ * split that `GetWorkspaceGitStatus` has no notion of.
+ */
+function DiffTreeSection({
   workspace,
   expanded,
-  onToggle,
+  onToggleFile,
+  selectedPath,
 }: {
-  readonly changes: ReadonlyArray<GitFileChange>
   readonly workspace: Workspace
   readonly expanded: ReadonlySet<string>
-  readonly onToggle: (path: string) => void
+  readonly onToggleFile: (path: string) => void
+  readonly selectedPath?: string
+}): JSX.Element {
+  const result = useAtomValue(diffTreeAtom(workspace.id))
+  const error = Option.match(AsyncResult.error(result), { onNone: () => undefined, onSome: (e) => e.message })
+  const tree = successOr(result, undefined)
+
+  if (error) return <div className={ERROR_BANNER}>{error}</div>
+  if (!tree) return <ListNote label="Loading changes" />
+
+  return (
+    <DiffTree
+      tree={tree}
+      hideTitle
+      expandedPaths={expanded}
+      selectedPath={selectedPath}
+      onSelectFile={onToggleFile}
+      renderFileBody={(file) => <InlineDiff workspace={workspace} path={file.path} />}
+    />
+  )
+}
+
+/** Re-pull the pane's git data by hand. The watcher-driven refresh is the normal
+ * path, so this is a backstop for a change that didn't reach us — the same
+ * affordance VS Code keeps on its source-control header. Spins while a pull is in
+ * flight, and stays clickable so a stuck-looking pane can be poked again. */
+function RefreshButton({
+  busy,
+  onRefresh,
+}: {
+  readonly busy: boolean
+  readonly onRefresh: () => void
 }): JSX.Element {
   return (
-    <div className="py-1">
-      {changes.map((file) => (
-        <Fragment key={`${file.originalPath ?? ""}:${file.path}`}>
-          <FileRow file={file} expanded={expanded.has(file.path)} onToggle={() => onToggle(file.path)} />
-          {expanded.has(file.path) && <InlineDiff workspace={workspace} path={file.path} />}
-        </Fragment>
-      ))}
-    </div>
+    <IconButton onClick={onRefresh} aria-label="Refresh git status" title="Refresh">
+      <ArrowsClockwise className={busy ? "animate-spin" : undefined} />
+    </IconButton>
   )
 }
 
@@ -308,44 +318,6 @@ function formatCommitDate(iso: string): string {
     day: "numeric",
     ...(sameYear ? {} : { year: "numeric" }),
   })
-}
-
-function FileRow({
-  file,
-  expanded,
-  onToggle,
-}: {
-  readonly file: GitFileChange
-  readonly expanded: boolean
-  readonly onToggle: () => void
-}): JSX.Element {
-  const stat = file.isBinary
-    ? "binary"
-    : [file.added > 0 ? `+${file.added}` : undefined, file.deleted > 0 ? `-${file.deleted}` : undefined]
-        .filter(Boolean)
-        .join(" ")
-  return (
-    <div className={ROW_GRID} role="treeitem" aria-expanded={expanded}>
-      <button
-        type="button"
-        className={DISCLOSURE}
-        onClick={onToggle}
-        aria-label={expanded ? `Collapse diff for ${file.path}` : `Expand diff for ${file.path}`}
-      >
-        {expanded ? <CaretDown size={11} weight="bold" /> : <CaretRight size={11} weight="bold" />}
-      </button>
-      <Row active={expanded} className="min-w-0 justify-start gap-1.5" onClick={onToggle}>
-        <span className={`w-3 flex-none text-center font-mono text-[11px] font-semibold ${STATUS_COLOR[file.status]}`}>
-          {STATUS_GLYPH[file.status]}
-        </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground">
-          {file.originalPath ? `${file.originalPath} -> ${file.path}` : file.path}
-        </span>
-        {file.staged && <span className="flex-none text-[10px] text-fg-dim">staged</span>}
-        {stat && <span className="flex-none font-mono text-[10px] text-fg-dim">{stat}</span>}
-      </Row>
-    </div>
-  )
 }
 
 function isPatch(diff: string): boolean {

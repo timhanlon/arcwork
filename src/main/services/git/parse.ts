@@ -136,8 +136,17 @@ export const parseStatusLine = (line: string): GitFileChange | undefined => {
   }
 }
 
-export const trackedStats = async (cwd: string): Promise<ReadonlyMap<string, LineStat>> => {
-  const result = await runGit(cwd, ["diff", "HEAD", "-M", "--numstat"])
+export const trackedStats = async (cwd: string): Promise<ReadonlyMap<string, LineStat>> =>
+  numstat(cwd, ["diff", "HEAD", "-M", "--numstat"])
+
+/** Parse `--numstat` output from any diff invocation into per-file line counts.
+ * A rename prints `old => new`; the map keys on the destination so it lines up
+ * with `--name-status`, which also names the destination. */
+export const numstat = async (
+  cwd: string,
+  args: ReadonlyArray<string>,
+): Promise<ReadonlyMap<string, LineStat>> => {
+  const result = await runGit(cwd, args)
   const stats = new Map<string, LineStat>()
   for (const line of result.stdout.split("\n")) {
     if (!line) continue

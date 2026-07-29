@@ -108,6 +108,7 @@ export const ArcRpcHandlersLive = ArcRpcs.toLayer(
     GetWorkspaceGitFileDiff: svc("GetWorkspaceGitFileDiff", GitService, (_, req) =>
       _.diff(req.workspaceId, req.path),
     ),
+    GetWorkspaceDiffTree: svc("GetWorkspaceDiffTree", GitService, (_, req) => _.diffTree(req.workspaceId)),
     GetWorkspaceGitCommits: svc("GetWorkspaceGitCommits", GitService, (_, req) =>
       _.commits(req.workspaceId, req.limit),
     ),
