@@ -114,24 +114,28 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
           const provenance = yield* resolveMcpWriteProvenance(params)
           const { title, body, labels, status, priority } = params.set ?? {}
           const addComment = params.addComment
+          const addCitations = params.addCitations ?? []
+          const removeCitations = params.removeCitations ?? []
           const willRevise = title !== undefined || body !== undefined || labels !== undefined
           const willSetStatus = status !== undefined
           const willSetPriority = priority !== undefined
           const willComment = addComment !== undefined
+          const willCite = addCitations.length > 0 || removeCitations.length > 0
           // At-least-one-operation can't be expressed in the JSON Schema, so guard
           // here; an empty update is a caller mistake, not a silent no-op.
-          if (!willRevise && !willSetStatus && !willSetPriority && !willComment) {
+          if (!willRevise && !willSetStatus && !willSetPriority && !willCite && !willComment) {
             return yield* Effect.fail(
               arcRequestError(
-                "arc.work.update requires at least one operation: set.title/body/labels, set.status, set.priority, or addComment",
+                "arc.work.update requires at least one operation: set.title/body/labels, set.status, set.priority, addCitations, removeCitations, or addComment",
               ),
             )
           }
 
           // Apply in a deterministic order so a bundled call is reproducible:
-          // content revision, then status, then priority, then comment. Each
-          // mutation returns the work's latest state; the last one is the final
-          // payload (comment doesn't change the work, so it never overrides).
+          // content revision, then status, then priority, then citations, then
+          // comment. Each mutation returns the work's latest state; the last one
+          // is the final payload (comment doesn't change the work, so it never
+          // overrides).
           let result: Work | undefined
           if (willRevise) {
             result = yield* work.revise(params.workRefId, { title, body, labels }, provenance)
@@ -141,6 +145,15 @@ const ArcToolkitLayer = ArcToolkit.toLayer(
           }
           if (willSetPriority) {
             result = yield* work.updatePriority(params.workRefId, priority, provenance)
+          }
+          // Removals before additions, so one call can re-target a citation
+          // (drop the stale note/target, add the new one) without the removal
+          // undoing the addition it was bundled with.
+          for (const citation of removeCitations) {
+            result = yield* work.removeCitation(params.workRefId, citation, provenance)
+          }
+          for (const citation of addCitations) {
+            result = yield* work.addCitation(params.workRefId, citation, provenance)
           }
           let comment: WorkComment | undefined
           if (addComment) {

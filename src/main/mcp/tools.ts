@@ -2,6 +2,8 @@ import { Schema } from "effect"
 import * as Tool from "effect/unstable/ai/Tool"
 import * as Toolkit from "effect/unstable/ai/Toolkit"
 import {
+  Citation,
+  CitationRef,
   Work,
   WorkComment,
   WorkCommentInput,
@@ -88,7 +90,7 @@ const WorkCreateTool = Tool.make("arc.work.create", {
 
 const WorkUpdateTool = Tool.make("arc.work.update", {
   description:
-    "Mutate an existing unit of work — the one write door for edits, status, priority, and comments. Supply at least one operation; bundle several in a single call and they apply in a deterministic order (content revision → status → priority → comment). `set.title`/`set.body`/`set.labels` revise authored content (a present field replaces, `labels` as a whole set; mints a new revision). `set.status` moves the work between any status, including the terminal `done`/`superseded` — status is an append-only edge, so this records a transition rather than overwriting. `set.priority` ranks the work (p0 highest). `addComment` attaches a comment (`ref: true` anchors it to the work as a whole rather than the current revision). Returns the work in its final state, plus the created comment when `addComment` was supplied. Arc derives workspace scope and the calling session's observed harness/model from the stamped MCP session/chat; `sessionId`/`chatId` params are fallback provenance only.",
+    "Mutate an existing unit of work — the one write door for edits, status, priority, citations, and comments. Supply at least one operation; bundle several in a single call and they apply in a deterministic order (content revision → status → priority → citation removals → citation additions → comment). `set.title`/`set.body`/`set.labels` revise authored content (a present field replaces, `labels` as a whole set; mints a new revision). `set.status` moves the work between any status, including the terminal `done`/`superseded` — status is an append-only edge, so this records a transition rather than overwriting. `set.priority` ranks the work (p0 highest). `addCitations`/`removeCitations` edit the work's evidence pointers as a delta, never a whole-set replace — so attaching a `pr` citation leaves the `commit` citations Arc stamped automatically untouched. A citation is identified by its (`kind`, `target`) pair: `note` is annotation only, so re-adding an existing citation is a no-op that does not rewrite its note, and removals take just the pair. Removal is a retraction edge, not a delete — history survives and a removed citation can be re-added later. `addComment` attaches a comment (`ref: true` anchors it to the work as a whole rather than the current revision). Returns the work in its final state, plus the created comment when `addComment` was supplied. Arc derives workspace scope and the calling session's observed harness/model from the stamped MCP session/chat; `sessionId`/`chatId` params are fallback provenance only.",
   parameters: Schema.Struct({
     workRefId: WorkId,
     // Compose from the canonical authored shapes so a field added to revise /
@@ -103,6 +105,10 @@ const WorkUpdateTool = Tool.make("arc.work.update", {
         }),
       ),
     ),
+    // Citations are edges, not authored content, so they sit outside `set`: a
+    // delta of adds/removes rather than a field that replaces a whole set.
+    addCitations: Schema.optional(Schema.Array(Citation)),
+    removeCitations: Schema.optional(Schema.Array(CitationRef)),
     addComment: Schema.optional(WorkCommentInput),
     sessionId: Schema.optional(Schema.String),
     chatId: Schema.optional(ChatId),

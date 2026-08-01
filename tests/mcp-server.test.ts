@@ -307,6 +307,73 @@ describe("Arc MCP server", () => {
     expect(payload.comment?.workRefId).toBe(work.id)
   })
 
+  it("arc.work.update applies citation removals before additions", async () => {
+    const init = await post(url, {
+      jsonrpc: "2.0",
+      id: 20,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "arc-mcp-test", version: "1.0.0" },
+      },
+    })
+    const sid = init.sessionId!
+
+    const created = await post(
+      url,
+      {
+        jsonrpc: "2.0",
+        id: 21,
+        method: "tools/call",
+        params: {
+          name: "arc.work.create",
+          arguments: {
+            title: "citation edit",
+            body: "v1",
+            citations: [
+              { kind: "commit", target: "old_sha" },
+              { kind: "url", target: "https://example.test/evidence", note: "old note" },
+            ],
+          },
+        },
+      },
+      sid,
+    )
+    const work = parseCallResult(created.text).structuredContent as { id: string }
+
+    const updated = await post(
+      url,
+      {
+        jsonrpc: "2.0",
+        id: 22,
+        method: "tools/call",
+        params: {
+          name: "arc.work.update",
+          arguments: {
+            workRefId: work.id,
+            removeCitations: [
+              { kind: "commit", target: "old_sha" },
+              { kind: "url", target: "https://example.test/evidence" },
+            ],
+            addCitations: [
+              { kind: "pr", target: "412" },
+              { kind: "url", target: "https://example.test/evidence", note: "new note" },
+            ],
+          },
+        },
+      },
+      sid,
+    )
+    const payload = parseCallResult(updated.text).structuredContent as {
+      work: { citations: ReadonlyArray<{ kind: string; target: string; note?: string }> }
+    }
+    expect(payload.work.citations).toEqual([
+      { kind: "pr", target: "412" },
+      { kind: "url", target: "https://example.test/evidence", note: "new note" },
+    ])
+  })
+
   it("arc.agent.send only queues for a deliverable target (live PTY or resume path)", async () => {
     // Valid target typeids (the tool's TargetId schema validates the argument).
     const liveId = "target_01kw09f93fenb8tagr6z6y4992" // attached: deliver now / on turn-close

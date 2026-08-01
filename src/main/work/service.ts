@@ -5,6 +5,7 @@ import { nowIso } from "../clock.js"
 import type {
   Citation,
   CitationKind,
+  CitationRef,
   Work,
   WorkChange,
   WorkComment,
@@ -101,6 +102,18 @@ export class WorkService extends Context.Service<
       provenance: WorkProvenance,
       note?: string,
     ) => Effect.Effect<Work, SqlError | ArcRequestError>
+    /** Retract a citation from a unit of work, identified by its (kind, target)
+     * — `note` is annotation and never selects which citation to drop. Appends a
+     * `references_removed` edge rather than deleting the `references` one, so the
+     * work's citation history survives and a later {@link addCitation} of the same
+     * target revives it. Idempotent: retracting a citation the work does not
+     * currently carry writes nothing. `ArcRequestError` on unknown work. */
+    readonly removeCitation: (
+      refId: WorkId,
+      citation: CitationRef,
+      provenance: WorkProvenance,
+      note?: string,
+    ) => Effect.Effect<Work, SqlError | ArcRequestError>
     /** Record that a unit of work is delegated to a target session — a durable,
      * typed `delegated_to` edge from the ref to an *external* target-session id
      * (parallel to `created_in_session`; the session lives in ArcStore, not the
@@ -194,11 +207,53 @@ const decodeExecution = (json: string | null): WorkExecution | undefined => {
 }
 
 /** Citations serialize to a `references` edge whose `toId` is `kind:target`. */
-const encodeCitationTarget = (c: Citation): string => `${c.kind}:${c.target}`
+const encodeCitationTarget = (c: CitationRef): string => `${c.kind}:${c.target}`
 const decodeCitationTarget = (toId: string): Citation => {
   const idx = toId.indexOf(":")
   if (idx === -1) return { kind: "url", target: toId }
   return { kind: toId.slice(0, idx) as CitationKind, target: toId.slice(idx + 1) }
+}
+
+/** A `work` citation is a real ref edge (raw ref id, traversable); every other
+ * kind is an external `kind:target` locator. The two endpoint encodings must
+ * agree between adds, removals, and the read fold — hence one function. */
+const citationEndpoint = (c: CitationRef): { toKind: "ref" | "external"; toId: string } =>
+  c.kind === "work"
+    ? { toKind: "ref", toId: c.target }
+    : { toKind: "external", toId: encodeCitationTarget(c) }
+
+type CitationEdgeRow = {
+  readonly type: string
+  readonly toKind: string
+  readonly target: string
+  readonly note: string | null
+  readonly refKind: string | null
+}
+
+/**
+ * Fold a ref's citation edges (oldest first) into its effective citation set.
+ * Citations are append-only like status: an add and its retraction are both
+ * edges to the same endpoint, and the latest one wins — so removing keeps the
+ * history, and a later re-add revives the citation with its new note.
+ */
+const foldCitations = (rows: ReadonlyArray<CitationEdgeRow>): ReadonlyArray<Citation> => {
+  const live = new Map<string, Citation>()
+  for (const row of rows) {
+    const key = `${row.toKind} ${row.target}`
+    if (row.type === "references_removed") {
+      live.delete(key)
+      continue
+    }
+    // `ref` edges carry a raw graph ref id; its citation kind is the cited ref's
+    // own `kind` (read via the join, defaulting to `work`). External edges carry
+    // the `kind:target` locator, decoded directly.
+    const cite: Citation =
+      row.toKind === "ref"
+        ? { kind: (row.refKind ?? "work") as CitationKind, target: row.target }
+        : decodeCitationTarget(row.target)
+    live.set(key, row.note ? { ...cite, note: row.note } : cite)
+  }
+  return [...live.values()]
 }
 
 export const WorkServiceLive = Layer.effect(
@@ -281,16 +336,7 @@ export const WorkServiceLive = Layer.effect(
             source: row.observedSource,
             ...(execution ? { execution } : {}),
           },
-          citations: cites.map((c) => {
-            // `ref` edges carry a raw graph ref id; its citation kind is the
-            // cited ref's own `kind` (read via the join, defaulting to `work`).
-            // External edges carry the `kind:target` locator, decoded directly.
-            const cite: Citation =
-              c.toKind === "ref"
-                ? { kind: (c.refKind ?? "work") as CitationKind, target: c.target }
-                : decodeCitationTarget(c.target)
-            return c.note ? { ...cite, note: c.note } : cite
-          }),
+          citations: foldCitations(cites),
         }
         return work
       })
@@ -355,17 +401,8 @@ export const WorkServiceLive = Layer.effect(
           // on the cited work finds it. file/commit/pr/url/session have no ref,
           // so they are external `kind:target` locators.
           for (const c of input.citations ?? []) {
-            const toWorkRef = c.kind === "work"
-            edges.push(
-              edge(
-                "references",
-                toWorkRef ? "ref" : "external",
-                toWorkRef ? c.target : encodeCitationTarget(c),
-                "live",
-                "observed",
-                c.note ?? null,
-              ),
-            )
+            const { toKind, toId } = citationEndpoint(c)
+            edges.push(edge("references", toKind, toId, "live", "observed", c.note ?? null))
           }
           // Workflow: priority is an edge even at create (no node column — unlike
           // status's authored fallback), so an unset priority writes nothing.
@@ -571,25 +608,53 @@ export const WorkServiceLive = Layer.effect(
         ),
     )
 
+    /** True when `refId` currently cites this endpoint — read through the fold,
+     * so a citation that was removed reads as absent (and can be re-added) and a
+     * removal of something never cited is a no-op rather than a stray edge. */
+    const citesEndpoint = (refId: WorkId, toId: string) =>
+      Effect.map(store.loadCitations(refId), (rows) =>
+        foldCitations(rows).some((c) => citationEndpoint(c).toId === toId),
+      )
+
     const addCitation = Effect.fn("WorkService.addCitation")(
       (refId: WorkId, citation: Citation, provenance: WorkProvenance, note?: string) => {
-        // A `work` citation is a real ref edge (raw ref id, traversable); everything
-        // else is an external `kind:target` locator — same split as create's.
-        const toWorkRef = citation.kind === "work"
-        const toId = toWorkRef ? citation.target : encodeCitationTarget(citation)
+        const { toKind, toId } = citationEndpoint(citation)
         return recordWorkflowEdge(
           refId,
           provenance,
           {
             type: "references",
-            toKind: toWorkRef ? "ref" : "external",
+            toKind,
             toId,
             family: "live",
             source: "observed",
             note: note ?? citation.note ?? null,
           },
           // Idempotent: an identical (work, kind, target) citation is a no-op.
-          () => Effect.map(store.loadEdges(refId, "references"), (es) => es.some((e) => e.toId === toId)),
+          () => citesEndpoint(refId, toId),
+        )
+      },
+    )
+
+    const removeCitation = Effect.fn("WorkService.removeCitation")(
+      (refId: WorkId, citation: CitationRef, provenance: WorkProvenance, note?: string) => {
+        const { toKind, toId } = citationEndpoint(citation)
+        return recordWorkflowEdge(
+          refId,
+          provenance,
+          {
+            type: "references_removed",
+            toKind,
+            toId,
+            family: "live",
+            // A retraction is asserted by whoever called the verb, never inferred
+            // from an observation the way the commit stamp's `references` is.
+            source: "user_confirmed",
+            note: note ?? null,
+          },
+          // Idempotent: retracting a citation the work doesn't currently carry
+          // writes nothing, so a repeated removal can't stack up edges.
+          () => Effect.map(citesEndpoint(refId, toId), (present) => !present),
         )
       },
     )
@@ -799,6 +864,7 @@ export const WorkServiceLive = Layer.effect(
       updatePriority,
       revise,
       addCitation,
+      removeCitation,
       linkTargetSession,
       listOpen,
       listOpenSummaries,

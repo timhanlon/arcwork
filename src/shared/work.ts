@@ -69,15 +69,25 @@ export const CitationKind = Schema.Literals(CITATION_KINDS)
 export type CitationKind = typeof CitationKind.Type
 
 /**
- * A pointer from a piece of work to its evidence/source. A `work` citation
- * targets another work ref id; the others target an external locator (path, sha,
- * PR number, session id, url). Citations become `references` edges on create.
+ * A citation's identity — the pair that says *which* citation, with no payload.
+ * `note` is annotation, so it never distinguishes two citations: adding the same
+ * (kind, target) twice is idempotent and removing one takes this shape.
  */
-export const Citation = Schema.Struct({
+export const CitationRef = Schema.Struct({
   kind: CitationKind,
   target: Schema.String,
-  note: Schema.optional(Schema.String),
 })
+export type CitationRef = typeof CitationRef.Type
+
+/**
+ * A pointer from a piece of work to its evidence/source. A `work` citation
+ * targets another work ref id; the others target an external locator (path, sha,
+ * PR number, session id, url). Citations become `references` edges on create;
+ * afterwards they are added/removed one edge at a time (see `WorkService`).
+ */
+export const Citation = CitationRef.pipe(
+  Schema.fieldsAssign({ note: Schema.optional(Schema.String) }),
+)
 export type Citation = typeof Citation.Type
 
 /**

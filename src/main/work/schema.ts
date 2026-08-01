@@ -181,6 +181,10 @@ export type EdgeConfidence = "high" | "medium" | "low"
 export type WorkEdgeType =
   | "created_in_session"
   | "references"
+  // retracts a `references` edge to the same endpoint. Citations stay append-only
+  // like `status_set`: the latest edge for an endpoint wins, so a removed citation
+  // keeps its history and can be re-added by a later `references` edge.
+  | "references_removed"
   | "status_set"
   | "priority_set"
   | "delegated_to"

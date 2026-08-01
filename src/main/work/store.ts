@@ -187,7 +187,9 @@ export class WorkStore extends Context.Service<
     readonly loadDelegatedWorkForTarget: (
       targetSessionId: string,
     ) => Effect.Effect<ReadonlyArray<DelegatedWorkRow>, SqlError>
-    /** `references`/`derived_from` edges off a work ref, as citation tuples.
+    /** The citation edges off a work ref — `references`/`derived_from` and the
+     * `references_removed` retractions — oldest first, so the caller can fold
+     * them into the effective set (latest edge per endpoint wins).
      * `toKind` discriminates a graph ref (`ref`) from an encoded external
      * `kind:target` locator (`external`); for a ref endpoint `refKind` is the
      * cited ref's own `kind` (so the citation kind is read, never assumed). */
@@ -195,6 +197,7 @@ export class WorkStore extends Context.Service<
       refId: string,
     ) => Effect.Effect<
       ReadonlyArray<{
+        readonly type: string
         readonly toKind: string
         readonly target: string
         readonly note: string | null
@@ -503,11 +506,11 @@ export const WorkStoreLive = Layer.effect(
     // assuming 'work' — so a future second ref kind decodes correctly. External
     // locators have no ref row; `refKind` is null and the `kind:target` decodes.
     const loadCitations = (refId: string) =>
-      sql<{ toKind: string; target: string; note: string | null; refKind: string | null }>`
-        SELECT e.to_kind AS "toKind", e.to_id AS "target", e.note AS "note", r.kind AS "refKind"
+      sql<{ type: string; toKind: string; target: string; note: string | null; refKind: string | null }>`
+        SELECT e.type AS "type", e.to_kind AS "toKind", e.to_id AS "target", e.note AS "note", r.kind AS "refKind"
         FROM graph_edge e
         LEFT JOIN graph_ref r ON r.id = e.to_id AND e.to_kind = 'ref'
-        WHERE e.from_id = ${refId} AND e.type IN ('references', 'derived_from')
+        WHERE e.from_id = ${refId} AND e.type IN ('references', 'derived_from', 'references_removed')
         ORDER BY e.created_at, e.id`
 
     const loadEdges = (fromId: string, type: string) =>
