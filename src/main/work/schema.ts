@@ -518,4 +518,13 @@ export const workMigrations: Migrations = {
       json_extract(summary_json, '$.promptVersion')
     ) WHERE kind = 'summary'`,
   ),
+  // Every work-ref update fires `graph_ref_search_au`, whose comment-status
+  // refresh filters `search_document` by `(ref, source_kind)` — a pair no index
+  // covered, so it degraded to a full scan of a table dominated by message rows
+  // with large bodies. On a real DB (110k+ documents) that is multi-second when
+  // the pages are cold, and better-sqlite3 is synchronous: the whole main
+  // process — UI included — stalls for the duration of one work write.
+  "0010_search_document_ref_source_index": sqlMigration(
+    `CREATE INDEX IF NOT EXISTS search_document_ref_source ON search_document(ref, source_kind)`,
+  ),
 }

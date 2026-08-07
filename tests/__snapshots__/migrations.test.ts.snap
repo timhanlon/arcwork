@@ -92,6 +92,7 @@ exports[`versioned migrations (ledger over node:sqlite) > pins the fresh end-sta
   "index search_document_chat: CREATE INDEX search_document_chat ON search_document(chat_id, kind, updated_at, id)",
   "index search_document_kind_updated: CREATE INDEX search_document_kind_updated ON search_document(kind, updated_at, id)",
   "index search_document_parent: CREATE INDEX search_document_parent ON search_document(parent_ref, source_kind, updated_at, id)",
+  "index search_document_ref_source: CREATE INDEX search_document_ref_source ON search_document(ref, source_kind)",
   "index search_document_workspace: CREATE INDEX search_document_workspace ON search_document(workspace_id, kind, updated_at, id)",
   "index work_comment_ref: CREATE INDEX work_comment_ref ON work_comment(work_ref_id, created_at, id)",
   "table graph_edge: CREATE TABLE graph_edge ( id TEXT PRIMARY KEY, type TEXT NOT NULL, from_kind TEXT NOT NULL, from_id TEXT NOT NULL, to_kind TEXT NOT NULL, to_id TEXT NOT NULL, family TEXT NOT NULL, source TEXT NOT NULL, confidence TEXT NOT NULL, note TEXT, actor TEXT, session_id TEXT, workspace_id TEXT, observed_source TEXT NOT NULL, created_at TEXT NOT NULL, schema_version INTEGER NOT NULL )",
