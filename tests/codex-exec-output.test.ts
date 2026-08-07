@@ -36,6 +36,56 @@ const wrap = (code: number, body: string): string =>
   `Chunk ID: 751732\nWall time: 0.0519 seconds\nProcess exited with code ${code}\nOriginal token count: 4805\nOutput:\n${body}`
 
 describe("codex exec-output wrapper stripping", () => {
+  it("extracts completed items emitted by current Codex rollouts", () => {
+    const rows = normalizeCodexRecords(
+      [
+        { type: "session_meta", payload: { id: "sess-completed", cwd: "/work" } },
+        {
+          type: "event_msg",
+          timestamp: "2026-08-08T05:22:44.000Z",
+          payload: {
+            type: "item_completed",
+            item: { type: "UserMessage", content: [{ type: "text", text: "Please inspect this." }] },
+          },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-08-08T05:22:45.000Z",
+          payload: {
+            type: "item_completed",
+            item: {
+              type: "AgentMessage",
+              content: [
+                { type: "Text", text: "I found the change." },
+                { type: "image", text: undefined },
+                { type: "Text", text: "I will update the parser." },
+              ],
+            },
+          },
+        },
+        {
+          type: "event_msg",
+          timestamp: "2026-08-08T05:22:46.000Z",
+          payload: {
+            type: "item_completed",
+            item: { type: "Reasoning", summary_text: ["Checking the new event envelope."] },
+          },
+        },
+      ],
+      { nativeSessionId: "sess-completed", sourcePath: "/rollout.jsonl", workspaceRoot: "/work" },
+    )
+
+    expect(rows.messages).toMatchObject([
+      { role: "user", text: "Please inspect this.", createdAt: "2026-08-08T05:22:44.000Z" },
+      {
+        role: "assistant",
+        text: "I found the change.\nI will update the parser.",
+        createdAt: "2026-08-08T05:22:45.000Z",
+      },
+      { role: "assistant", thinking: "Checking the new event envelope.", createdAt: "2026-08-08T05:22:46.000Z" },
+    ])
+  })
+
   it("strips the telemetry preamble down to the body", () => {
     expect(outputFor(wrap(0, "src/index.ts\nsrc/app.ts\n"))).toBe("src/index.ts\nsrc/app.ts\n")
   })

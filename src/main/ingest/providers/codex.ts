@@ -131,10 +131,22 @@ const TokenUsage = Schema.Struct({
   total_tokens: Schema.optional(Schema.Number),
 })
 
+const CompletedMessageContent = Schema.Struct({
+  type: Schema.String,
+  text: Schema.optional(Schema.String),
+})
+
+const CompletedItem = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("UserMessage"), content: Schema.Array(CompletedMessageContent) }),
+  Schema.Struct({ type: Schema.Literal("AgentMessage"), content: Schema.Array(CompletedMessageContent) }),
+  Schema.Struct({ type: Schema.Literal("Reasoning"), summary_text: Schema.optional(Schema.Array(Schema.String)) }),
+])
+
 const EventMsgPayload = Schema.Union([
   Schema.Struct({ type: Schema.Literal("user_message"), message: NeStr }),
   Schema.Struct({ type: Schema.Literal("agent_message"), message: NeStr }),
   Schema.Struct({ type: Schema.Literal("agent_reasoning"), text: NeStr }),
+  Schema.Struct({ type: Schema.Literal("item_completed"), item: CompletedItem }),
   Schema.Struct({
     type: Schema.Literal("token_count"),
     info: Schema.Struct({
@@ -151,6 +163,11 @@ const EventMsgPayload = Schema.Union([
   }),
 ])
 const decodeEventMsg = Schema.decodeUnknownOption(EventMsgPayload)
+
+const completedMessageText = (content: ReadonlyArray<{ readonly text?: string }>): string | undefined => {
+  const text = content.flatMap((part) => (part.text ? [part.text] : [])).join("\n")
+  return text === "" ? undefined : text
+}
 
 const ResponseItemPayload = Schema.Union([
   Schema.Struct({
@@ -269,6 +286,27 @@ export const normalizeCodexRecords = (
         case "agent_reasoning":
           b.message({ role: "assistant", thinking: ev.value.text, model: currentModel, createdAt: timestamp })
           break
+        case "item_completed": {
+          const item = ev.value.item
+          switch (item.type) {
+            case "UserMessage": {
+              const text = completedMessageText(item.content)
+              if (text) b.message({ role: "user", text, createdAt: timestamp })
+              break
+            }
+            case "AgentMessage": {
+              const text = completedMessageText(item.content)
+              if (text) b.message({ role: "assistant", text, model: currentModel, createdAt: timestamp })
+              break
+            }
+            case "Reasoning": {
+              const thinking = item.summary_text?.filter((part) => part.length > 0).join("\n")
+              if (thinking) b.message({ role: "assistant", thinking, model: currentModel, createdAt: timestamp })
+              break
+            }
+          }
+          break
+        }
         case "token_count": {
           const last = ev.value.info.last_token_usage
           const inputTokens = finite(last?.input_tokens)
